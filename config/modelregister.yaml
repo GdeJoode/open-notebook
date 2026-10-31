@@ -1,0 +1,58 @@
+# Modelregister van het signaalsysteem (ADR 0007, FO 9).
+#
+# Elke modelaanroep en elke aanroep van een verwerkingsdienst loopt via
+# `llm_manager.gate.ModelGate`, die dit bestand leest. Een model dat hier niet
+# staat, wordt geweigerd. Per model:
+#
+# - naam: het model-id in de llama-swap-configuratie (of in de gateway);
+# - versie: modelbestand, revisie of image;
+# - aanroepwijze: llama-swap, api of cli (api en cli alleen via de gateway, ADR 0022);
+# - locatie: lokaal of cloud. Een externe verwerkingsdienst is cloud (ADR 0019);
+# - toegestaan_intern: ja of nee, standaard nee. Bij interne of onbekende invoer
+#   weigert de poort elk model met nee. Een cloudmodel kan nooit ja hebben;
+# - taken: de taken waarvoor het model geschikt is.
+#
+# Wijzigen gaat met een commit en een herstart. Geen geheimen in dit bestand.
+
+versie: 1
+
+modellen:
+  # Werkmodel (B4, besloten 30-10): Qwen3.5-9B Q4_K_M, context 8 192 (P1, P3).
+  - naam: werkmodel
+    versie: unsloth/Qwen3.5-9B-GGUF Qwen3.5-9B-Q4_K_M.gguf, context 8192
+    aanroepwijze: llama-swap
+    locatie: lokaal
+    toegestaan_intern: ja
+    taken: [chat, entity_extraction, entity_dedup, summarization]
+
+  # Embeddingmodel (ADR 0008): mxbai-embed-large Q8_0, 1 024 dimensies.
+  - naam: embed
+    versie: ChristianAzinn/mxbai-embed-large-v1-gguf@3ec6d46af11ba2b982d8c6a1e11183c4995f76a7 q8_0
+    aanroepwijze: llama-swap
+    locatie: lokaal
+    toegestaan_intern: ja
+    taken: [embedding]
+
+  # Kev-4B (ADR 0009): adapter op Qwen3.5-4B-Base, achter llama-swap.
+  - naam: kev-4b
+    versie: jaredpalmer/kev-4b@6cfce5c2fa4b4bd64026336ab649c5ca78857d52
+    aanroepwijze: llama-swap
+    locatie: lokaal
+    toegestaan_intern: ja
+    taken: [labeling]
+
+  # docling-serve (ADR 0014), lokaal onder llama-swap.
+  - naam: docling
+    versie: quay.io/docling-project/docling-serve-cu128:v1.38.2
+    aanroepwijze: llama-swap
+    locatie: lokaal
+    toegestaan_intern: ja
+    taken: [document_extraction]
+
+  # WhisperX variant A (ADR 0014, P1), lokaal onder llama-swap.
+  - naam: whisperx
+    versie: public.ecr.aws/deep-learning-containers/whisperx:3.8.6-cu128-amzn2023
+    aanroepwijze: llama-swap
+    locatie: lokaal
+    toegestaan_intern: ja
+    taken: [transcription]
