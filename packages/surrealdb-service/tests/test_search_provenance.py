@@ -20,12 +20,15 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import surrealdb_service.repositories.search as search_mod
+from shared.models.classification import ClassificationScope
 from surrealdb_service.repositories import SearchRepository
 from surrealdb_service.repositories.search import (
     _PROVENANCE_KEYS,
     _hit_is_chunk_backed,
     _hit_parent_source,
 )
+
+S = ClassificationScope.ALLES
 
 
 def _repo_with_best(best: dict) -> SearchRepository:
@@ -87,7 +90,7 @@ class TestHydrateProvenance:
         )
         hits = [{"id": "source:s1", "parent_id": "source:s1", "similarity": 0.9}]
 
-        out = await repo.hydrate_provenance(hits, embedding=[0.1, 0.2])
+        out = await repo.hydrate_provenance(hits, embedding=[0.1, 0.2], scope=S)
 
         hit = out[0]
         assert hit["chunk_id"] == "chunk:c1"
@@ -107,7 +110,7 @@ class TestHydrateProvenance:
         repo = _repo_with_best({})  # no chunk found for any source
         hits = [{"id": "source:s1", "parent_id": "source:s1"}]
 
-        out = await repo.hydrate_provenance(hits, embedding=[0.1])
+        out = await repo.hydrate_provenance(hits, embedding=[0.1], scope=S)
 
         for key in _PROVENANCE_KEYS:
             assert key in out[0]
@@ -121,7 +124,7 @@ class TestHydrateProvenance:
         repo = _repo_with_best({})
         hits = [{"id": "note:n1", "parent_id": "note:n1", "relevance": 5.0}]
 
-        out = await repo.hydrate_provenance(hits, embedding=None)
+        out = await repo.hydrate_provenance(hits, embedding=None, scope=S)
 
         assert out[0]["relevance"] == 5.0
         assert out[0]["source"] is None
@@ -140,7 +143,7 @@ class TestHydrateProvenance:
             {"id": "note:n1", "parent_id": "note:n1"},
         ]
 
-        out = await repo.hydrate_provenance(hits, embedding=[0.5])
+        out = await repo.hydrate_provenance(hits, embedding=[0.5], scope=S)
 
         by_id = {h["id"]: h for h in out}
         assert by_id["source:s1"]["physical_page"] == 3
@@ -167,7 +170,7 @@ class TestHydrateProvenance:
             }
         ]
 
-        out = await repo.hydrate_provenance(hits, embedding=[0.1, 0.2])
+        out = await repo.hydrate_provenance(hits, embedding=[0.1, 0.2], scope=S)
 
         hit = out[0]
         # source-level anchor preserved
@@ -195,7 +198,7 @@ class TestHydrateProvenance:
             {"id": "source_insight:i1", "parent_id": "source:s1"},  # insight
         ]
 
-        out = await repo.hydrate_provenance(hits, embedding=[0.5])
+        out = await repo.hydrate_provenance(hits, embedding=[0.5], scope=S)
 
         by_id = {h["id"]: h for h in out}
         assert by_id["source:s1"]["physical_page"] == 7
@@ -219,7 +222,7 @@ class TestHydrateProvenance:
             {"id": "source:s1", "parent_id": "source:s1", "relevance": 9.0},
         ]
 
-        out = await repo.hydrate_provenance(hits, embedding=None)
+        out = await repo.hydrate_provenance(hits, embedding=None, scope=S)
 
         hit = out[0]
         assert hit["source"] == "source:s1"
@@ -240,7 +243,7 @@ class TestHydrateProvenance:
         )
         hits = [{"id": "source:s1", "parent_id": "source:s1", "similarity": 0.7}]
 
-        out = await repo.hydrate_provenance(hits, embedding=[0.1])
+        out = await repo.hydrate_provenance(hits, embedding=[0.1], scope=S)
 
         assert out[0]["similarity"] == 0.7
         for key in _PROVENANCE_KEYS:
@@ -249,7 +252,7 @@ class TestHydrateProvenance:
     @pytest.mark.asyncio
     async def test_empty_hits_no_lookup(self):
         repo = _repo_with_best({})
-        out = await repo.hydrate_provenance([], embedding=[0.1])
+        out = await repo.hydrate_provenance([], embedding=[0.1], scope=S)
         assert out == []
         repo._best_chunk_per_source.assert_not_called()
 
@@ -269,7 +272,7 @@ class TestHydrateProvenance:
             }
         ]
 
-        out = await repo.hydrate_provenance(hits, embedding=[0.1])
+        out = await repo.hydrate_provenance(hits, embedding=[0.1], scope=S)
 
         # chunk_id filled from lookup; physical_page kept (lookup gave None)
         assert out[0]["chunk_id"] == "chunk:c1"
@@ -286,11 +289,11 @@ class TestSearchMethodsWireHydration:
     @pytest.mark.asyncio
     async def test_vector_search_hydrates_with_embedding(self):
         repo = SearchRepository()
-        repo.hydrate_provenance = AsyncMock(side_effect=lambda hits, embedding=None: hits)
+        repo.hydrate_provenance = AsyncMock(side_effect=lambda hits, embedding=None, **kw: hits)
         with patch.object(
             search_mod, "execute_query", AsyncMock(return_value=[{"id": "source:s1"}])
         ):
-            await repo.vector_search([0.1, 0.2], results=5, hydrate=True)
+            await repo.vector_search([0.1, 0.2], results=5, hydrate=True, scope=S)
 
         repo.hydrate_provenance.assert_awaited_once()
         _, kwargs = repo.hydrate_provenance.call_args
@@ -299,11 +302,11 @@ class TestSearchMethodsWireHydration:
     @pytest.mark.asyncio
     async def test_text_search_hydrates_without_embedding(self):
         repo = SearchRepository()
-        repo.hydrate_provenance = AsyncMock(side_effect=lambda hits, embedding=None: hits)
+        repo.hydrate_provenance = AsyncMock(side_effect=lambda hits, embedding=None, **kw: hits)
         with patch.object(
             search_mod, "execute_query", AsyncMock(return_value=[{"id": "source:s1"}])
         ):
-            await repo.text_search("kw", results=5, hydrate=True)
+            await repo.text_search("kw", results=5, hydrate=True, scope=S)
 
         repo.hydrate_provenance.assert_awaited_once()
         _, kwargs = repo.hydrate_provenance.call_args
@@ -319,12 +322,12 @@ class TestSearchMethodsWireHydration:
         with patch.object(
             search_mod, "execute_query", AsyncMock(return_value=[{"id": "source:s1"}])
         ):
-            await repo.text_search("kw")
-            await repo.vector_search([0.1, 0.2])
+            await repo.text_search("kw", scope=S)
+            await repo.vector_search([0.1, 0.2], scope=S)
 
         repo.text_search = AsyncMock(return_value=[{"id": "source:s1"}])
         repo.vector_search = AsyncMock(return_value=[{"id": "source:s1"}])
-        await repo.hybrid_search("kw", [0.1, 0.2])
+        await repo.hybrid_search("kw", [0.1, 0.2], scope=S)
 
         repo.hydrate_provenance.assert_not_called()
 
@@ -335,7 +338,7 @@ class TestSearchMethodsWireHydration:
         with patch.object(
             search_mod, "execute_query", AsyncMock(return_value=[{"id": "source:s1"}])
         ):
-            out = await repo.text_search("kw", hydrate=False)
+            out = await repo.text_search("kw", hydrate=False, scope=S)
 
         repo.hydrate_provenance.assert_not_called()
         assert out == [{"id": "source:s1"}]
@@ -345,9 +348,9 @@ class TestSearchMethodsWireHydration:
         repo = SearchRepository()
         repo.text_search = AsyncMock(return_value=[{"id": "source:s1"}])
         repo.vector_search = AsyncMock(return_value=[{"id": "source:s1"}])
-        repo.hydrate_provenance = AsyncMock(side_effect=lambda hits, embedding=None: hits)
+        repo.hydrate_provenance = AsyncMock(side_effect=lambda hits, embedding=None, **kw: hits)
 
-        await repo.hybrid_search("kw", [0.3, 0.4], results=10, hydrate=True)
+        await repo.hybrid_search("kw", [0.3, 0.4], results=10, hydrate=True, scope=S)
 
         # legs called with hydrate=False so we hydrate the fused set once
         assert repo.text_search.call_args.kwargs.get("hydrate") is False

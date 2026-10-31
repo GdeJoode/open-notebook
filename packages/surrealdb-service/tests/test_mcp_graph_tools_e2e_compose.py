@@ -38,8 +38,9 @@ import pytest
 import surrealdb_service.config as config_module
 import surrealdb_service.connection as connection_module
 from surrealdb_service.config import SurrealDBConfig
-from surrealdb_service.connection import execute_query
+from surrealdb_service.connection import ensure_record_id, execute_query
 from surrealdb_service.mcp.server import create_server
+from surrealdb_service.testing.herkomst import herkomst
 
 pytestmark = pytest.mark.requires_docker
 
@@ -73,17 +74,26 @@ async def mcp_global_db(live_surrealdb: SurrealDBConfig):
 
 
 async def _make_source(cfg: SurrealDBConfig, title: str, content: str) -> str:
-    """Create a source whose chunk is full-text indexed (so BM25 can find it).
+    """Create an external source with a chunk of its current version.
 
-    ``fn::text_search`` reads the source FTS index built in migrations; a source
-    needs a ``full_text`` field for the lexical path to return it.
+    Since F2-05 ``fn::text_search`` reads only chunks of the current version,
+    filtered on classification; this MCP server searches with scope
+    ``EXTERN`` (it has no key).
     """
     rows = await execute_query(
-        "CREATE source SET title = $t, full_text = $c;",
-        {"t": title, "c": content},
+        "CREATE source SET title = $t, classification = 'extern';",
+        {"t": title},
         config=cfg,
     )
-    return str(rows[0]["id"])
+    src = str(rows[0]["id"])
+    await execute_query(
+        "CREATE chunk CONTENT $d",
+        {"d": {"source": ensure_record_id(src), "text": content, "order": 0,
+               "physical_page": 0, "element_type": "paragraph", "positions": [],
+               "metadata": {}, **await herkomst(src, cfg)}},
+        config=cfg,
+    )
+    return src
 
 
 async def _make_entity(cfg: SurrealDBConfig, name: str, etype: str) -> str:
@@ -145,7 +155,7 @@ async def test_search_related_get_node_compose_read_only(
     )
 
     # --- Leg 1: search (LEXICAL BM25, embedding omitted) -----------------
-    raw = await search(query=marker, limit=10, include_notes=False)
+    raw = await search(query=marker, limit=10)
     hits = json.loads(raw)
     assert isinstance(hits, list)
     # A lexical hit carries the matched source id under ``id`` (title/full-text
@@ -201,7 +211,7 @@ async def test_search_lexical_path_takes_no_embedding(
         content=f"Het {marker} beschrijft afspraken over de zorg in de regio.",
     )
 
-    raw = await search(query=marker, limit=5, include_notes=False)
+    raw = await search(query=marker, limit=5)
     hits = json.loads(raw)
     assert isinstance(hits, list)
     # Lexical hits carry no hybrid provenance (no _combined_score / _vector_rank)

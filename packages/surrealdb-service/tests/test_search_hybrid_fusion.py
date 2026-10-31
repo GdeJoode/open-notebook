@@ -13,7 +13,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from shared.models.classification import ClassificationScope
 from surrealdb_service.repositories import SearchRepository
+
+S = ClassificationScope.ALLES
 
 
 def _text(*ids_relevance):
@@ -44,7 +47,7 @@ class TestHybridRRFRanking:
             _text(("source:t1", 9.9), ("source:both", 8.0)),
             _vector(("source:v1", 0.95), ("source:both", 0.80)),
         )
-        out = await repo.hybrid_search("q", [0.1], results=10)
+        out = await repo.hybrid_search("q", [0.1], results=10, scope=S)
 
         assert out[0]["id"] == "source:both"
         assert out[0]["_search_type"] == "hybrid"
@@ -64,7 +67,7 @@ class TestHybridRRFRanking:
             _text(("source:a", 999.0), ("source:b", 1.0)),
             _vector(("source:b", 0.9)),
         )
-        out = await repo.hybrid_search("q", [0.1], results=10)
+        out = await repo.hybrid_search("q", [0.1], results=10, scope=S)
 
         assert [r["id"] for r in out] == ["source:b", "source:a"]
         assert out[0]["_combined_score"] > out[1]["_combined_score"]
@@ -77,13 +80,13 @@ class TestHybridRRFRanking:
 
         # text_weight high -> text-only item scores higher than vector-only
         out_hi = await _repo(text, vector).hybrid_search(
-            "q", [0.1], results=10, text_weight=0.9
+            "q", [0.1], results=10, text_weight=0.9, scope=S
         )
         assert out_hi[0]["id"] == "source:textfav"
 
         # text_weight low -> vector-only item wins
         out_lo = await _repo(text, vector).hybrid_search(
-            "q", [0.1], results=10, text_weight=0.1
+            "q", [0.1], results=10, text_weight=0.1, scope=S
         )
         assert out_lo[0]["id"] == "source:vecfav"
 
@@ -94,7 +97,7 @@ class TestHybridRRFRanking:
             _text(("source:1", 4.0), ("source:2", 3.0)),
             _vector(("source:1", 0.8), ("source:3", 0.7)),
         )
-        out = await repo.hybrid_search("q", [0.1], results=10)
+        out = await repo.hybrid_search("q", [0.1], results=10, scope=S)
         assert all(r["_combined_score"] > 0 for r in out)
         # strictly descending (sorted by fused score)
         scores = [r["_combined_score"] for r in out]
@@ -107,7 +110,7 @@ class TestHybridRRFRanking:
             _text(("source:x", 5.0), ("source:y", 4.0)),
             _vector(("source:x", 0.9), ("source:z", 0.8)),
         )
-        out = await repo.hybrid_search("q", [0.1], results=10)
+        out = await repo.hybrid_search("q", [0.1], results=10, scope=S)
 
         by_id = {r["id"]: r for r in out}
         assert len(out) == 3  # x deduped (one entry)
@@ -125,11 +128,11 @@ class TestHybridRRFRanking:
             _text(("source:1", 5.0), ("source:2", 4.0), ("source:3", 3.0)),
             _vector(("source:4", 0.9)),
         )
-        out = await repo.hybrid_search("q", [0.1], results=2)
+        out = await repo.hybrid_search("q", [0.1], results=2, scope=S)
         assert len(out) == 2
 
     @pytest.mark.asyncio
     async def test_empty_results(self):
         repo = _repo([], [])
-        out = await repo.hybrid_search("q", [0.1], results=10)
+        out = await repo.hybrid_search("q", [0.1], results=10, scope=S)
         assert out == []

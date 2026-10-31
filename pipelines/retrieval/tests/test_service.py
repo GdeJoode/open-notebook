@@ -6,6 +6,9 @@ import pytest
 
 from retrieval.service import RetrievalService
 from retrieval.reranker import Reranker
+from shared.models.classification import ClassificationScope
+
+S = ClassificationScope.EXTERN
 
 
 class TestRetrievalServiceTextSearch:
@@ -15,24 +18,32 @@ class TestRetrievalServiceTextSearch:
         repo.text_search = AsyncMock(return_value=[{"id": "1", "score": 0.9}])
 
         svc = RetrievalService(search_repo=repo)
-        result = await svc.text_search("python", limit=5)
+        result = await svc.text_search("python", limit=5, scope=S)
 
         repo.text_search.assert_called_once_with(
-            "python", 5, True, True, hydrate=False
+            "python", 5, scope=S, history=False, hydrate=False
         )
         assert len(result) == 1
 
     @pytest.mark.asyncio
-    async def test_text_search_with_filters(self):
+    async def test_text_search_passes_scope_and_history(self):
         repo = AsyncMock()
         repo.text_search = AsyncMock(return_value=[])
 
         svc = RetrievalService(search_repo=repo)
-        await svc.text_search("test", include_sources=False, include_notes=True)
+        await svc.text_search("test", history=True, scope=ClassificationScope.ALLES)
 
         repo.text_search.assert_called_once_with(
-            "test", 10, False, True, hydrate=False
+            "test", 10, scope=ClassificationScope.ALLES, history=True, hydrate=False
         )
+
+    @pytest.mark.asyncio
+    async def test_scope_is_required(self):
+        """F2-05: zonder classificatiebereik geen zoekactie."""
+        svc = RetrievalService(search_repo=AsyncMock())
+        for methode in (svc.text_search, svc.vector_search, svc.hybrid_search, svc.search):
+            with pytest.raises(TypeError):
+                await methode("test")
 
 
 class TestRetrievalServiceVectorSearch:
@@ -45,11 +56,11 @@ class TestRetrievalServiceVectorSearch:
         embed_model.aembed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
 
         svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
-        result = await svc.vector_search("test query", limit=5)
+        result = await svc.vector_search("test query", limit=5, scope=S)
 
         embed_model.aembed.assert_called_once_with(["test query"])
         repo.vector_search.assert_called_once_with(
-            [0.1, 0.2, 0.3], 5, True, True, 0.2, hydrate=False
+            [0.1, 0.2, 0.3], 5, 0.2, scope=S, history=False, hydrate=False
         )
         assert len(result) == 1
 
@@ -59,7 +70,7 @@ class TestRetrievalServiceVectorSearch:
         repo.text_search = AsyncMock(return_value=[{"id": "1"}])
 
         svc = RetrievalService(search_repo=repo, embedding_model=None)
-        result = await svc.vector_search("test")
+        result = await svc.vector_search("test", scope=S)
 
         repo.text_search.assert_called_once()
         assert len(result) == 1
@@ -75,7 +86,7 @@ class TestRetrievalServiceHybridSearch:
         embed_model.aembed = AsyncMock(return_value=[[0.1, 0.2]])
 
         svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
-        result = await svc.hybrid_search("test", limit=5)
+        result = await svc.hybrid_search("test", limit=5, scope=S)
 
         embed_model.aembed.assert_called_once()
         repo.hybrid_search.assert_called_once()
@@ -87,7 +98,7 @@ class TestRetrievalServiceHybridSearch:
         repo.text_search = AsyncMock(return_value=[])
 
         svc = RetrievalService(search_repo=repo)
-        await svc.hybrid_search("test")
+        await svc.hybrid_search("test", scope=S)
 
         repo.text_search.assert_called_once()
 
@@ -114,7 +125,7 @@ class TestRetrievalServiceProvenancePassthrough:
         embed_model.aembed = AsyncMock(return_value=[[0.1, 0.2]])
 
         svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
-        out = await svc.vector_search("q", limit=5)
+        out = await svc.vector_search("q", limit=5, scope=S)
 
         assert out[0]["chunk_id"] == "chunk:c1"
         assert out[0]["physical_page"] == 7
@@ -137,7 +148,7 @@ class TestRetrievalServiceProvenancePassthrough:
         repo.text_search = AsyncMock(return_value=[hit])
 
         svc = RetrievalService(search_repo=repo)
-        out = await svc.text_search("q")
+        out = await svc.text_search("q", scope=S)
 
         assert out[0]["physical_page"] is None
         assert out[0]["relevance"] == 4.0
@@ -155,13 +166,13 @@ class TestRetrievalServiceProvenancePassthrough:
 
         svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
 
-        await svc.text_search("q", hydrate=True)
+        await svc.text_search("q", hydrate=True, scope=S)
         assert repo.text_search.call_args.kwargs["hydrate"] is True
 
-        await svc.vector_search("q", hydrate=True)
+        await svc.vector_search("q", hydrate=True, scope=S)
         assert repo.vector_search.call_args.kwargs["hydrate"] is True
 
-        await svc.hybrid_search("q", hydrate=True)
+        await svc.hybrid_search("q", hydrate=True, scope=S)
         assert repo.hybrid_search.call_args.kwargs["hydrate"] is True
 
 
@@ -172,7 +183,7 @@ class TestRetrievalServiceUnifiedSearch:
         repo.text_search = AsyncMock(return_value=[])
 
         svc = RetrievalService(search_repo=repo)
-        await svc.search("test", mode="text")
+        await svc.search("test", mode="text", scope=S)
 
         repo.text_search.assert_called_once()
 
@@ -185,7 +196,7 @@ class TestRetrievalServiceUnifiedSearch:
         embed_model.aembed = AsyncMock(return_value=[[0.1]])
 
         svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
-        await svc.search("test", mode="vector")
+        await svc.search("test", mode="vector", scope=S)
 
         repo.vector_search.assert_called_once()
 
@@ -198,7 +209,7 @@ class TestRetrievalServiceUnifiedSearch:
         embed_model.aembed = AsyncMock(return_value=[[0.1]])
 
         svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
-        await svc.search("test")  # Default mode = hybrid
+        await svc.search("test", scope=S)  # Default mode = hybrid
 
         repo.hybrid_search.assert_called_once()
 
@@ -256,7 +267,7 @@ class TestRetrievalServiceEdgeCases:
         embed_model.aembed = AsyncMock(return_value=[[0.1]])
 
         svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
-        await svc.search("anything", mode="bogus-mode")
+        await svc.search("anything", mode="bogus-mode", scope=S)
 
         repo.hybrid_search.assert_called_once()
         repo.text_search.assert_not_called()
@@ -267,10 +278,10 @@ class TestRetrievalServiceEdgeCases:
         repo.text_search = AsyncMock(return_value=[])
 
         svc = RetrievalService(search_repo=repo)
-        result = await svc.text_search("")
+        result = await svc.text_search("", scope=S)
 
         repo.text_search.assert_called_once_with(
-            "", 10, True, True, hydrate=False
+            "", 10, scope=S, history=False, hydrate=False
         )
         assert result == []
 
@@ -282,7 +293,7 @@ class TestRetrievalServiceEdgeCases:
         embed_model.aembed = AsyncMock(return_value=[[0.5, 0.5]])
 
         svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
-        result = await svc.vector_search("query", limit=10)
+        result = await svc.vector_search("query", limit=10, scope=S)
 
         assert result == []
 
@@ -294,11 +305,11 @@ class TestRetrievalServiceEdgeCases:
         embed_model.aembed = AsyncMock(return_value=[[0.1, 0.2]])
 
         svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
-        await svc.vector_search("q", minimum_score=0.8)
+        await svc.vector_search("q", minimum_score=0.8, scope=S)
 
-        # minimum_score is the 5th positional arg to repo.vector_search
+        # minimum_score is the 3rd positional arg to repo.vector_search
         args, _ = repo.vector_search.call_args
-        assert args[4] == 0.8
+        assert args[2] == 0.8
 
     @pytest.mark.asyncio
     async def test_hybrid_search_passes_text_weight(self):
@@ -308,12 +319,11 @@ class TestRetrievalServiceEdgeCases:
         embed_model.aembed = AsyncMock(return_value=[[0.1]])
 
         svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
-        await svc.hybrid_search("q", text_weight=0.7)
+        await svc.hybrid_search("q", text_weight=0.7, scope=S)
 
         args, _ = repo.hybrid_search.call_args
-        # signature: (query, embedding, limit, include_sources,
-        #             include_notes, minimum_score, text_weight)
-        assert args[6] == 0.7
+        # signature: (query, embedding, limit, minimum_score, text_weight)
+        assert args[4] == 0.7
 
     @pytest.mark.asyncio
     async def test_embedding_failure_does_not_fall_back(self):
@@ -328,7 +338,7 @@ class TestRetrievalServiceEdgeCases:
         svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
 
         with pytest.raises(RuntimeError, match="network down"):
-            await svc.vector_search("query")
+            await svc.vector_search("query", scope=S)
 
         repo.text_search.assert_not_called()
         repo.vector_search.assert_not_called()

@@ -189,50 +189,16 @@ class TestEmbedSourceEmptyChunkSkip:
         assert result.embeddings_created == 0
         model.aembed.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_fallback_text_chunks_skip_empty(self):
-        """The text-splitting fallback path also skips empty/whitespace chunks."""
-        repo = _make_source_repo()
-        service = EmbeddingService(
-            repo, _make_embedding_model(), EmbeddingConfig(batch_size=10)
-        )
-        embeddings = await service._embed_text_chunks(
-            "source:fb", ["real one", "", "  ", "real two"]
-        )
-        assert len(embeddings) == 2
-        sent = service.embedding_model.aembed.call_args.args[0]
-        assert sent == ["real one", "real two"]
-
 
 class TestEmbedSourceFallback:
-    """Test embed_source fallback when no structural chunks exist."""
-
-    @pytest.mark.asyncio
-    async def test_fallback_to_text_splitting(self):
-        repo = _make_source_repo()
-        repo.get_chunks.return_value = []  # No structural chunks
-        repo.get.return_value = Source(
-            id="source:legacy",
-            full_text="A" * 2500,  # Will be split into multiple chunks
-        )
-        model = _make_embedding_model()
-        service = EmbeddingService(
-            repo, model,
-            EmbeddingConfig(fallback_chunk_size=1000, fallback_chunk_overlap=200),
-        )
-
-        result = await service.embed_source("source:legacy")
-
-        assert result.used_structural_chunks is False
-        assert result.embeddings_created > 0
-        assert result.chunks_used > 0
+    """embed_source without structural chunks: nothing to embed (F2-05)."""
 
     @pytest.mark.asyncio
     async def test_no_text_no_chunks(self):
         """Source with no text and no chunks produces no embeddings."""
         repo = _make_source_repo()
         repo.get_chunks.return_value = []
-        repo.get.return_value = Source(id="source:empty", full_text=None)
+        repo.get.return_value = Source(id="source:empty")
         model = _make_embedding_model()
         service = EmbeddingService(repo, model)
 

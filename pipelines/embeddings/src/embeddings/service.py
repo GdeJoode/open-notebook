@@ -14,7 +14,6 @@ from loguru import logger
 
 from embeddings.config import EmbeddingConfig
 from shared.models import Chunk, Source, SourceEmbedding
-from shared.utils.text import split_text
 from surrealdb_service.repositories.source import SourceRepository
 
 
@@ -65,7 +64,7 @@ class EmbeddingService:
         1. Delete existing embeddings (idempotent re-embed)
         2. Load chunks from DB (from ingestion pipeline)
         3. If chunks exist, batch-embed them
-        4. If no chunks, fall back to text splitting on full_text
+        4. If no chunks, nothing to embed (no full_text fallback, F2-05)
         5. Store SourceEmbedding records
         """
         result = EmbeddingResult(
@@ -88,28 +87,19 @@ class EmbeddingService:
             embeddings = await self._embed_chunks(source_id, chunks)
             result.embeddings_created = len(embeddings)
         else:
-            # 3b. Fall back to text splitting
-            source = await self.source_repo.get(source_id)
-            if not source or not source.full_text:
-                logger.warning(f"No text or chunks for source {source_id}")
-                # The per-chunk rows were just deleted (idempotent re-embed) and
-                # there is nothing to re-embed, so clear any stale aggregate too
-                # rather than leaving it pointing at vectors that no longer exist.
-                from embeddings.aggregate import populate_source_embedding
+            # 3b. Geen fragmenten, geen embeddings. De terugval op
+            # ``source.full_text`` vervalt met dat veld (F2-05, ADR 0001, 0003):
+            # zoeken leest alleen embeddings met een fragment.
+            logger.warning(f"No chunks for source {source_id}")
+            # The per-chunk rows were just deleted (idempotent re-embed) and
+            # there is nothing to re-embed, so clear any stale aggregate too
+            # rather than leaving it pointing at vectors that no longer exist.
+            from embeddings.aggregate import populate_source_embedding
 
-                await populate_source_embedding(
-                    source_id, source_repo=self.source_repo
-                )
-                return result
-
-            text_chunks = split_text(
-                source.full_text,
-                chunk_size=self.config.fallback_chunk_size,
-                chunk_overlap=self.config.fallback_chunk_overlap,
+            await populate_source_embedding(
+                source_id, source_repo=self.source_repo
             )
-            result.chunks_used = len(text_chunks)
-            embeddings = await self._embed_text_chunks(source_id, text_chunks)
-            result.embeddings_created = len(embeddings)
+            return result
 
         # Write the source-level aggregate (mean-pool of the per-chunk vectors)
         # right after the per-chunk rows exist. Without this, a freshly-embedded
@@ -188,51 +178,6 @@ class EmbeddingService:
                     order=order,
                     embedding=vector,
                     chunk_id=chunk_id,
-                )
-                embeddings.append(embedding)
-
-        return embeddings
-
-    async def _embed_text_chunks(
-        self,
-        source_id: str,
-        text_chunks: List[str],
-    ) -> List[SourceEmbedding]:
-        """Generate embeddings for plain text chunks (fallback path).
-
-        Mirrors ``_embed_chunks``: empty/whitespace-only chunks are skipped
-        (no model call, no row, no crash) while their batch-mates still embed,
-        with output alignment preserved.
-        """
-        embeddings: List[SourceEmbedding] = []
-        batch_size = self.config.batch_size
-
-        for batch_start in range(0, len(text_chunks), batch_size):
-            batch = text_chunks[batch_start:batch_start + batch_size]
-
-            embeddable = [
-                (batch_start + i, text)
-                for i, text in enumerate(batch)
-                if not self._is_empty_text(text)
-            ]
-            skipped = len(batch) - len(embeddable)
-            if skipped:
-                logger.info(
-                    f"Skipping {skipped} empty/whitespace text chunk(s) for "
-                    f"source {source_id} (no text to embed)"
-                )
-            if not embeddable:
-                continue
-
-            texts = [text for _, text in embeddable]
-            vectors = await self._embed_with_retry(texts)
-
-            for (order, text), vector in zip(embeddable, vectors):
-                embedding = await self.source_repo.add_embedding(
-                    source_id=source_id,
-                    content=text,
-                    order=order,
-                    embedding=vector,
                 )
                 embeddings.append(embedding)
 

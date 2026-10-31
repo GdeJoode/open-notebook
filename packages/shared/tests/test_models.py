@@ -150,7 +150,8 @@ class TestSource:
         source = Source(title="Test Source")
         assert source.title == "Test Source"
         assert source.topics == []
-        assert source.full_text is None
+        # F2-05: `full_text` vervalt; de tekst komt uit de fragmenten.
+        assert "full_text" not in Source.model_fields
 
     def test_source_table_name(self):
         """Test Source has correct table_name."""

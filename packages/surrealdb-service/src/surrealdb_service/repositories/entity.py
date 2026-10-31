@@ -9,6 +9,7 @@ import hashlib
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from shared.models.classification import ClassificationScope, classifications_for
 from shared.models.entity import Entity, Relation
 from shared.models.export import ExportFilter
 from shared.utils.name_normalizer import normalize_entity_name
@@ -2717,6 +2718,7 @@ class EntityRepository:
     async def load_mentions_edges(
         self,
         *,
+        scope: ClassificationScope,
         min_weight: float = 0.0,
         source_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -2730,6 +2732,9 @@ class EntityRepository:
             min_weight: Optional per-edge weight floor (default 0.0 — return all).
                 The full graph is small; the caller (or a UI slider) can raise
                 this to the 0.3 named-only preset for a clean overview.
+            scope: Classificatiebereik (verplicht, F2-05): alleen relaties
+                waarvan de classificatie (die van de bron, migratie 90), de bron
+                en de entiteit binnen het bereik vallen.
             source_id: Optional scope to edges incident on a single source
                 (the source-detail / single-document neighbourhood view).
 
@@ -2737,8 +2742,15 @@ class EntityRepository:
             A list of ``{"id", "source", "target", "weight", "concept_name",
             "concept_type", "document_frequency"}`` dicts. Empty on failure.
         """
-        clauses: List[str] = []
-        params: Dict[str, Any] = {}
+        classifications = classifications_for(scope)
+        if not classifications:
+            return []
+        clauses: List[str] = [
+            "classification IN $classifications",
+            "in.classification IN $classifications",
+            "out.classification IN $classifications",
+        ]
+        params: Dict[str, Any] = {"classifications": classifications}
         if min_weight is not None and min_weight > 0.0:
             clauses.append("weight >= $min_weight")
             params["min_weight"] = float(min_weight)

@@ -10,6 +10,7 @@ from typing import Any, ClassVar, Dict, List, Literal, Optional
 from pydantic import Field, field_validator
 
 from shared.models.base import ObjectModel
+from shared.models.source import Classification
 from shared.types.enums import NoteType
 
 
@@ -48,6 +49,9 @@ class Notebook(ObjectModel):
         default=False,
         description="Opt-in: periodically re-run the F.1 quality audit for this notebook",
     )
+    classification: Optional[Classification] = Field(
+        None, description="intern of extern; standaard intern (F2-03)"
+    )
 
     @field_validator("name")
     @classmethod
@@ -71,6 +75,10 @@ class Note(ObjectModel):
     content: Optional[str] = None
     embedding: Optional[List[float]] = Field(None, description="Vector embedding")
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    classification: Optional[Classification] = Field(
+        None, description="intern of extern; standaard intern (F2-03)"
+    )
+    is_derived: bool = Field(True, description="Afgeleide tekst, nooit een bron (ADR 0004)")
 
     @field_validator("content")
     @classmethod
@@ -112,6 +120,10 @@ class ChatSession(ObjectModel):
         None, description="Override the default model for this session"
     )
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    classification: Optional[Classification] = Field(
+        None, description="intern of extern; standaard intern (F2-03)"
+    )
+    is_derived: bool = Field(True, description="Afgeleide tekst, nooit een bron (ADR 0004)")
 
 
 class ChatMessage(ObjectModel):
@@ -124,3 +136,7 @@ class ChatMessage(ObjectModel):
     role: Literal["user", "assistant", "system"] = Field(description="Message role")
     content: str = Field(description="Message content")
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    classification: Optional[Classification] = Field(
+        None, description="intern of extern; standaard intern (F2-03)"
+    )
+    is_derived: bool = Field(True, description="Afgeleide tekst, nooit een bron (ADR 0004)")

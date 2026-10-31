@@ -1,10 +1,17 @@
 """
 Search repositories for text and vector search operations.
+
+Zoeken leest alleen fragmenten (``chunk``, ``source_embedding``), nooit notities
+of inzichten (ADR 0004). Elke zoekmethode vraagt het classificatiebereik van de
+sleutel als verplicht argument zonder standaard; het filter staat in de query
+(``migrations/91.surrealql``, ADR 0002 C). Standaard alleen de huidige
+bronversie en run; ``history=True`` ook oudere (ADR 0003).
 """
 
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from shared.models.classification import ClassificationScope, classifications_for
 
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
@@ -70,6 +77,9 @@ class SearchRepository:
         self,
         hits: List[Dict[str, Any]],
         embedding: Optional[List[float]] = None,
+        *,
+        scope: ClassificationScope,
+        history: bool = False,
     ) -> List[Dict[str, Any]]:
         """Attach per-hit chunk provenance to search results in place.
 
@@ -143,7 +153,7 @@ class SearchRepository:
 
         try:
             best_by_source = await self._best_chunk_per_source(
-                sorted(chunk_backed), embedding
+                sorted(chunk_backed), embedding, scope=scope, history=history
             )
         except Exception as e:  # provenance is additive — never break a search
             logger.warning(f"Provenance hydration failed (continuing): {e}")
@@ -164,6 +174,9 @@ class SearchRepository:
         self,
         source_ids: List[str],
         embedding: List[float],
+        *,
+        scope: ClassificationScope,
+        history: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         """Best (highest-cosine) chunk per source, batched.
 
@@ -184,9 +197,19 @@ class SearchRepository:
                    vector::similarity::cosine(embedding, $embed) AS _sim
             FROM source_embedding
             WHERE source IN $sources AND chunk IS NOT NONE
+                AND classification IN $classifications
+                AND chunk.classification IN $classifications
+                AND ($history = true
+                    OR (chunk.source_version = source.current_version
+                        AND chunk.run = chunk.source_version.current_run))
             ORDER BY _sim DESC
             """,
-            {"embed": embedding, "sources": record_ids},
+            {
+                "embed": embedding,
+                "sources": record_ids,
+                "classifications": classifications_for(scope),
+                "history": history,
+            },
             self.config,
         )
 
@@ -203,46 +226,46 @@ class SearchRepository:
         self,
         keyword: str,
         results: int = 10,
-        include_sources: bool = True,
-        include_notes: bool = True,
+        *,
+        scope: ClassificationScope,
+        history: bool = False,
         hydrate: bool = False,
     ) -> List[Dict[str, Any]]:
         """
-        Perform a text search across sources and notes.
+        Full-text search (BM25) over the chunks of the sources.
 
         Args:
             keyword: Search keyword.
             results: Maximum number of results.
-            include_sources: Whether to search sources.
-            include_notes: Whether to search notes.
+            scope: Het classificatiebereik van de sleutel (verplicht, geen
+                standaard). Het filter staat in ``fn::text_search``.
+            history: Ook fragmenten van oudere bronversies en runs.
             hydrate: Attach per-hit provenance (Track X.1). **Off by default**:
                 the generic ``/search`` (UI/MCP) hot path does not need
                 provenance and must not pay the extra ``SELECT``; only the
-                answer-citation path (Track X.2) opts in. No embedding is
-                available for a text search and BM25 scores are not reproducible
-                out of context, so even when enabled no chunk-level keys are
-                attached for any text hit (``chunk_id``/``physical_page``/
-                ``section_path``/... stay ``None``); only the source-level
-                ``source`` is set. Disabled internally by ``hybrid_search`` so
-                the fused result set is hydrated once, with the embedding.
+                answer-citation path (Track X.2) opts in. BM25 scores are not
+                reproducible out of context, so even when enabled no chunk-level
+                keys are attached for any text hit; only the source-level
+                ``source`` is set. The matching chunks are in ``chunks``.
 
         Returns:
-            List of search results.
+            One hit per source, with the matching chunk ids in ``chunks``.
         """
         if not keyword:
             return []
+        classifications = classifications_for(scope)
 
         try:
             hits = await execute_query(
                 """
                 SELECT *
-                FROM fn::text_search($keyword, $results, $source, $note)
+                FROM fn::text_search($keyword, $results, $classifications, $history)
                 """,
                 {
                     "keyword": keyword,
                     "results": results,
-                    "source": include_sources,
-                    "note": include_notes,
+                    "classifications": classifications,
+                    "history": history,
                 },
                 self.config,
             )
@@ -251,27 +274,31 @@ class SearchRepository:
             return []
 
         if hydrate:
-            return await self.hydrate_provenance(hits, embedding=None)
+            return await self.hydrate_provenance(
+                hits, embedding=None, scope=scope, history=history
+            )
         return hits
 
     async def vector_search(
         self,
         embedding: List[float],
         results: int = 10,
-        include_sources: bool = True,
-        include_notes: bool = True,
         minimum_score: float = 0.2,
+        *,
+        scope: ClassificationScope,
+        history: bool = False,
         hydrate: bool = False,
     ) -> List[Dict[str, Any]]:
         """
-        Perform a vector similarity search.
+        Perform a vector similarity search over the chunk embeddings.
 
         Args:
             embedding: Query embedding vector.
             results: Maximum number of results.
-            include_sources: Whether to search sources.
-            include_notes: Whether to search notes.
             minimum_score: Minimum similarity score.
+            scope: Het classificatiebereik van de sleutel (verplicht, geen
+                standaard). Het filter staat in ``fn::vector_search``.
+            history: Ook embeddings van oudere bronversies en runs.
             hydrate: Attach per-hit chunk provenance (Track X.1) using
                 ``embedding`` to resolve the exact matching chunk per source.
                 **Off by default** — the generic ``/search`` hot path skips the
@@ -280,19 +307,23 @@ class SearchRepository:
                 set is hydrated once.
 
         Returns:
-            List of search results with similarity scores.
+            One hit per source with its best similarity, the matching chunk ids
+            in ``chunks`` and the ``source_embedding`` ids in ``embeddings``.
         """
+        classifications = classifications_for(scope)
         try:
             hits = await execute_query(
                 """
-                SELECT * FROM fn::vector_search($embed, $results, $source, $note, $minimum_score)
+                SELECT * FROM fn::vector_search(
+                    $embed, $results, $minimum_score, $classifications, $history
+                )
                 """,
                 {
                     "embed": embedding,
                     "results": results,
-                    "source": include_sources,
-                    "note": include_notes,
                     "minimum_score": minimum_score,
+                    "classifications": classifications,
+                    "history": history,
                 },
                 self.config,
             )
@@ -301,7 +332,9 @@ class SearchRepository:
             return []
 
         if hydrate:
-            return await self.hydrate_provenance(hits, embedding=embedding)
+            return await self.hydrate_provenance(
+                hits, embedding=embedding, scope=scope, history=history
+            )
         return hits
 
     # Reciprocal Rank Fusion damping constant ``k`` in ``w / (k + rank)``.
@@ -316,10 +349,11 @@ class SearchRepository:
         keyword: str,
         embedding: List[float],
         results: int = 10,
-        include_sources: bool = True,
-        include_notes: bool = True,
         minimum_score: float = 0.2,
         text_weight: float = 0.5,
+        *,
+        scope: ClassificationScope,
+        history: bool = False,
         hydrate: bool = False,
     ) -> List[Dict[str, Any]]:
         """
@@ -345,11 +379,12 @@ class SearchRepository:
             keyword: Search keyword.
             embedding: Query embedding vector.
             results: Maximum number of results.
-            include_sources: Whether to search sources.
-            include_notes: Whether to search notes.
             minimum_score: Minimum similarity score for vector search.
             text_weight: RRF weight for the text (BM25) signal (0-1); the
                 vector signal gets ``1 - text_weight``.
+            scope: Het classificatiebereik van de sleutel (verplicht); beide
+                deelzoekacties filteren erop in de query.
+            history: Ook oudere bronversies en runs.
             hydrate: Attach per-hit chunk provenance to the fused set (Track
                 X.1), resolved with ``embedding``. **Off by default** so the
                 generic ``/search`` hot path skips the extra ``SELECT``; only
@@ -370,14 +405,14 @@ class SearchRepository:
         # Hydrate once on the fused set below (with the embedding) rather than
         # per-leg — so the page reflects the vector match, not the text leg.
         text_results = await self.text_search(
-            keyword, results * 2, include_sources, include_notes, hydrate=False
+            keyword, results * 2, scope=scope, history=history, hydrate=False
         )
         vector_results = await self.vector_search(
             embedding,
             results * 2,
-            include_sources,
-            include_notes,
             minimum_score,
+            scope=scope,
+            history=history,
             hydrate=False,
         )
 
@@ -420,4 +455,6 @@ class SearchRepository:
             return top
         # Hydrate the final set once, using the query embedding for exact
         # chunk resolution. Additive — leaves the fusion fields intact.
-        return await self.hydrate_provenance(top, embedding=embedding)
+        return await self.hydrate_provenance(
+            top, embedding=embedding, scope=scope, history=history
+        )

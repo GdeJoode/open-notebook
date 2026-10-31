@@ -49,6 +49,46 @@ def _zonder_lege_classificatie(data: Dict[str, Any]) -> None:
         del data["classification"]
 
 
+def eigen_record_id(value: Any, table: str) -> Optional[RecordID]:
+    """``value`` als record-id van ``table``, anders ``None`` (F2-05).
+
+    Een kaal id krijgt de tabel ervoor. Een id van een andere tabel of een
+    ongeldige vorm geeft ``None``: de leesroute antwoordt dan 404, net als
+    voor een record buiten het classificatiebereik.
+    """
+    tekst = str(value or "").strip()
+    if not tekst:
+        return None
+    if ":" not in tekst:
+        tekst = f"{table}:{tekst}"
+    if not _RECORD_ID_RE.match(tekst) or tekst.split(":", 1)[0] != table:
+        return None
+    try:
+        return ensure_record_id(tekst)
+    except Exception:  # noqa: BLE001 — ongeldige vorm is gewoon "niet gevonden"
+        return None
+
+
+async def lees_met_bereik(
+    table: str, id: Any, classifications: List[str], config: Optional[SurrealDBConfig]
+) -> Optional[Dict[str, Any]]:
+    """Eén record van ``table`` als zijn classificatie in ``classifications`` valt.
+
+    Het filter staat in de query. Een ongeldig id of een id van een andere tabel
+    geeft ``None``. Een databasefout gaat door naar de aanroeper (geen stille
+    ``None``), zodat de route een 500 zonder inhoud kan geven.
+    """
+    rid = eigen_record_id(id, table)
+    if rid is None or not classifications:
+        return None
+    rows = await execute_query(
+        "SELECT * FROM $id WHERE classification IN $classifications",
+        {"id": rid, "classifications": classifications},
+        config,
+    )
+    return rows[0] if rows else None
+
+
 T = TypeVar("T", bound=ObjectModel)
 R = TypeVar("R", bound=RecordModel)
 

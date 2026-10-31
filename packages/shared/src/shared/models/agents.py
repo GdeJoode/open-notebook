@@ -13,6 +13,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from shared.models.classification import ClassificationScope
+
 
 class Right(str, Enum):
     """Het recht van een sleutel (ADR 0002 B, migratie 88)."""
@@ -22,14 +24,6 @@ class Right(str, Enum):
     PIJPLIJN = "pijplijn"
     OPHALEN = "ophalen"
     BEHEERDER = "beheerder"
-
-
-class ClassificationScope(str, Enum):
-    """Welke classificaties een sleutel mag zien (ADR 0002 C, plan §5.3)."""
-
-    EXTERN = "EXTERN"
-    ALLES = "ALLES"
-    LEEG = "LEEG"
 
 
 #: Het bereik volgt uit het recht. `ophalen` ziet geen records.

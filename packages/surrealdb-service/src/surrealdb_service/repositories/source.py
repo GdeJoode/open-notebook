@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from shared.models import Asset, Chunk, Source, SourceEmbedding, SourceInsight
+from shared.models.classification import ClassificationScope, classifications_for
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import (
     ClassificationConflictError,
@@ -15,7 +16,12 @@ from surrealdb_service.connection import (
     execute_query,
     execute_transaction,
 )
-from surrealdb_service.repositories.base import BaseRepository, _validate_record_id
+from surrealdb_service.repositories.base import (
+    BaseRepository,
+    _validate_record_id,
+    eigen_record_id,
+    lees_met_bereik,
+)
 
 # The ``processing_stage`` filter shared by the sources list (``?stage=``) and
 # the Werkbak (WB.1), so both count the same rows. The field is a strict string
@@ -68,6 +74,91 @@ class SourceRepository(BaseRepository[Source]):
 
     def __init__(self, config: Optional[SurrealDBConfig] = None):
         super().__init__(Source, config)
+
+    # ------------------------------------------------------------------
+    # Lezen met classificatiebereik (F2-05, ADR 0002 C). Het bereik is een
+    # verplicht argument zonder standaard; het filter staat in de query.
+    # ------------------------------------------------------------------
+
+    async def get_scoped(self, source_id: str, *, scope: ClassificationScope) -> Optional[Source]:
+        """Eén bron binnen ``scope``; ``None`` daarbuiten of bij een ongeldig id
+        of een id van een andere tabel (de route geeft dan 404)."""
+        rij = await lees_met_bereik("source", source_id, classifications_for(scope), self.config)
+        return Source(**rij) if rij else None
+
+    async def get_text(self, source_id: str, *, scope: ClassificationScope) -> Optional[str]:
+        """De tekst van een bron: de fragmenten van haar huidige versie en run,
+        op volgorde, binnen ``scope`` (vervangt ``source.full_text``, ADR 0001,
+        0003). ``None`` zonder zichtbare fragmenten."""
+        rid = eigen_record_id(source_id, "source")
+        classifications = classifications_for(scope)
+        if rid is None or not classifications:
+            return None
+        rijen = await execute_query(
+            """
+            SELECT text, order FROM chunk
+            WHERE source = $id
+                AND classification IN $classifications
+                AND $id.classification IN $classifications
+                AND source_version = $id.current_version
+                AND run = $id.current_version.current_run
+            ORDER BY order ASC
+            """,
+            {"id": rid, "classifications": classifications},
+            self.config,
+        )
+        teksten = [
+            r.get("text") for r in rijen or []
+            if isinstance(r.get("text"), str) and r["text"].strip()
+        ]
+        return "\n\n".join(teksten) if teksten else None
+
+    async def get_notebook_ids_scoped(
+        self, source_id: str, *, scope: ClassificationScope
+    ) -> List[str]:
+        """De notebooks binnen ``scope`` waarin de bron staat."""
+        rid = eigen_record_id(source_id, "source")
+        classifications = classifications_for(scope)
+        if rid is None or not classifications:
+            return []
+        rows = await execute_query(
+            "SELECT VALUE out FROM reference WHERE in = $id"
+            " AND out.classification IN $classifications",
+            {"id": rid, "classifications": classifications},
+            self.config,
+        )
+        return [str(r) for r in rows or []]
+
+    async def count_related(
+        self, source_id: str, *, scope: ClassificationScope
+    ) -> Dict[str, int]:
+        """Aantallen inzichten, embeddings en actuele entiteiten van een bron,
+        alleen binnen ``scope``: ook een aantal verraadt anders interne records."""
+        rid = eigen_record_id(source_id, "source")
+        classifications = classifications_for(scope)
+        leeg = {"insights_count": 0, "embedding_count": 0, "entity_count": 0}
+        if rid is None or not classifications:
+            return leeg
+        rows = await execute_query(
+            """
+            RETURN {
+                insights_count: count(SELECT id FROM source_insight
+                    WHERE source = $id AND classification IN $classifications),
+                embedding_count: count(SELECT id FROM source_embedding
+                    WHERE source = $id AND classification IN $classifications),
+                entity_count: count(SELECT id FROM entity
+                    WHERE source_documents CONTAINSANY [<string> $id]
+                        AND (status = 'active' OR status = 'reference')
+                        AND classification IN $classifications)
+            }
+            """,
+            {"id": rid, "classifications": classifications},
+            self.config,
+        )
+        rij = rows[0] if isinstance(rows, list) and rows else rows
+        if not isinstance(rij, dict):
+            return leeg
+        return {k: int(rij.get(k) or 0) for k in leeg}
 
     async def get_classification(self, source_id: str) -> Optional[str]:
         """De classificatie van de bron, of ``None`` als die niet bestaat."""
@@ -661,9 +752,14 @@ class SourceRepository(BaseRepository[Source]):
         ids: Optional[List[str]] = None,
         first_stages: Optional[List[str]] = None,
         first_ids: Optional[List[str]] = None,
+        *,
+        scope: ClassificationScope,
     ) -> List[Dict[str, Any]]:
         """
         List sources with insight counts and embedding status.
+
+        Alleen bronnen binnen ``scope`` (F2-05); de aantallen en de
+        embeddingstatus tellen alleen records binnen ``scope``.
 
         Args:
             notebook_id: Optional notebook filter.
@@ -695,62 +791,46 @@ class SourceRepository(BaseRepository[Source]):
             "first_stages": first_stages or [],
             "first_ids": [ensure_record_id(i) for i in first_ids or []],
         }
-        conditions = []
+        classifications = classifications_for(scope)
+        if not classifications:
+            return []
+        conditions = ["classification IN $classifications"]
         if stages:
             conditions.append(STAGE_IN)
         if ids is not None:
             conditions.append("id IN $ids")
-        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        where_clause = f"WHERE {' AND '.join(conditions)}"
         record_ids = [ensure_record_id(i) for i in ids] if ids is not None else None
-
+        params: Dict[str, Any] = {
+            "limit": limit,
+            "offset": offset,
+            "stages": stages,
+            "ids": record_ids,
+            "classifications": classifications,
+            **first_params,
+        }
         if notebook_id:
-            query = f"""
-                SELECT id, asset, created, title, updated, topics, command,
-                processing_stage,
-                (SELECT VALUE count() FROM source_insight
-                 WHERE source = $parent.id GROUP ALL)[0].count OR 0
-                 AS insights_count,
-                ((SELECT VALUE id FROM source_embedding
-                  WHERE source = $parent.id LIMIT 1)) != NONE AS embedded
-                {first_field}
-                FROM (select value in from reference where out=$notebook_id)
-                {where_clause}
-                {order_clause}
-                LIMIT $limit START $offset
-            """
-            return await execute_query(
-                query,
-                {
-                    "notebook_id": ensure_record_id(notebook_id),
-                    "limit": limit,
-                    "offset": offset,
-                    "stages": stages,
-                    "ids": record_ids,
-                    **first_params,
-                },
-                self.config,
-            )
+            bron = "(select value in from reference where out=$notebook_id)"
+            params["notebook_id"] = ensure_record_id(notebook_id)
         else:
-            query = f"""
-                SELECT id, asset, created, title, updated, topics, command,
-                processing_stage,
-                (SELECT VALUE count() FROM source_insight
-                 WHERE source = $parent.id GROUP ALL)[0].count OR 0
-                 AS insights_count,
-                ((SELECT VALUE id FROM source_embedding
-                  WHERE source = $parent.id LIMIT 1)) != NONE AS embedded
-                {first_field}
-                FROM source
-                {where_clause}
-                {order_clause}
-                LIMIT $limit START $offset
-            """
-            return await execute_query(
-                query,
-                {"limit": limit, "offset": offset, "stages": stages,
-                 "ids": record_ids, **first_params},
-                self.config,
-            )
+            bron = "source"
+
+        query = f"""
+            SELECT id, asset, created, title, updated, topics, command,
+            processing_stage, classification,
+            count(SELECT id FROM source_insight
+                WHERE source = $parent.id AND classification IN $classifications)
+                AS insights_count,
+            ((SELECT VALUE id FROM source_embedding
+              WHERE source = $parent.id AND classification IN $classifications
+              LIMIT 1)) != NONE AS embedded
+            {first_field}
+            FROM {bron}
+            {where_clause}
+            {order_clause}
+            LIMIT $limit START $offset
+        """
+        return await execute_query(query, params, self.config)
 
     async def list_by_stage(
         self,

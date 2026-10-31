@@ -3,11 +3,14 @@ Retrieval service — unified search with automatic query embedding.
 
 Wraps SearchRepository with embedding logic so callers pass text queries
 (not pre-computed vectors). Supports text, vector, and hybrid search modes.
+Zoeken leest alleen fragmenten (ADR 0004); elke methode vraagt het
+classificatiebereik van de aanroeper als verplicht argument (F2-05, ADR 0002 C).
 """
 
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from shared.models.classification import ClassificationScope
 from surrealdb_service.repositories import SearchRepository
 
 
@@ -44,9 +47,10 @@ class RetrievalService:
         query: str,
         mode: str = "hybrid",
         limit: int = 10,
-        include_sources: bool = True,
-        include_notes: bool = True,
         minimum_score: float = 0.2,
+        *,
+        scope: ClassificationScope,
+        history: bool = False,
     ) -> List[Dict[str, Any]]:
         """Unified search dispatcher.
 
@@ -54,32 +58,31 @@ class RetrievalService:
             query: Search query text.
             mode: "text", "vector", or "hybrid".
             limit: Maximum results.
-            include_sources: Search source embeddings.
-            include_notes: Search note embeddings.
             minimum_score: Minimum similarity for vector results.
+            scope: Classificatiebereik van de aanroeper (verplicht).
+            history: Ook oudere bronversies en runs.
 
         Returns:
             Ranked list of result dicts.
         """
         if mode == "text":
-            return await self.text_search(
-                query, limit, include_sources, include_notes
-            )
+            return await self.text_search(query, limit, scope=scope, history=history)
         elif mode == "vector":
             return await self.vector_search(
-                query, limit, include_sources, include_notes, minimum_score
+                query, limit, minimum_score, scope=scope, history=history
             )
         else:
             return await self.hybrid_search(
-                query, limit, include_sources, include_notes, minimum_score
+                query, limit, minimum_score, scope=scope, history=history
             )
 
     async def text_search(
         self,
         query: str,
         limit: int = 10,
-        include_sources: bool = True,
-        include_notes: bool = True,
+        *,
+        scope: ClassificationScope,
+        history: bool = False,
         hydrate: bool = False,
     ) -> List[Dict[str, Any]]:
         """Full-text search (no embedding needed).
@@ -89,16 +92,17 @@ class RetrievalService:
         the answer-citation path opts in.
         """
         return await self._repo.text_search(
-            query, limit, include_sources, include_notes, hydrate=hydrate
+            query, limit, scope=scope, history=history, hydrate=hydrate
         )
 
     async def vector_search(
         self,
         query: str,
         limit: int = 10,
-        include_sources: bool = True,
-        include_notes: bool = True,
         minimum_score: float = 0.2,
+        *,
+        scope: ClassificationScope,
+        history: bool = False,
         hydrate: bool = False,
     ) -> List[Dict[str, Any]]:
         """Embed query text, then vector similarity search.
@@ -117,15 +121,15 @@ class RetrievalService:
                 "No embedding model — falling back to text search"
             )
             return await self.text_search(
-                query, limit, include_sources, include_notes, hydrate=hydrate
+                query, limit, scope=scope, history=history, hydrate=hydrate
             )
 
         return await self._repo.vector_search(
             embedding,
             limit,
-            include_sources,
-            include_notes,
             minimum_score,
+            scope=scope,
+            history=history,
             hydrate=hydrate,
         )
 
@@ -133,10 +137,11 @@ class RetrievalService:
         self,
         query: str,
         limit: int = 10,
-        include_sources: bool = True,
-        include_notes: bool = True,
         minimum_score: float = 0.2,
         text_weight: float = 0.5,
+        *,
+        scope: ClassificationScope,
+        history: bool = False,
         hydrate: bool = False,
     ) -> List[Dict[str, Any]]:
         """Embed query, then combined text + vector search.
@@ -153,16 +158,16 @@ class RetrievalService:
                 "No embedding model — falling back to text search"
             )
             return await self.text_search(
-                query, limit, include_sources, include_notes, hydrate=hydrate
+                query, limit, scope=scope, history=history, hydrate=hydrate
             )
 
         return await self._repo.hybrid_search(
             query,
             embedding,
             limit,
-            include_sources,
-            include_notes,
             minimum_score,
             text_weight,
+            scope=scope,
+            history=history,
             hydrate=hydrate,
         )

@@ -7,9 +7,32 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from shared.models import ChatMessage, ChatSession, Note, Notebook
+from shared.models.classification import ClassificationScope, classifications_for
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
-from surrealdb_service.repositories.base import BaseRepository, _validate_record_id
+from surrealdb_service.repositories.base import (
+    BaseRepository,
+    _validate_record_id,
+    eigen_record_id,
+    lees_met_bereik,
+)
+
+#: Aantallen voor een notebook, alleen van bronnen en notities binnen het
+#: bereik: ook een aantal verraadt anders het bestaan van interne records.
+_ZICHTBARE_AANTALLEN = (
+    "count(<-reference<-source[WHERE classification IN $classifications]) AS source_count, "
+    "count(<-artifact<-note[WHERE classification IN $classifications]) AS note_count"
+)
+
+#: Toegestane volgorde voor de lijst met notebooks (geen vrije tekst in de query).
+_NOTEBOOK_VOLGORDE = {
+    "updated desc": "updated DESC",
+    "updated asc": "updated ASC",
+    "created desc": "created DESC",
+    "created asc": "created ASC",
+    "name asc": "name ASC",
+    "name desc": "name DESC",
+}
 
 
 class NotebookRepository(BaseRepository[Notebook]):
@@ -17,6 +40,85 @@ class NotebookRepository(BaseRepository[Notebook]):
 
     def __init__(self, config: Optional[SurrealDBConfig] = None):
         super().__init__(Notebook, config)
+
+    # ------------------------------------------------------------------
+    # Lezen met classificatiebereik (F2-05, ADR 0002 C)
+    # ------------------------------------------------------------------
+
+    async def get_scoped(
+        self, notebook_id: str, *, scope: ClassificationScope
+    ) -> Optional[Dict[str, Any]]:
+        """Eén notebook binnen ``scope``, met de aantallen zichtbare bronnen en
+        notities; ``None`` buiten het bereik of bij een ongeldig id."""
+        rid = eigen_record_id(notebook_id, "notebook")
+        classifications = classifications_for(scope)
+        if rid is None or not classifications:
+            return None
+        rows = await execute_query(
+            f"SELECT *, {_ZICHTBARE_AANTALLEN} FROM $id"
+            " WHERE classification IN $classifications",
+            {"id": rid, "classifications": classifications},
+            self.config,
+        )
+        return rows[0] if rows else None
+
+    async def list_scoped(
+        self,
+        *,
+        scope: ClassificationScope,
+        order_by: str = "updated desc",
+        archived: Optional[bool] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Notebooks binnen ``scope``, met de aantallen zichtbare bronnen en notities.
+
+        ``order_by`` komt uit een vaste lijst (geen vrije tekst in de query);
+        een onbekende waarde geeft ``ValueError``.
+        """
+        volgorde = _NOTEBOOK_VOLGORDE.get(" ".join(order_by.lower().split()))
+        if volgorde is None:
+            raise ValueError("order_by moet een van " + ", ".join(sorted(_NOTEBOOK_VOLGORDE)) + " zijn")
+        classifications = classifications_for(scope)
+        if not classifications:
+            return []
+        where = "WHERE classification IN $classifications"
+        params: Dict[str, Any] = {
+            "classifications": classifications,
+            "limit": limit,
+            "offset": offset,
+        }
+        if archived is not None:
+            where += " AND archived = $archived"
+            params["archived"] = archived
+        rows = await execute_query(
+            f"SELECT *, {_ZICHTBARE_AANTALLEN} FROM notebook {where}"
+            f" ORDER BY {volgorde} LIMIT $limit START $offset",
+            params,
+            self.config,
+        )
+        return rows or []
+
+    async def get_notes_scoped(
+        self, notebook_id: str, *, scope: ClassificationScope
+    ) -> List[Dict[str, Any]]:
+        """De zichtbare notities van een zichtbaar notebook, nieuwste eerst."""
+        rid = eigen_record_id(notebook_id, "notebook")
+        classifications = classifications_for(scope)
+        if rid is None or not classifications:
+            return []
+        rows = await execute_query(
+            """
+            SELECT * OMIT embedding FROM note
+            WHERE classification IN $classifications
+                AND id IN (SELECT VALUE in FROM artifact WHERE out = $id)
+                AND $id.classification IN $classifications
+            ORDER BY updated DESC
+            """,
+            {"id": rid, "classifications": classifications},
+            self.config,
+        )
+        return rows or []
 
     async def get_sources(self, notebook_id: str) -> List[Dict[str, Any]]:
         """
@@ -26,12 +128,12 @@ class NotebookRepository(BaseRepository[Notebook]):
             notebook_id: Notebook ID.
 
         Returns:
-            List of source data (without full_text for efficiency).
+            List of source data.
         """
         try:
             result = await execute_query(
                 """
-                SELECT * OMIT source.full_text FROM (
+                SELECT * FROM (
                     SELECT in AS source FROM reference WHERE out=$id
                     FETCH source
                 ) ORDER BY source.updated DESC
@@ -180,6 +282,27 @@ class NoteRepository(BaseRepository[Note]):
 
     def __init__(self, config: Optional[SurrealDBConfig] = None):
         super().__init__(Note, config)
+
+    async def get_scoped(self, note_id: str, *, scope: ClassificationScope) -> Optional[Note]:
+        """Eén notitie binnen ``scope`` (F2-05); ``None`` daarbuiten of bij een
+        ongeldig id of een id van een andere tabel."""
+        rij = await lees_met_bereik("note", note_id, classifications_for(scope), self.config)
+        return Note(**rij) if rij else None
+
+    async def list_scoped(
+        self, *, scope: ClassificationScope, limit: int = 50, offset: int = 0
+    ) -> List[Note]:
+        """Notities binnen ``scope``, nieuwste eerst (F2-05)."""
+        classifications = classifications_for(scope)
+        if not classifications:
+            return []
+        rows = await execute_query(
+            "SELECT * FROM note WHERE classification IN $classifications"
+            " ORDER BY updated DESC LIMIT $limit START $offset",
+            {"classifications": classifications, "limit": limit, "offset": offset},
+            self.config,
+        )
+        return [Note(**r) for r in rows or []]
 
     async def add_to_notebook(self, note_id: str, notebook_id: str) -> bool:
         """

@@ -135,7 +135,6 @@ class Source(ObjectModel):
     asset: Optional[Asset] = None
     title: Optional[str] = None
     topics: List[str] = Field(default_factory=list)
-    full_text: Optional[str] = None
     command: Optional[str] = Field(
         None, description="Link to processing job/command"
     )

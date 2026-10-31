@@ -23,7 +23,10 @@ import pytest
 
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
+from shared.models.classification import ClassificationScope
 from surrealdb_service.repositories import SearchRepository
+
+S = ClassificationScope.ALLES
 
 pytestmark = pytest.mark.asyncio
 
@@ -78,7 +81,7 @@ async def test_vector_hit_carries_real_chunk_page_and_section():
     # Hydration is opt-in as of Track X.2 (the generic /search default is off);
     # the answer-citation path passes hydrate=True, which we exercise here.
     hits = await repo.vector_search(
-        query_embedding, results=10, minimum_score=0.2, hydrate=True
+        query_embedding, results=10, minimum_score=0.2, hydrate=True, scope=S
     )
 
     assert hits, "expected at least one vector hit on staging"

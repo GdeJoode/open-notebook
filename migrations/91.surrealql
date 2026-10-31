@@ -1,0 +1,84 @@
+-- Migratie 91: zoeken leest alleen fragmenten, met classificatiefilter en de
+-- nieuwste versie (F2-05; ADR 0002 C, 0003, 0004). Idempotent.
+--
+-- 1. fn::text_search en fn::vector_search lezen alleen `chunk` en
+--    `source_embedding`. Notities en inzichten zijn afgeleid en komen nooit in
+--    een zoekresultaat (ADR 0004); `$sources` en `$show_notes` vervallen.
+--    Het filter staat in de WHERE-clausule, vóór de rangschikking:
+--    `classification IN $classifications` op het record, op de bron en (bij een
+--    embedding) op het fragment. Zonder `$history` alleen de fragmenten van de
+--    huidige bronversie en haar huidige run (`source.current_version`,
+--    `source_version.current_run`, F2-04).
+--    Elk resultaat is één bron (`id` = `parent_id` = de bron) met de fragmenten
+--    waarop het treft in `chunks`.
+-- 2. `is_derived` op `note` en `source_insight`: altijd waar (ADR 0004). Geen
+--    UPDATE van bestaande records: de database is leeg (B3), en een UPDATE
+--    toetst alle velden opnieuw (een oud inzicht kan de classificatieregel
+--    van migratie 89 schenden). `DEFAULT ALWAYS` vult het veld bij elk schrijven.
+-- 3. `source.full_text` vervalt (ADR 0001, 0003): de tekst van een bron is de
+--    tekst van de fragmenten van haar huidige versie. Tekstzoeken gebruikt een
+--    BM25-index op `chunk.text`.
+
+-- 3a. Tekstzoeken op het fragment.
+DEFINE INDEX OVERWRITE idx_chunk_text ON chunk FIELDS text SEARCH ANALYZER my_analyzer BM25 HIGHLIGHTS;
+
+-- 1. Zoekfuncties.
+REMOVE FUNCTION IF EXISTS fn::text_search;
+DEFINE FUNCTION fn::text_search($query_text: string, $match_count: int, $classifications: array<string>, $history: bool) {
+    LET $treffers = (
+        SELECT id AS chunk, source, search::score(1) AS relevance
+        FROM chunk
+        WHERE text @1@ $query_text
+            AND classification IN $classifications
+            AND source.classification IN $classifications
+            AND ($history = true
+                OR (source_version = source.current_version
+                    AND run = source_version.current_run))
+    );
+    RETURN (
+        SELECT source AS id, source AS parent_id, source.title AS title,
+            math::max(relevance) AS relevance, array::group(chunk) AS chunks
+        FROM $treffers
+        GROUP BY id, parent_id, title
+        ORDER BY relevance DESC
+        LIMIT $match_count
+    );
+};
+
+REMOVE FUNCTION IF EXISTS fn::vector_search;
+DEFINE FUNCTION fn::vector_search($query: array<float>, $match_count: int, $min_similarity: float, $classifications: array<string>, $history: bool) {
+    LET $treffers = (
+        SELECT id AS embedding_id, chunk, source, content,
+            vector::similarity::cosine(embedding, $query) AS similarity
+        FROM source_embedding
+        WHERE embedding != NONE AND array::len(embedding) = array::len($query)
+            AND classification IN $classifications
+            AND source.classification IN $classifications
+            AND (chunk = NONE OR chunk.classification IN $classifications)
+            AND ($history = true
+                OR (chunk != NONE
+                    AND chunk.source_version = source.current_version
+                    AND chunk.run = chunk.source_version.current_run))
+            AND vector::similarity::cosine(embedding, $query) >= $min_similarity
+        ORDER BY similarity DESC
+        LIMIT $match_count
+    );
+    RETURN (
+        SELECT source AS id, source AS parent_id, source.title AS title,
+            math::max(similarity) AS similarity, array::group(content) AS matches,
+            array::group(chunk) AS chunks, array::group(embedding_id) AS embeddings
+        FROM $treffers
+        GROUP BY id, parent_id, title
+        ORDER BY similarity DESC
+        LIMIT $match_count
+    );
+};
+
+-- 2. Afgeleide teksten.
+DEFINE FIELD OVERWRITE is_derived ON note TYPE bool DEFAULT ALWAYS true ASSERT $value = true;
+DEFINE FIELD OVERWRITE is_derived ON source_insight TYPE bool DEFAULT ALWAYS true ASSERT $value = true;
+
+-- 3b. `source.full_text` vervalt, met de index erop.
+REMOVE INDEX IF EXISTS idx_source_full_text ON source;
+UPDATE source UNSET full_text WHERE full_text != NONE RETURN NONE;
+REMOVE FIELD IF EXISTS full_text ON source;

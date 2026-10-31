@@ -59,12 +59,18 @@ from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from shared.models.classification import ClassificationScope
+
 from surrealdb_service.connection import ensure_record_id, execute_query
 from surrealdb_service.repositories.base import _validate_record_id
 from surrealdb_service.repositories.graph import GraphRepository
 from surrealdb_service.repositories.notebook import NoteRepository
 from surrealdb_service.repositories.search import SearchRepository
 from surrealdb_service.repositories.source import SourceRepository
+
+#: Deze server heeft geen sleutel (verdwijnt in F2-02); zoeken krijgt daarom
+#: het strengste bereik met inhoud (F2-05).
+_MCP_SCOPE = ClassificationScope.EXTERN
 
 
 def create_server() -> FastMCP:
@@ -104,18 +110,16 @@ def create_server() -> FastMCP:
     async def search_similar(
         embedding: List[float],
         results: int = 10,
-        include_sources: bool = True,
-        include_notes: bool = True,
         minimum_score: float = 0.2,
     ) -> str:
-        """Vector similarity search across sources and notes.
+        """Vector similarity search across source chunks.
 
         Takes a PRECOMPUTED query embedding (this server has no embedding model);
         see the ``search`` tool for a query-string entrypoint.
         """
         repo = SearchRepository()
         hits = await repo.vector_search(
-            embedding, results, include_sources, include_notes, minimum_score
+            embedding, results, minimum_score, scope=_MCP_SCOPE
         )
         return json.dumps(hits, default=str, indent=2)
 
@@ -127,13 +131,11 @@ def create_server() -> FastMCP:
     async def search(
         query: str,
         limit: int = 10,
-        include_sources: bool = True,
-        include_notes: bool = True,
         embedding: Optional[List[float]] = None,
         text_weight: float = 0.5,
         minimum_score: float = 0.2,
     ) -> str:
-        """Search the corpus for chunks/notes matching ``query``, ranked.
+        """Search the source chunks matching ``query``, ranked.
 
         Embedding source (W.3 design decision): this surrealdb-service MCP layer
         has NO embedding model — ``search_similar`` already establishes the
@@ -152,8 +154,6 @@ def create_server() -> FastMCP:
             query: The search text (BM25 keyword side; also the text the caller
                 would have embedded for the vector side).
             limit: Max results.
-            include_sources: Search source chunks.
-            include_notes: Search notes.
             embedding: Optional precomputed query vector (1024-dim local model).
                 Present → hybrid; absent → lexical BM25 only.
             text_weight: RRF weight for the BM25 signal (0-1); vector gets the
@@ -170,8 +170,7 @@ def create_server() -> FastMCP:
                 query,
                 embedding,
                 results=limit,
-                include_sources=include_sources,
-                include_notes=include_notes,
+                scope=_MCP_SCOPE,
                 minimum_score=minimum_score,
                 text_weight=text_weight,
             )
@@ -179,8 +178,7 @@ def create_server() -> FastMCP:
             hits = await repo.text_search(
                 query,
                 results=limit,
-                include_sources=include_sources,
-                include_notes=include_notes,
+                scope=_MCP_SCOPE,
             )
         return json.dumps(hits, default=str, indent=2)
 
