@@ -150,7 +150,9 @@ class DoclingHttpClient:
             "output_path": str(self.output_dir),
             "copy_original": True,
             "extract_annotations": True,
-            "read_handwriting": True,
+            # F2-08: geen handschrift-VLM. Die stuurt pagina-afbeeldingen naar
+            # Ollama op de host, buiten ModelGate om (ADR 0006, 0015).
+            "read_handwriting": False,
         }
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
