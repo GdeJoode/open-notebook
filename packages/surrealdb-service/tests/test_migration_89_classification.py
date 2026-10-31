@@ -104,7 +104,9 @@ async def _versie_en_run(config: SurrealDBConfig, bron: str) -> tuple[RecordID, 
     from surrealdb_service.repositories.processing_run import ProcessingRunRepository
     from surrealdb_service.repositories.source_version import SourceVersionRepository
 
-    run = await ProcessingRunRepository(config).create(trigger="handmatig", pipeline_id="test")
+    run = await ProcessingRunRepository(config).create(
+        trigger="inname", pipeline_id="test", flow_vastgelegd=True
+    )
     versie, _ = await SourceVersionRepository(config).register(bron, uuid.uuid4().hex * 2, str(run.id))
     return _rec(str(versie.id)), _rec(str(run.id))
 

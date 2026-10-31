@@ -71,7 +71,9 @@ async def _bron(config: SurrealDBConfig, classification: str = "extern") -> str:
 
 
 async def _run(config: SurrealDBConfig) -> str:
-    run = await ProcessingRunRepository(config).create(trigger="handmatig", pipeline_id="test")
+    run = await ProcessingRunRepository(config).create(
+        trigger="inname", pipeline_id="test", flow_vastgelegd=True
+    )
     return str(run.id)
 
 
@@ -166,8 +168,108 @@ async def test_nieuwe_run_maakt_structuur_naast_de_oude(live_surrealdb) -> None:
     rows = await _q(live_surrealdb, "SELECT VALUE id FROM doc_node WHERE source = $b",
                     {"b": ensure_record_id(bron)})
     assert len(rows) == 2
-    # Opruimen: `90_down` zet de oude unieke index (bron, `self_ref`) terug.
-    await _q(live_surrealdb, "DELETE doc_node WHERE source = $b", {"b": ensure_record_id(bron)})
+
+
+@pytest.mark.parametrize("tabel", ["chunk", "doc_node", "source_embedding"])
+async def test_verplaatsen_naar_een_andere_bron_geweigerd(live_surrealdb, tabel) -> None:
+    bron, ander = await _bron(live_surrealdb, "intern"), await _bron(live_surrealdb, "extern")
+    run = await _run(live_surrealdb)
+    versie = await _versie(live_surrealdb, bron, run)
+    if tabel == "chunk":
+        rid = await _fragment(live_surrealdb, bron, source_version=versie, run=run)
+    elif tabel == "doc_node":
+        rid = await _doc_node(live_surrealdb, bron, source_version=versie, run=run)
+    else:
+        [rij] = await _q(live_surrealdb, "CREATE source_embedding CONTENT $d RETURN id", {"d": {
+            "source": ensure_record_id(bron), "content": "x", "order": 0, "embedding": []}})
+        rid = str(rij["id"])
+    with pytest.raises(RuntimeError, match="readonly"):
+        await _q(live_surrealdb, "UPDATE type::thing($id) SET source = $b",
+                 {"id": rid, "b": ensure_record_id(ander)})
+    assert str((await _lees(live_surrealdb, rid))["source"]) == bron
+
+
+async def test_intern_fragment_blijft_intern_bij_herclassificatie_van_een_andere_bron(
+    live_surrealdb,
+) -> None:
+    from surrealdb_service.repositories.source import SourceRepository
+
+    bron, ander = await _bron(live_surrealdb, "intern"), await _bron(live_surrealdb, "intern")
+    run = await _run(live_surrealdb)
+    frag = await _fragment(live_surrealdb, bron,
+                           source_version=await _versie(live_surrealdb, bron, run), run=run)
+    with pytest.raises(RuntimeError):
+        await _q(live_surrealdb, "UPDATE type::thing($id) SET source = $b",
+                 {"id": frag, "b": ensure_record_id(ander)})
+    await SourceRepository(live_surrealdb).reclassify(
+        ander, from_classification="intern", to_classification="extern",
+        reason="Openbaar gepubliceerd", agent_key="agent_keys:test", person="Testpersoon",
+    )
+    assert (await _lees(live_surrealdb, ander))["classification"] == "extern"
+    assert (await _lees(live_surrealdb, frag))["classification"] == "intern"
+
+
+async def test_afgesloten_run_mag_geen_fragment_of_structuur_maken(live_surrealdb) -> None:
+    bron = await _bron(live_surrealdb, "extern")
+    run = await _run(live_surrealdb)
+    versie = await _versie(live_surrealdb, bron, run)
+    await ProcessingRunRepository(live_surrealdb).close(run, status="geslaagd")
+    with pytest.raises(RuntimeError, match="run"):
+        await _fragment(live_surrealdb, bron, source_version=versie, run=run)
+    with pytest.raises(RuntimeError, match="run"):
+        await _doc_node(live_surrealdb, bron, source_version=versie, run=run)
+
+
+@pytest.mark.parametrize("classification, toegestaan", [("intern", False), ("extern", True)])
+async def test_run_met_flow_buiten_git(live_surrealdb, classification, toegestaan) -> None:
+    bron = await _bron(live_surrealdb, classification)
+    run = str((await ProcessingRunRepository(live_surrealdb).create(
+        trigger="schema", pipeline_id="test")).id)
+    assert (await _lees(live_surrealdb, run))["flow_vastgelegd"] is False
+    versie = await _versie(live_surrealdb, bron, run)
+    for maak in (_fragment, _doc_node):
+        if toegestaan:
+            await maak(live_surrealdb, bron, source_version=versie, run=run)
+        else:
+            with pytest.raises(RuntimeError, match="run"):
+                await maak(live_surrealdb, bron, source_version=versie, run=run)
+
+
+async def test_huidige_run_van_een_bron(live_surrealdb) -> None:
+    from surrealdb_service.repositories.source import SourceRepository
+
+    bron = await _bron(live_surrealdb)
+    repo = SourceRepository(live_surrealdb)
+    assert await repo.get_current_run(bron) is None
+    run = await _run(live_surrealdb)
+    await _versie(live_surrealdb, bron, run)
+    assert await repo.get_current_run(bron) == run
+
+
+async def test_herverwerking_laat_de_fragmenten_van_de_oude_run_staan(live_surrealdb) -> None:
+    from surrealdb_service.repositories.source import ChunkRepository
+
+    bron = await _bron(live_surrealdb, "extern")
+    eerste = await _run(live_surrealdb)
+    versie = await _versie(live_surrealdb, bron, eerste)
+
+    def _set(run: str, n: int) -> list[dict]:
+        return [{"source": bron, "source_version": versie, "run": run, "text": f"t{i}",
+                 "order": i, "physical_page": 0, "element_type": "paragraph",
+                 "positions": [], "metadata": {}} for i in range(n)]
+
+    await ChunkRepository(live_surrealdb).bulk_create(_set(eerste, 3))
+    await ProcessingRunRepository(live_surrealdb).close(eerste, status="geslaagd")
+    tweede = await _run(live_surrealdb)
+    await ChunkRepository(live_surrealdb).bulk_create(_set(tweede, 5))
+    await SourceVersionRepository(live_surrealdb).set_current_run(versie, tweede)
+
+    async def _aantal(run: str) -> int:
+        return len(await _q(live_surrealdb, "SELECT VALUE id FROM chunk WHERE run = $r",
+                            {"r": ensure_record_id(run)}))
+
+    assert (await _aantal(eerste), await _aantal(tweede)) == (3, 5)
+    assert str((await _lees(live_surrealdb, versie))["current_run"]) == tweede
 
 
 # --------------------------------------------------------------------------
@@ -367,6 +469,13 @@ async def test_vermelding_met_fragment_van_een_andere_bron_geweigerd(live_surrea
         await _entiteit(live_surrealdb, [bron], {bron: {"chunk_id": "chunk:bestaatniet"}})
 
 
+async def test_vermelding_die_geen_object_is_geweigerd(live_surrealdb) -> None:
+    bron, _ = await _bron_met_fragment(live_surrealdb, "extern")
+    for waarde in ("tekst", 5, ["chunk:x"]):
+        with pytest.raises(RuntimeError, match="grounding"):
+            await _entiteit(live_surrealdb, [bron], {bron: waarde})
+
+
 async def test_vermelding_van_een_bron_buiten_source_documents_geweigerd(live_surrealdb) -> None:
     bron, _ = await _bron_met_fragment(live_surrealdb, "extern")
     ander, frag = await _bron_met_fragment(live_surrealdb, "intern")
@@ -420,6 +529,12 @@ async def test_down_draait_terug(live_surrealdb) -> None:
     bron = await _bron(live_surrealdb)
     run = await _run(live_surrealdb)
     versie = await _versie(live_surrealdb, bron, run)
+    # Herverwerking: twee runs met dezelfde structuur. Terugdraaien lukt toch.
+    for r in (run, await _run(live_surrealdb)):
+        await _q(live_surrealdb, "CREATE doc_node CONTENT $d", {"d": {
+            "source": ensure_record_id(bron), "element_type": "paragraph",
+            "self_ref": "#/texts/0", "sequence": 0,
+            "source_version": ensure_record_id(versie), "run": ensure_record_id(r)}})
     try:
         # Zoals de migratieloader: zonder de herclassificatievlag.
         await execute_transaction(_migratie(90, down=True), config=live_surrealdb)
@@ -452,6 +567,10 @@ async def test_down_draait_terug(live_surrealdb) -> None:
         dn = await _q(live_surrealdb, "INFO FOR TABLE doc_node")
         dn = dn[0] if isinstance(dn, list) else dn
         assert "dn_ref" in dn["indexes"] and "dn_run_ref" not in dn["indexes"]
+        assert "UNIQUE" not in dn["indexes"]["dn_ref"]
+        for tabel in ("chunk", "doc_node", "source_embedding"):
+            info = await _q(live_surrealdb, f"INFO FOR TABLE {tabel}")
+            assert "READONLY" not in (info[0] if isinstance(info, list) else info)["fields"]["source"]
         # Zonder 90 kan een fragment weer zonder herkomst; een bestaand
         # fragment houdt bij een schrijfactie zijn herkomst.
         b = await _bron(live_surrealdb)

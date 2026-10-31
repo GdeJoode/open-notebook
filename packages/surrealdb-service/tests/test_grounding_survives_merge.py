@@ -48,7 +48,9 @@ async def _bron_met_fragment(config: SurrealDBConfig) -> tuple[str, str]:
     [bron] = await execute_query("CREATE source SET title = 'Openbare testbron' RETURN id",
                                  config=config)
     bron = str(bron["id"])
-    run = await ProcessingRunRepository(config).create(trigger="handmatig", pipeline_id="test")
+    run = await ProcessingRunRepository(config).create(
+        trigger="inname", pipeline_id="test", flow_vastgelegd=True
+    )
     versie, _ = await SourceVersionRepository(config).register(
         bron, hashlib.sha256(bron.encode()).hexdigest(), str(run.id)
     )

@@ -59,7 +59,9 @@ async def _bron() -> str:
 
 
 async def _run() -> str:
-    return str((await ProcessingRunRepository().create(trigger="schema", pipeline_id="test")).id)
+    return str((await ProcessingRunRepository().create(
+        trigger="schema", pipeline_id="test", flow_vastgelegd=True
+    )).id)
 
 
 async def _versie_met_kinderen(bron: str) -> list[str]:

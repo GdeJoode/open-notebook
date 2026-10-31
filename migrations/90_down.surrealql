@@ -6,9 +6,9 @@
 -- event `strengste_classificatie` op `source` houdt de vorm van migratie 90
 -- (ook versies en `mentions` worden intern): de tabellen blijven bestaan, en de
 -- migratieloader voert een `_down` uit zonder de herclassificatievlag die het
--- event noemt. De oude unieke index op `doc_node` (bron en
--- `self_ref`) komt terug; die faalt als een bron meer dan één run met
--- structuur heeft, en dan draait de hele migratie niet terug.
+-- event noemt. De index `dn_ref` op `doc_node` (bron en `self_ref`) komt
+-- terug zonder UNIQUE: na een herverwerking heeft een bron meer dan één run met
+-- structuur, en terugdraaien moet dan ook lukken.
 -- `processing_run` en `source_version` blijven staan met hun records, en de
 -- herkomstvelden op fragmenten, `doc_node`, embeddings, jobs en bronnen
 -- blijven als optioneel veld bestaan: een terugdraaiactie wist geen herkomst
@@ -32,6 +32,11 @@ REMOVE FUNCTION IF EXISTS fn::vermeldingen_kloppen;
 REMOVE FUNCTION IF EXISTS fn::fragment_hoort_bij_bron;
 REMOVE FUNCTION IF EXISTS fn::vermelding_waarde;
 
+-- `source` weer wijzigbaar, zoals in migratie 1, 10 en 49.
+DEFINE FIELD OVERWRITE source ON chunk TYPE record<source>;
+DEFINE FIELD OVERWRITE source ON doc_node TYPE record<source>;
+DEFINE FIELD OVERWRITE source ON source_embedding TYPE record<source>;
+
 -- De herkomst blijft: de velden worden optioneel en zonder ASSERT, zodat code
 -- van voor migratie 90 weer fragmenten zonder herkomst kan schrijven, en een
 -- schrijfactie op een SCHEMAFULL-tabel de bestaande waarden niet weglaat.
@@ -41,7 +46,7 @@ DEFINE FIELD OVERWRITE embedding_model ON source_embedding TYPE option<string>;
 
 REMOVE INDEX IF EXISTS idx_doc_node_run ON doc_node;
 REMOVE INDEX IF EXISTS dn_run_ref ON doc_node;
-DEFINE INDEX OVERWRITE dn_ref ON doc_node FIELDS source, self_ref UNIQUE;
+DEFINE INDEX OVERWRITE dn_ref ON doc_node FIELDS source, self_ref;
 DEFINE FIELD OVERWRITE run ON doc_node TYPE option<record<processing_run>>;
 DEFINE FIELD OVERWRITE source_version ON doc_node TYPE option<record<source_version>>;
 
@@ -50,6 +55,7 @@ REMOVE INDEX IF EXISTS idx_chunk_run ON chunk;
 DEFINE FIELD OVERWRITE extractor ON chunk TYPE option<string>;
 DEFINE FIELD OVERWRITE run ON chunk TYPE option<record<processing_run>>;
 DEFINE FIELD OVERWRITE source_version ON chunk TYPE option<record<source_version>>;
+REMOVE FUNCTION IF EXISTS fn::run_mag_schrijven;
 
 DEFINE FIELD OVERWRITE current_version ON source TYPE option<record<source_version>>;
 

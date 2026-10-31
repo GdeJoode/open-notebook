@@ -79,6 +79,16 @@ class SourceRepository(BaseRepository[Source]):
         row = rows[0] if isinstance(rows, list) and rows else rows
         return row.get("classification") if isinstance(row, dict) else None
 
+    async def get_current_run(self, source_id: str) -> Optional[str]:
+        """De huidige run van de huidige bronversie, of ``None`` (F2-04)."""
+        rows = await execute_query(
+            "SELECT VALUE current_version.current_run FROM $bron",
+            {"bron": ensure_record_id(source_id)},
+            self.config,
+        )
+        waarde = rows[0] if rows else None
+        return str(waarde) if waarde else None
+
     async def reclassify(
         self,
         source_id: str,

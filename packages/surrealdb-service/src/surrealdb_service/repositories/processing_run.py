@@ -41,6 +41,7 @@ class ProcessingRunRepository:
         source_map_rule_id: Optional[str] = None,
         source_map_rule_rev: Optional[int] = None,
         label_schema: Optional[Dict[str, Any]] = None,
+        flow_vastgelegd: bool = False,
         status: str = "bezig",
         error: Optional[str] = None,
         log: Optional[List[Dict[str, Any]]] = None,
@@ -53,6 +54,7 @@ class ProcessingRunRepository:
             "source_map_rule_id": source_map_rule_id,
             "source_map_rule_rev": source_map_rule_rev,
             "label_schema": label_schema,
+            "flow_vastgelegd": flow_vastgelegd,
             "status": status,
             "error": error,
             "log": log or [],
@@ -80,14 +82,14 @@ class ProcessingRunRepository:
             return
         await execute_query(
             "UPDATE $id SET log = array::concat(log, $regels) RETURN NONE",
-            {"id": ensure_record_id(run_id), "regels": entries},
+            {"id": _run_id_of_fout(run_id), "regels": entries},
             self.config,
         )
 
     async def set_models(self, run_id: str, models: List[Dict[str, Any]]) -> None:
         await execute_query(
             "UPDATE $id SET models = $models RETURN NONE",
-            {"id": ensure_record_id(run_id), "models": models},
+            {"id": _run_id_of_fout(run_id), "models": models},
             self.config,
         )
 
@@ -102,7 +104,7 @@ class ProcessingRunRepository:
     ) -> Optional[ProcessingRun]:
         """Sluit een run die nog ``bezig`` is; ``None`` als die al was afgesloten."""
         params: Dict[str, Any] = {
-            "id": ensure_record_id(run_id),
+            "id": _run_id_of_fout(run_id),
             "status": status,
             "einde": ended_at or _nu(),
             "regels": log or [],
@@ -127,7 +129,7 @@ class ProcessingRunRepository:
             "RETURN array::len((SELECT VALUE id FROM source_version WHERE created_by_run = $id LIMIT 1))"
             " + array::len((SELECT VALUE id FROM chunk WHERE run = $id LIMIT 1))"
             " + array::len((SELECT VALUE id FROM doc_node WHERE run = $id LIMIT 1))",
-            {"id": ensure_record_id(run_id)},
+            {"id": _run_id_of_fout(run_id)},
             self.config,
         )
         waarde = rows[0] if isinstance(rows, list) and rows else rows
@@ -141,10 +143,18 @@ class ProcessingRunRepository:
         rows = await execute_query(
             "SELECT model, model_version, invocation FROM model_call WHERE run = $id "
             "GROUP BY model, model_version, invocation",
-            {"id": ensure_record_id(run_id)},
+            {"id": _run_id_of_fout(run_id)},
             self.config,
         )
         return [r for r in rows or [] if isinstance(r, dict)]
+
+
+def _run_id_of_fout(run_id: str):
+    """Als :func:`_run_id`, maar een ongeldig id is een ``ValueError``."""
+    rid = _run_id(run_id)
+    if rid is None:
+        raise ValueError(f"Geen id van een verwerkingsrun: {run_id!r}")
+    return rid
 
 
 def _run_id(run_id: str):

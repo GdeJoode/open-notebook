@@ -685,6 +685,7 @@ class RunResponse(BaseModel):
     pipeline_id: str
     pipeline_version: Optional[PipelineVersionModel] = None
     input_classification: str
+    flow_vastgelegd: bool = False
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     models: List[Dict[str, Any]] = Field(default_factory=list)

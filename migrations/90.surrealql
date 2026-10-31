@@ -43,12 +43,14 @@ DEFINE FIELD OVERWRITE status ON processing_run TYPE string DEFAULT 'bezig'
     ASSERT $value IN ['bezig', 'geslaagd', 'mislukt', 'niets_nieuws']
         AND ($before = NONE OR $before = 'bezig' OR $value = $before);
 DEFINE FIELD OVERWRITE trigger ON processing_run TYPE string READONLY
-    ASSERT $value IN ['schema', 'mapcontrole', 'feed', 'handmatig', 'herverwerking'];
+    ASSERT $value IN ['schema', 'mapcontrole', 'feed', 'inname', 'handmatig', 'herverwerking'];
 DEFINE FIELD OVERWRITE pipeline_id ON processing_run TYPE string READONLY
     ASSERT string::len(string::trim($value)) > 0;
 DEFINE FIELD OVERWRITE pipeline_version ON processing_run TYPE option<object> READONLY;
 DEFINE FIELD OVERWRITE pipeline_version.git_commit ON processing_run TYPE option<string> READONLY;
 DEFINE FIELD OVERWRITE pipeline_version.flow_hash ON processing_run TYPE option<string> READONLY;
+-- Staat de flow in Git (ADR 0022 E)? De fork zet dit bij het aanmaken.
+DEFINE FIELD OVERWRITE flow_vastgelegd ON processing_run TYPE bool DEFAULT false READONLY;
 DEFINE FIELD OVERWRITE input_classification ON processing_run TYPE string DEFAULT 'onbekend' READONLY
     ASSERT $value IN ['intern', 'extern', 'onbekend'];
 DEFINE FIELD OVERWRITE label_schema ON processing_run FLEXIBLE TYPE option<object> READONLY;
@@ -96,11 +98,26 @@ DEFINE EVENT OVERWRITE strengste_versie ON source_version
 DEFINE FIELD OVERWRITE current_version ON source TYPE option<record<source_version>>
     ASSERT $value = NONE OR $value.source = $this.id;
 
+-- 3. Fragmenten, embeddings en documentstructuur verhuizen niet naar een
+-- andere bron: anders zou een intern fragment via de herclassificatie van een
+-- andere bron extern kunnen worden.
+DEFINE FIELD OVERWRITE source ON chunk TYPE record<source> READONLY;
+DEFINE FIELD OVERWRITE source ON doc_node TYPE record<source> READONLY;
+DEFINE FIELD OVERWRITE source ON source_embedding TYPE record<source> READONLY;
+
+-- 3. Een fragment of `doc_node` wordt alleen gemaakt in een lopende run, en bij
+-- een interne of onbekende bron alleen door een run met een flow uit Git (ADR
+-- 0022 E). De controle geldt bij het aanmaken; daarna is `run` onveranderlijk.
+DEFINE FUNCTION OVERWRITE fn::run_mag_schrijven($run: any, $bron: any) {
+    RETURN record::exists($run) AND $run.status = 'bezig'
+        AND ($run.flow_vastgelegd = true OR fn::classificatie_van($bron) = 'extern');
+};
+
 -- 3. Fragmenten en documentstructuur horen bij één bronversie en één run.
 DEFINE FIELD OVERWRITE source_version ON chunk TYPE record<source_version> READONLY
     ASSERT $value.source = $this.source;
 DEFINE FIELD OVERWRITE run ON chunk TYPE record<processing_run> READONLY
-    ASSERT record::exists($value);
+    ASSERT record::exists($value) AND ($before != NONE OR fn::run_mag_schrijven($value, $this.source));
 DEFINE FIELD OVERWRITE extractor ON chunk TYPE option<string> READONLY;
 DEFINE INDEX OVERWRITE idx_chunk_run ON chunk FIELDS run;
 DEFINE INDEX OVERWRITE idx_chunk_source_version ON chunk FIELDS source_version;
@@ -108,7 +125,7 @@ DEFINE INDEX OVERWRITE idx_chunk_source_version ON chunk FIELDS source_version;
 DEFINE FIELD OVERWRITE source_version ON doc_node TYPE record<source_version> READONLY
     ASSERT $value.source = $this.source;
 DEFINE FIELD OVERWRITE run ON doc_node TYPE record<processing_run> READONLY
-    ASSERT record::exists($value);
+    ASSERT record::exists($value) AND ($before != NONE OR fn::run_mag_schrijven($value, $this.source));
 REMOVE INDEX IF EXISTS dn_ref ON doc_node;
 DEFINE INDEX OVERWRITE dn_run_ref ON doc_node FIELDS source, run, self_ref UNIQUE;
 DEFINE INDEX OVERWRITE idx_doc_node_run ON doc_node FIELDS run;
@@ -143,15 +160,15 @@ DEFINE FUNCTION OVERWRITE fn::fragment_hoort_bij_bron($bron: any, $fragment: any
     RETURN $van != NONE AND <string> $van = <string> $bron;
 };
 
--- Elke vermelding hoort bij een bron uit `source_documents`, en een nieuw of
+-- Elke vermelding is een object en hoort bij een bron uit `source_documents`, en een nieuw of
 -- gewijzigd fragment hoort bij die bron. Een closure ziet geen variabelen van
 -- buiten; daarom een FOR-lus.
 DEFINE FUNCTION OVERWRITE fn::vermeldingen_kloppen($nieuw: any, $oud: any, $bronnen: any) {
     IF !type::is::object($nieuw) { RETURN true };
     LET $lijst = IF type::is::array($bronnen) { $bronnen.map(|$b| <string> $b) } ELSE { [] };
     FOR $e IN object::entries($nieuw) {
-        IF $e[0] NOTINSIDE $lijst { RETURN false };
-        LET $fragment = IF type::is::object($e[1]) { $e[1].chunk_id } ELSE { NONE };
+        IF $e[0] NOTINSIDE $lijst OR !type::is::object($e[1]) { RETURN false };
+        LET $fragment = $e[1].chunk_id;
         LET $vorig = IF type::is::object($oud) AND type::is::object($oud[$e[0]]) { $oud[$e[0]].chunk_id } ELSE { NONE };
         IF $fragment != NONE AND $fragment != $vorig AND !fn::fragment_hoort_bij_bron($e[0], $fragment) {
             RETURN false

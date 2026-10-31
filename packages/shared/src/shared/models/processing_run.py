@@ -15,7 +15,9 @@ from pydantic import BaseModel, Field
 from shared.models.base import ObjectModel
 
 RunStatus = Literal["bezig", "geslaagd", "mislukt", "niets_nieuws"]
-RunTrigger = Literal["schema", "mapcontrole", "feed", "handmatig", "herverwerking"]
+#: ``inname``: de eerste verwerking door de fork zelf; ``handmatig`` alleen voor
+#: correcties door de beheerder (ADR 0005).
+RunTrigger = Literal["schema", "mapcontrole", "feed", "inname", "handmatig", "herverwerking"]
 #: De classificatie van de invoer van een run; 'onbekend' telt als intern.
 InputClassification = Literal["intern", "extern", "onbekend"]
 
@@ -51,6 +53,7 @@ class ProcessingRun(ObjectModel):
     pipeline_id: str
     pipeline_version: Optional[PipelineVersion] = None
     input_classification: InputClassification = "onbekend"
+    flow_vastgelegd: bool = False
     label_schema: Optional[Dict[str, Any]] = None
     models: List[Dict[str, Any]] = Field(default_factory=list)
     log: List[Dict[str, Any]] = Field(default_factory=list)
