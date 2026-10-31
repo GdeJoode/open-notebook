@@ -63,8 +63,9 @@ from loguru import logger
 from shared.utils.text import strip_null_bytes
 from surrealdb_service.connection import ClassificationConflictError, ensure_record_id
 from surrealdb_service.repositories.base import is_schrijfconflict
+from surrealdb_service.repositories.intake import IntakeBatchRepository
 from surrealdb_service.repositories.processing_run import ProcessingRunRepository
-from surrealdb_service.repositories.source import SourceRepository
+from surrealdb_service.repositories.source import INHOUD_INTERN_BEKEND, SourceRepository
 from surrealdb_service.repositories.source_version import (
     GELIJKTIJDIG,
     SourceVersionRepository,
@@ -310,6 +311,9 @@ def lees_origineel(fd: int, archief: Path) -> Origineel:
                     venster = staarten[i] + dec.decode(blok)
                     gevonden = gevonden or bevat_markering(venster)
                     staarten[i] = venster[-_OVERLAP:]
+            # De kopie staat op schijf voordat ``bewaar`` haar koppelt.
+            kopie.flush()
+            os.fsync(kopie.fileno())
     except BaseException:
         Path(naam).unlink(missing_ok=True)
         raise
@@ -343,6 +347,7 @@ class ImportService:
         fork_archief: Optional[str] = None,
     ) -> None:
         self.source_repo = source_repo or SourceRepository()
+        self.batch_repo = IntakeBatchRepository()
         self.version_repo = version_repo or SourceVersionRepository()
         self.run_repo = run_repo or ProcessingRunRepository()
         self.run_service = run_service or ProcessingRunService(run_repo=self.run_repo)
@@ -404,11 +409,11 @@ class ImportService:
     async def importeer(self, verzoek: ImportRequest, *, key_id: str) -> ImportResultaat:
         """Importeer; per bron één tegelijk.
 
-        Binnen het proces van de fork gaan imports voor hetzelfde externe id na
-        elkaar (:func:`_slot`). De teller op de bron (migratie 96) serialiseert
-        daarnaast in de database; onder SurrealDB v2.7.0 ging daar bij veel
-        gelijktijdige transacties af en toe een ophoging verloren, vandaar ook
-        het slot.
+        De database serialiseert: de teller op de bron (migratie 96) en het
+        record ``inhoud`` (migratie 97) maken van gelijktijdige imports een
+        schrijfconflict, en :meth:`_met_pogingen` probeert opnieuw. Binnen het
+        proces gaan imports voor hetzelfde externe id daarnaast na elkaar
+        (:func:`_slot`); dat is extra bescherming, niet nodig voor de juistheid.
         """
         async with _slot(verzoek.source.external_id):
             return await self._met_pogingen(verzoek, key_id=key_id)
@@ -495,12 +500,8 @@ class ImportService:
             and verzoek.classification.value == "extern"
             and poort is not None and poort.decision == "extern" and not poort.internal_markers
         ) else "intern"
-        if klasse == "extern" and invoer.batch is not None and not any(
-            self._zelfde_pad(f.get("path", ""), locatie)
-            and f.get("content_hash") == f"sha256:{hexhash}"
-            for f in invoer.batch.file_hashes
-        ):
-            raise BindingError("origineel is niet het bestand van de batch")
+        if invoer.batch is not None:
+            await self._batchhash(invoer.batch, locatie, hexhash, klasse)
 
         bron = await self.source_repo.find_by_external_id(verzoek.source.external_id)
         regel_id = str(invoer.regel.id) if invoer.regel is not None else None
@@ -537,6 +538,30 @@ class ImportService:
             raise ImportWeigering(409, "archief_onjuist",
                                   "Archief van de fork klopt niet") from None
         return await self._nieuw(verzoek, run_id, bron, regel_id, origineel, klasse)
+
+    async def _batchhash(self, batch, locatie: str, hexhash: str, klasse: str) -> None:
+        """Het origineel moet het bestand van de batch zijn (F2-14).
+
+        Extern: alleen met de hash die de fork bij de batch vastlegde. Intern:
+        ontbreekt die hash (het bestand was onleesbaar), dan hasht de fork het
+        bestand nu opnieuw; past ook dat niet, dan volgt een ``beheer_melding``
+        en gaat de (interne) import door.
+        """
+        verwacht = f"sha256:{hexhash}"
+        vastgelegd = [f.get("content_hash") for f in batch.file_hashes
+                      if self._zelfde_pad(f.get("path", ""), locatie)]
+        if klasse == "extern":
+            if verwacht not in vastgelegd:
+                raise BindingError("origineel is niet het bestand van de batch")
+            return
+        if verwacht in vastgelegd:
+            return
+        try:
+            opnieuw = "sha256:" + await asyncio.to_thread(_sha256_bestand, Path(locatie))
+        except OSError:
+            opnieuw = None
+        if opnieuw != verwacht:
+            await self.batch_repo.meld_ontbrekende_hash(str(batch.id))
 
     async def _bekend(self, verzoek, run_id, bron, versie, klasse) -> ImportResultaat:
         bron_id, versie_id = str(bron.id), str(versie.id)
@@ -668,10 +693,17 @@ class ImportService:
                              for e in graaf.derived_from],
         }
 
-        await self.source_repo.schrijf_import(
-            bron=bron_rid, bron_data=bron_data, versie=versie_rid,
-            versie_data=versie_data, fragmenten=fragmenten, knopen=knopen, relaties=relaties,
-        )
+        try:
+            await self.source_repo.schrijf_import(
+                bron=bron_rid, bron_data=bron_data, versie=versie_rid,
+                versie_data=versie_data, fragmenten=fragmenten, knopen=knopen,
+                relaties=relaties, extern=klasse == "extern",
+            )
+        except RuntimeError as e:
+            if INHOUD_INTERN_BEKEND in str(e):
+                raise ImportWeigering(409, "inhoud_intern_bekend",
+                                      "Dezelfde inhoud is al intern bekend") from None
+            raise
         bron_id, versie_id = str(bron_rid), str(versie_rid)
         versie = await self.version_repo.get(versie_id)
         return ImportResultaat(

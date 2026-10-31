@@ -41,6 +41,7 @@ from app_main.dependencies import (
     get_intake_service,
     get_processing_run_service,
 )
+from app_main.services import import_service
 from app_main.services.agents.audit_service import AgentAuditService
 from app_main.services.import_service import ImportService
 from app_main.services.intake_service import IntakeService
@@ -81,6 +82,19 @@ class Omgeving:
 
 @pytest.fixture
 async def env(live_surrealdb, monkeypatch, app, git_flows, tmp_path):
+    async for omgeving in _omgeving(live_surrealdb, monkeypatch, app, git_flows, tmp_path):
+        yield omgeving
+
+
+@pytest.fixture
+async def env_rocksdb(live_surrealdb_rocksdb, monkeypatch, app, git_flows, tmp_path):
+    """Als ``env``, op de opslag van productie (rocksdb), voor gelijktijdigheid."""
+    async for omgeving in _omgeving(live_surrealdb_rocksdb, monkeypatch, app, git_flows,
+                                    tmp_path):
+        yield omgeving
+
+
+async def _omgeving(live_surrealdb, monkeypatch, app, git_flows, tmp_path):
     monkeypatch.setattr(surreal_config, "_config", live_surrealdb)
     monkeypatch.setattr(AgentAuditService, "record", AsyncMock())
     archief = tmp_path / "bronarchief"
@@ -870,7 +884,7 @@ async def test_herhaling_met_andere_structuur_of_classificatie(env, app) -> None
     assert resp.status_code == 200 and resp.json()["classification"] == "intern"
 
 
-async def test_gelijktijdige_nieuwe_versies(env, app) -> None:
+async def _gelijktijdige_versies(env, app, n: int = 12) -> None:
     regel = await _regel()
     extern_id = f"stuk-{uuid.uuid4().hex}"
     o0, h0 = env.origineel(b"%PDF-1.7 v0 " + uuid.uuid4().hex.encode())
@@ -879,7 +893,7 @@ async def test_gelijktijdige_nieuwe_versies(env, app) -> None:
         resp = await client.post("/api/v1/import", json=_verzoek(
             run, original=o0, content_hash=h0, regel=regel, external_id=extern_id))
         assert resp.status_code == 201
-        versies = [env.origineel(b"%PDF-1.7 v " + uuid.uuid4().hex.encode()) for _ in range(12)]
+        versies = [env.origineel(b"%PDF-1.7 v " + uuid.uuid4().hex.encode()) for _ in range(n)]
         antwoorden = await asyncio.gather(*[client.post("/api/v1/import", json=_verzoek(
             run, original=o, content_hash=h, regel=regel, external_id=extern_id))
             for o, h in versies])
@@ -900,6 +914,18 @@ async def test_gelijktijdige_nieuwe_versies(env, app) -> None:
             [n] = await _q(f"SELECT count() AS n FROM {tabel} WHERE source_version = $v GROUP ALL",
                            {"v": conn.ensure_record_id(str(versie["id"]))})
             assert n["n"] >= 2
+
+
+async def test_gelijktijdige_nieuwe_versies(env, app) -> None:
+    await _gelijktijdige_versies(env, app)
+
+
+async def test_gelijktijdige_nieuwe_versies_rocksdb_zonder_slot(env_rocksdb, app,
+                                                                 monkeypatch) -> None:
+    """Op rocksdb en zonder het slot in het proces: de database serialiseert."""
+    monkeypatch.setattr(import_service, "_slot", lambda _e: asyncio.Lock())
+    for _ in range(3):
+        await _gelijktijdige_versies(env_rocksdb, app, 16)
 
 
 # --------------------------------------------------------------------------
@@ -1095,3 +1121,157 @@ async def test_item_verwerkt_alleen_met_een_run_van_dezelfde_sleutel(env, app) -
         resp = await client.patch(f"/api/v1/intake/items/{item}",
                                   json={"status": "verwerkt", "rev": rev, "run_id": run})
     assert resp.status_code == 409 and resp.json()["detail"]["code"] == "niet_gebonden"
+
+
+# --------------------------------------------------------------------------
+# Derde review F2-14
+# --------------------------------------------------------------------------
+
+
+async def _race_extern_tegen_intern(env, app, monkeypatch) -> None:
+    """De externe import heeft de controle buiten de transactie al gehaald als de
+    interne import van dezelfde inhoud slaagt; daarna mag ze niet extern
+    schrijven (de controle in de transactie)."""
+    from surrealdb_service.repositories.source import SourceRepository
+
+    monkeypatch.setattr(import_service, "_slot", lambda _e: asyncio.Lock())
+    extern = await _regel()
+    intern = await _regel(bevestigd=False)
+    original, h = env.origineel(b"%PDF-1.7 race " + uuid.uuid4().hex.encode())
+    origineel = SourceRepository.inhoud_intern_bekend
+    gecontroleerd, doorgaan = asyncio.Event(), asyncio.Event()
+
+    async def traag(self, hexhash):
+        uit = await origineel(self, hexhash)
+        if not gecontroleerd.is_set():
+            gecontroleerd.set()
+            await doorgaan.wait()
+        return uit
+
+    monkeypatch.setattr(SourceRepository, "inhoud_intern_bekend", traag)
+    async with _client(app) as client:
+        run_e = await _start(client, env, regel=extern)
+        run_i = await _start(client, env, regel=intern)
+        taak = asyncio.create_task(client.post("/api/v1/import", json=_verzoek(
+            run_e, original=original, content_hash=h, regel=extern)))
+        await gecontroleerd.wait()
+        intern_resp = await client.post("/api/v1/import", json=_verzoek(
+            run_i, original=original, content_hash=h, regel=intern))
+        doorgaan.set()
+        extern_resp = await taak
+    assert intern_resp.status_code == 201 and intern_resp.json()["classification"] == "intern"
+    assert extern_resp.status_code == 409, extern_resp.text
+    assert extern_resp.json()["detail"]["code"] == "inhoud_intern_bekend"
+
+
+async def test_race_extern_tegen_intern(env, app, monkeypatch) -> None:
+    await _race_extern_tegen_intern(env, app, monkeypatch)
+
+
+async def test_race_extern_tegen_intern_rocksdb(env_rocksdb, app, monkeypatch) -> None:
+    await _race_extern_tegen_intern(env_rocksdb, app, monkeypatch)
+
+
+async def test_gelijktijdig_extern_en_intern_rocksdb(env_rocksdb, app, monkeypatch) -> None:
+    """Echt gelijktijdig: nooit een externe bron naast een interne met dezelfde inhoud."""
+    monkeypatch.setattr(import_service, "_slot", lambda _e: asyncio.Lock())
+    extern = await _regel()
+    intern = await _regel(bevestigd=False)
+    async with _client(app) as client:
+        for _ in range(5):
+            original, h = env_rocksdb.origineel(b"%PDF-1.7 tegelijk " + uuid.uuid4().hex.encode())
+            runs = [(await _start(client, env_rocksdb, regel=r), r)
+                    for r in (extern, intern, extern, intern)]
+            antwoorden = await asyncio.gather(*[client.post("/api/v1/import", json=_verzoek(
+                run, original=original, content_hash=h, regel=r)) for run, r in runs])
+            assert {a.status_code for a in antwoorden} <= {201, 409}
+            klassen = await _q("SELECT VALUE classification FROM source WHERE"
+                               " current_version.content_hash = $h", {"h": h.removeprefix("sha256:")})
+            assert set(klassen) == {"intern"}, klassen
+
+
+async def test_interne_import_maakt_ook_oudere_versie_intern(env, app) -> None:
+    extern = await _regel()
+    intern = await _regel(bevestigd=False)
+    woord = f"Oudeversiewoord{uuid.uuid4().hex[:8]}"
+    o1, h1 = env.origineel(b"%PDF-1.7 oud " + uuid.uuid4().hex.encode())
+    o2, h2 = env.origineel(b"%PDF-1.7 nieuw " + uuid.uuid4().hex.encode())
+    extern_id = f"stuk-{uuid.uuid4().hex}"
+    async with _client(app) as client:
+        run = await _start(client, env, regel=extern)
+        v1 = await client.post("/api/v1/import", json=_verzoek(
+            run, original=o1, content_hash=h1, regel=extern, external_id=extern_id,
+            teksten=[f"{woord} eerste.", "twee"]))
+        v2 = await client.post("/api/v1/import", json=_verzoek(
+            run, original=o2, content_hash=h2, regel=extern, external_id=extern_id))
+        assert v1.status_code == 201 and v2.status_code == 201
+        assert await _q("RETURN fn::text_search($w, 10, ['extern'], true)", {"w": woord})
+        run2 = await _start(client, env, regel=intern)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run2, original=o1, content_hash=h1, regel=intern))
+    assert resp.status_code == 201 and resp.json()["classification"] == "intern"
+    oud = await _q("SELECT VALUE classification FROM chunk WHERE source_version = type::thing($v)",
+                   {"v": v1.json()["source_version_id"]})
+    assert set(oud) == {"intern"}
+    assert await _q("RETURN fn::text_search($w, 10, ['extern'], true)", {"w": woord}) == []
+    assert len(await _meldingen(v1.json()["source_id"])) == 1
+
+
+async def test_een_melding_per_geraakte_bron(env, app) -> None:
+    extern = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 twee bronnen " + uuid.uuid4().hex.encode())
+    bronnen = []
+    async with _client(app) as client:
+        for _ in range(2):
+            run = await _start(client, env, regel=extern)
+            resp = await client.post("/api/v1/import", json=_verzoek(
+                run, original=original, content_hash=h, regel=extern))
+            assert resp.status_code == 201, resp.text
+            bronnen.append(resp.json()["source_id"])
+    await _item(str(env.inname / f"{uuid.uuid4().hex}.pdf"), h, besluit="intern")
+    for bron in bronnen:
+        assert [m["soort"] for m in await _meldingen(bron)] == ["inhoud_intern"]
+
+
+async def test_batch_die_later_intern_wordt(env, app) -> None:
+    bulk = await _regel("bulkupload", "intern", location=str(env.inname))
+    original, h = env.origineel(b"%PDF-1.7 batch later " + uuid.uuid4().hex.encode())
+    pad = str(env.inname / f"{uuid.uuid4().hex}.pdf")
+    batch = await _batch(bulk, [pad], "extern", [h])
+    async with _client(app) as client:
+        run = await _start(client, env, regel=bulk, batch=batch)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=bulk, batch=batch, location=pad))
+    assert resp.status_code == 201 and resp.json()["classification"] == "extern"
+    await _q("UPDATE type::thing($b) SET classification_confirmed_by = NONE,"
+             " classification_confirmed_at = NONE", {"b": batch})
+    bron = resp.json()["source_id"]
+    assert (await _een("SELECT VALUE classification FROM type::thing($b)", {"b": bron})) == "intern"
+    assert [m["soort"] for m in await _meldingen(bron)] == ["inhoud_intern"]
+
+
+async def test_interne_batch_zonder_passende_hash_geeft_een_melding(env, app) -> None:
+    bulk = await _regel("bulkupload", "intern", location=str(env.inname))
+    original, h = env.origineel(b"%PDF-1.7 onleesbaar " + uuid.uuid4().hex.encode())
+    pad = str(env.inname / f"{uuid.uuid4().hex}.pdf")  # bestaat niet
+    batch = await _batch(bulk, [pad], "intern")
+    async with _client(app) as client:
+        run = await _start(client, env, regel=bulk, batch=batch)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=bulk, batch=batch, location=pad))
+    assert resp.status_code == 201 and resp.json()["classification"] == "intern"
+    meldingen = await _q("SELECT VALUE soort FROM beheer_melding WHERE intake_batch = type::thing($b)",
+                         {"b": batch})
+    assert meldingen == ["batchhash_ontbreekt"]
+    # Is het bestand er wel en past het, dan geen melding.
+    (env.inname / "leesbaar.pdf").write_bytes(b"%PDF-1.7 leesbaar")
+    o2, h2 = env.origineel(b"%PDF-1.7 leesbaar")
+    pad2 = str(env.inname / "leesbaar.pdf")
+    batch2 = await _batch(bulk, [pad2], "intern")
+    async with _client(app) as client:
+        run = await _start(client, env, regel=bulk, batch=batch2)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=o2, content_hash=h2, regel=bulk, batch=batch2, location=pad2))
+    assert resp.status_code == 201
+    assert await _q("SELECT id FROM beheer_melding WHERE intake_batch = type::thing($b)",
+                    {"b": batch2}) == []
