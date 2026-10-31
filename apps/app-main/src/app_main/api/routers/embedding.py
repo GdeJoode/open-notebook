@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
 from app_main.api.schemas import EmbedRequest, EmbedResponse
-from app_main.dependencies import get_model_service, get_note_service, get_source_service
-from app_main.services.model_service import ModelService
+from app_main.dependencies import get_note_service, get_source_service
+from app_main.services.model_routing.llm_call import registermodel
 from app_main.services.note_service import NoteService
 from app_main.services.source_service import SourceService
 from app_main.api.agent_auth import RECHT_BEHEERDER
@@ -17,21 +17,16 @@ router = APIRouter(tags=["embedding"], dependencies=[RECHT_BEHEERDER])
 @router.post("/embed", response_model=EmbedResponse)
 async def embed_content(
     embed_request: EmbedRequest,
-    model_svc: ModelService = Depends(get_model_service),
     source_svc: SourceService = Depends(get_source_service),
     note_svc: NoteService = Depends(get_note_service),
 ):
     """Embed content for vector search."""
     try:
-        # Check if embedding model is available
-        defaults = model_svc.model_manager.get_defaults()
-        if not defaults or not defaults.default_embedding_model:
+        # Het embeddingmodel komt uit het register (F2-08).
+        if registermodel("embedding") is None:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "No embedding model configured. "
-                    "Please configure one in the Models section."
-                ),
+                detail="Geen model voor taak 'embedding' in het modelregister.",
             )
 
         item_id = embed_request.item_id

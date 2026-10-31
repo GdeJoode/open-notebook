@@ -35,6 +35,18 @@ def taak_van(task: Any) -> str:
     return TAAK_VAN_LLMTASK.get(str(naam).upper(), str(naam).lower())
 
 
+def registermodel(taak: str) -> Optional[str]:
+    """De naam van het model voor een taak uit het register, of ``None``.
+
+    Voor de routers: welk model er is, staat in het register, niet in
+    ``default_models`` of in modelrijen (F2-08, ADR 0007).
+    """
+    from llm_manager.register import get_register
+
+    model = get_register().voor_taak(taak)
+    return model.naam if model else None
+
+
 def get_aanroeper() -> PoortAanroeper:
     """De poort van dit proces, met ``model_call`` als auditlog."""
     if not aanroep.is_ingesteld():

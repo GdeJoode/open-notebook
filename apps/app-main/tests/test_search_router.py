@@ -191,8 +191,9 @@ class TestSearchBackwardCompatible:
         )
         search_svc.hybrid_search.assert_not_called()
 
-    def test_vector_without_embedding_model_still_400(self):
-        """The vector branch's 400 guard is unchanged by W.1."""
+    def test_vector_without_embedding_model_still_400(self, monkeypatch):
+        """The vector branch's 400 guard: F2-08, no embedding model in the register."""
+        monkeypatch.setattr("app_main.api.routers.search.registermodel", lambda taak: None)
         search_svc = _search_svc(vector=[])
         client = _make_client(search_svc, _model_svc(embedding_model=None))
 

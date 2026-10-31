@@ -9,9 +9,9 @@ from loguru import logger
 from shared.models.classification import ClassificationScope
 
 from app_main.api.schemas import AskRequest, AskResponse, SearchRequest, SearchResponse
-from app_main.dependencies import get_model_service, get_search_service
+from app_main.dependencies import get_search_service
 from app_main.exceptions import InvalidInputError
-from app_main.services.model_service import ModelService
+from app_main.services.model_routing.llm_call import registermodel
 from app_main.services.search_service import SearchService
 from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN, current_scope
 from app_main.api.fouten import fout_zonder_inhoud, log_fout, melding_met_id
@@ -19,11 +19,21 @@ from app_main.api.fouten import fout_zonder_inhoud, log_fout, melding_met_id
 router = APIRouter(tags=["search"])
 
 
+def _model_uit_register(taak: str) -> str:
+    """Het model voor een taak uit het register (F2-08); zonder model 400."""
+    naam = registermodel(taak)
+    if naam is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Geen model voor taak '{taak}' in het modelregister.",
+        )
+    return naam
+
+
 @router.post("/search", response_model=SearchResponse, dependencies=[RECHT_LEZEN_EXTERN])
 async def search_knowledge_base(
     search_request: SearchRequest,
     search_svc: SearchService = Depends(get_search_service),
-    model_svc: ModelService = Depends(get_model_service),
     scope: ClassificationScope = Depends(current_scope),
 ):
     """Search the source chunks using text, vector, or hybrid search.
@@ -34,16 +44,8 @@ async def search_knowledge_base(
     """
     try:
         if search_request.type == "vector":
-            # Verify embedding model is available
-            defaults = model_svc.model_manager.get_defaults()
-            if not defaults or not defaults.default_embedding_model:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "Vector search requires an embedding model. "
-                        "Please configure one in the Models section."
-                    ),
-                )
+            # Het embeddingmodel komt uit het register (F2-08).
+            _model_uit_register("embedding")
             results = await search_svc.vector_search(
                 keyword=search_request.query,
                 results=search_request.limit,
@@ -169,48 +171,22 @@ async def stream_ask_response(
 
 
 @router.post("/search/ask", dependencies=[RECHT_BEHEERDER])
-async def ask_knowledge_base(
-    ask_request: AskRequest,
-    model_svc: ModelService = Depends(get_model_service),
-):
-    """Ask the knowledge base a question using AI models (streaming)."""
+async def ask_knowledge_base(ask_request: AskRequest):
+    """Ask the knowledge base a question using AI models (streaming).
+
+    F2-08: de modellen komen uit het register (taak ``chat`` en ``embedding``);
+    de model-id's in de aanvraag tellen niet meer.
+    """
     try:
-        strategy_model = await model_svc.get(ask_request.strategy_model)
-        answer_model = await model_svc.get(ask_request.answer_model)
-        final_answer_model = await model_svc.get(ask_request.final_answer_model)
-
-        if not strategy_model:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Strategy model {ask_request.strategy_model} not found",
-            )
-        if not answer_model:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Answer model {ask_request.answer_model} not found",
-            )
-        if not final_answer_model:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Final answer model {ask_request.final_answer_model} not found",
-            )
-
-        defaults = model_svc.model_manager.get_defaults()
-        if not defaults or not defaults.default_embedding_model:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Ask feature requires an embedding model. "
-                    "Please configure one in the Models section."
-                ),
-            )
+        chatmodel = _model_uit_register("chat")
+        _model_uit_register("embedding")
 
         return StreamingResponse(
             stream_ask_response(
                 ask_request.question,
-                strategy_model.id,
-                answer_model.id,
-                final_answer_model.id,
+                chatmodel,
+                chatmodel,
+                chatmodel,
             ),
             media_type="text/plain",
         )
@@ -223,40 +199,17 @@ async def ask_knowledge_base(
 
 
 @router.post("/search/ask/simple", response_model=AskResponse, dependencies=[RECHT_BEHEERDER])
-async def ask_knowledge_base_simple(
-    ask_request: AskRequest,
-    model_svc: ModelService = Depends(get_model_service),
-):
-    """Ask the knowledge base a question (non-streaming)."""
+async def ask_knowledge_base_simple(ask_request: AskRequest):
+    """Ask the knowledge base a question (non-streaming).
+
+    F2-08: de modellen komen uit het register; de model-id's in de aanvraag
+    tellen niet meer.
+    """
     try:
+        chatmodel = _model_uit_register("chat")
+        _model_uit_register("embedding")
+
         from app_main.graphs.ask import graph as ask_graph
-
-        strategy_model = await model_svc.get(ask_request.strategy_model)
-        answer_model = await model_svc.get(ask_request.answer_model)
-        final_answer_model = await model_svc.get(ask_request.final_answer_model)
-
-        if not strategy_model:
-            raise HTTPException(
-                status_code=400, detail="Strategy model not found"
-            )
-        if not answer_model:
-            raise HTTPException(
-                status_code=400, detail="Answer model not found"
-            )
-        if not final_answer_model:
-            raise HTTPException(
-                status_code=400, detail="Final answer model not found"
-            )
-
-        defaults = model_svc.model_manager.get_defaults()
-        if not defaults or not defaults.default_embedding_model:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Ask feature requires an embedding model. "
-                    "Please configure one in the Models section."
-                ),
-            )
 
         final_answer = None
         citations: list = []
@@ -264,9 +217,9 @@ async def ask_knowledge_base_simple(
             input=dict(question=ask_request.question),
             config=dict(
                 configurable=dict(
-                    strategy_model=strategy_model.id,
-                    answer_model=answer_model.id,
-                    final_answer_model=final_answer_model.id,
+                    strategy_model=chatmodel,
+                    answer_model=chatmodel,
+                    final_answer_model=chatmodel,
                 )
             ),
             stream_mode="updates",

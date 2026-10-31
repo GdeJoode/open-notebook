@@ -164,9 +164,11 @@ class SearchResponse(BaseModel):
 
 class AskRequest(BaseModel):
     question: str = Field(..., description="Question to ask the knowledge base")
-    strategy_model: str = Field(..., description="Model ID for query strategy")
-    answer_model: str = Field(..., description="Model ID for individual answers")
-    final_answer_model: str = Field(..., description="Model ID for final answer")
+    # F2-08: de modellen komen uit het register; deze velden tellen niet meer
+    # en vervallen met F2-09.
+    strategy_model: Optional[str] = Field(None, description="Vervalt; het register beslist")
+    answer_model: Optional[str] = Field(None, description="Vervalt; het register beslist")
+    final_answer_model: Optional[str] = Field(None, description="Vervalt; het register beslist")
 
 
 class AskResponse(BaseModel):
