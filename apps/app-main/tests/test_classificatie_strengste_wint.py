@@ -135,6 +135,31 @@ async def _entiteit_rij(naam: str) -> dict | None:
     return rows[0] if rows else None
 
 
+async def _run_van(chunk: str) -> str:
+    [run] = await _q("SELECT VALUE run FROM $c", {"c": _rid(chunk)})
+    return str(run)
+
+
+async def test_vermelding_na_herverwerking_krijgt_de_nieuwe_run(env) -> None:
+    """Twee runs op dezelfde versie: de vermelding volgt haar fragment."""
+    bron = await _bron()
+    [versie, oud, *_] = await _versie_met_kinderen(bron)
+    tweede = await _run()
+    [nieuw] = await _q("CREATE chunk CONTENT $d RETURN id", {"d": {
+        "source": _rid(bron), "source_version": _rid(versie), "run": _rid(tweede),
+        "text": "Openbare tekst", "order": 0, "physical_page": 0,
+        "element_type": "paragraph", "positions": [], "metadata": {}}})
+    nieuw = str(nieuw["id"])
+    await SourceVersionRepository().set_current_run(versie, tweede)
+    naam = f"Brede Welvaart {uuid.uuid4().hex[:6]}"
+    # De extractie geeft geen of een oude run mee; de database neemt die van het fragment.
+    await EntityPersistenceService().persist_filtered_result(
+        bron, [_entiteit(naam, nieuw)], [], run_id=await _run_van(oud)
+    )
+    rij = await _entiteit_rij(naam)
+    assert rij["properties"]["grounding"][bron]["run"] == tweede
+
+
 async def test_pijplijn_weigert_een_fragment_van_een_andere_bron(env) -> None:
     a, b = await _bron(), await _bron()
     [_, chunk_a, *_] = await _versie_met_kinderen(a)
@@ -148,14 +173,16 @@ async def test_pijplijn_weigert_een_fragment_van_een_andere_bron(env) -> None:
         await dienst.persist_filtered_result(a, [_entiteit(naam, chunk_b)], [], run_id=run)
     assert await _entiteit_rij(naam) is None
 
-    # Met de eigen fragmenten: twee vermeldingen, beide extern, met run.
+    # Met de eigen fragmenten: twee vermeldingen, beide extern, met de run van
+    # hun fragment.
     await dienst.persist_filtered_result(a, [_entiteit(naam, chunk_a)], [], run_id=run)
     await dienst.persist_filtered_result(b, [_entiteit(naam, chunk_b)], [], run_id=run)
     rij = await _entiteit_rij(naam)
     assert rij["classification"] == "extern"
     grounding = rij["properties"]["grounding"]
     assert {k: (v["chunk_id"], v["run"], v["classification"]) for k, v in grounding.items()} == {
-        a: (chunk_a, run, "extern"), b: (chunk_b, run, "extern")}
+        a: (chunk_a, await _run_van(chunk_a), "extern"),
+        b: (chunk_b, await _run_van(chunk_b), "extern")}
 
     # Bron B wordt intern (een interne versie): de entiteit wordt intern.
     await SourceVersionRepository().register(b, _hash(), await _run(), classification="intern")

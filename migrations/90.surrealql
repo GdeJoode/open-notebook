@@ -63,6 +63,15 @@ DEFINE FIELD OVERWRITE source_map_rule_id ON processing_run TYPE option<string> 
 DEFINE FIELD OVERWRITE source_map_rule_rev ON processing_run TYPE option<int> READONLY;
 DEFINE INDEX OVERWRITE idx_processing_run_status ON processing_run FIELDS status;
 
+-- 2 en 3. Een bronversie, fragment of `doc_node` wordt alleen gemaakt (en een
+-- versie alleen naar een andere run verlegd) in een lopende run, en bij een
+-- interne of onbekende bron alleen door een run met een flow uit Git (ADR 0022
+-- E).
+DEFINE FUNCTION OVERWRITE fn::run_mag_schrijven($run: any, $bron: any) {
+    RETURN record::exists($run) AND $run.status = 'bezig'
+        AND ($run.flow_vastgelegd = true OR fn::classificatie_van($bron) = 'extern');
+};
+
 -- 2. De bronversie.
 DEFINE TABLE OVERWRITE source_version SCHEMAFULL;
 DEFINE FIELD OVERWRITE source ON source_version TYPE record<source> READONLY;
@@ -74,10 +83,10 @@ DEFINE FIELD OVERWRITE original ON source_version TYPE option<string> READONLY;
 DEFINE FIELD OVERWRITE predecessor ON source_version TYPE option<record<source_version>> READONLY
     ASSERT $value = NONE OR $value.source = $this.source;
 DEFINE FIELD OVERWRITE created_by_run ON source_version TYPE record<processing_run> READONLY
-    ASSERT record::exists($value);
+    ASSERT record::exists($value) AND ($before != NONE OR fn::run_mag_schrijven($value, $this.source));
 DEFINE FIELD OVERWRITE current_run ON source_version TYPE record<processing_run>
     DEFAULT created_by_run
-    ASSERT record::exists($value);
+    ASSERT record::exists($value) AND ($before = $value OR fn::run_mag_schrijven($value, $this.source));
 DEFINE FIELD OVERWRITE classification ON source_version TYPE string DEFAULT ALWAYS fn::classificatie_van(source)
     ASSERT $value IN ['intern', 'extern']
         AND ($value = 'intern' OR fn::classificatie_van(source) = 'extern')
@@ -104,14 +113,6 @@ DEFINE FIELD OVERWRITE current_version ON source TYPE option<record<source_versi
 DEFINE FIELD OVERWRITE source ON chunk TYPE record<source> READONLY;
 DEFINE FIELD OVERWRITE source ON doc_node TYPE record<source> READONLY;
 DEFINE FIELD OVERWRITE source ON source_embedding TYPE record<source> READONLY;
-
--- 3. Een fragment of `doc_node` wordt alleen gemaakt in een lopende run, en bij
--- een interne of onbekende bron alleen door een run met een flow uit Git (ADR
--- 0022 E). De controle geldt bij het aanmaken; daarna is `run` onveranderlijk.
-DEFINE FUNCTION OVERWRITE fn::run_mag_schrijven($run: any, $bron: any) {
-    RETURN record::exists($run) AND $run.status = 'bezig'
-        AND ($run.flow_vastgelegd = true OR fn::classificatie_van($bron) = 'extern');
-};
 
 -- 3. Fragmenten en documentstructuur horen bij één bronversie en één run.
 DEFINE FIELD OVERWRITE source_version ON chunk TYPE record<source_version> READONLY
@@ -177,16 +178,28 @@ DEFINE FUNCTION OVERWRITE fn::vermeldingen_kloppen($nieuw: any, $oud: any, $bron
     RETURN true;
 };
 
--- Elke vermelding krijgt haar berekende classificatie; een meegegeven waarde
--- telt niet.
+-- De run van een fragment; onbekend is NONE.
+DEFINE FUNCTION OVERWRITE fn::run_van_fragment($fragment: any) {
+    LET $rid = IF type::is::record($fragment) { $fragment }
+        ELSE IF type::is::string($fragment) AND string::is::record($fragment) { type::thing($fragment) }
+        ELSE { NONE };
+    RETURN IF $rid { (SELECT VALUE run FROM ONLY $rid) } ELSE { NONE };
+};
+
+-- Elke vermelding krijgt haar berekende classificatie, en met een fragment de
+-- run van dat fragment; een meegegeven waarde telt dan niet.
+DEFINE FUNCTION OVERWRITE fn::vermelding_met_waarde($bron: any, $vermelding: object) {
+    LET $run = IF $vermelding.chunk_id { fn::run_van_fragment($vermelding.chunk_id) } ELSE { NONE };
+    LET $velden = object::entries($vermelding).filter(|$kv| $kv[0] != 'classification');
+    LET $velden = IF $run { $velden.filter(|$kv| $kv[0] != 'run') } ELSE { $velden };
+    LET $extra = IF $run { [['run', <string> $run]] } ELSE { [] };
+    RETURN object::from_entries(array::concat($velden, array::concat($extra,
+        [['classification', fn::vermelding_waarde($bron, $vermelding)]])));
+};
+
 DEFINE FUNCTION OVERWRITE fn::vermeldingen_met_waarde($grounding: object) {
     RETURN object::from_entries(object::entries($grounding).map(|$e| [$e[0],
-        IF type::is::object($e[1]) {
-            object::from_entries(array::concat(
-                object::entries($e[1]).filter(|$kv| $kv[0] != 'classification'),
-                [['classification', fn::vermelding_waarde($e[0], $e[1])]]
-            ))
-        } ELSE { $e[1] }
+        IF type::is::object($e[1]) { fn::vermelding_met_waarde($e[0], $e[1]) } ELSE { $e[1] }
     ]));
 };
 

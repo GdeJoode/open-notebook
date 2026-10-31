@@ -28,6 +28,8 @@ DEFINE FUNCTION OVERWRITE fn::vermelding_classificatie($bron: any, $grounding: a
         ELSE { 'extern' };
 };
 REMOVE FUNCTION IF EXISTS fn::vermeldingen_met_waarde;
+REMOVE FUNCTION IF EXISTS fn::vermelding_met_waarde;
+REMOVE FUNCTION IF EXISTS fn::run_van_fragment;
 REMOVE FUNCTION IF EXISTS fn::vermeldingen_kloppen;
 REMOVE FUNCTION IF EXISTS fn::fragment_hoort_bij_bron;
 REMOVE FUNCTION IF EXISTS fn::vermelding_waarde;
@@ -58,5 +60,9 @@ DEFINE FIELD OVERWRITE source_version ON chunk TYPE option<record<source_version
 REMOVE FUNCTION IF EXISTS fn::run_mag_schrijven;
 
 DEFINE FIELD OVERWRITE current_version ON source TYPE option<record<source_version>>;
+
+-- Zonder `fn::run_mag_schrijven` geen controle meer op de run van een versie.
+DEFINE FIELD OVERWRITE created_by_run ON source_version TYPE record<processing_run> READONLY;
+DEFINE FIELD OVERWRITE current_run ON source_version TYPE record<processing_run> DEFAULT created_by_run;
 
 RETURN NONE;

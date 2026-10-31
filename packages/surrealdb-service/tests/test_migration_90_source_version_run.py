@@ -226,7 +226,14 @@ async def test_run_met_flow_buiten_git(live_surrealdb, classification, toegestaa
     run = str((await ProcessingRunRepository(live_surrealdb).create(
         trigger="schema", pipeline_id="test")).id)
     assert (await _lees(live_surrealdb, run))["flow_vastgelegd"] is False
-    versie = await _versie(live_surrealdb, bron, run)
+    if not toegestaan:
+        # Bij een interne bron mag zo'n run geen versie maken ...
+        with pytest.raises(RuntimeError, match="created_by_run"):
+            await _versie(live_surrealdb, bron, run)
+        # ... en geen fragment of structuur in een bestaande versie.
+        versie = await _versie(live_surrealdb, bron, await _run(live_surrealdb))
+    else:
+        versie = await _versie(live_surrealdb, bron, run)
     for maak in (_fragment, _doc_node):
         if toegestaan:
             await maak(live_surrealdb, bron, source_version=versie, run=run)
@@ -235,15 +242,41 @@ async def test_run_met_flow_buiten_git(live_surrealdb, classification, toegestaa
                 await maak(live_surrealdb, bron, source_version=versie, run=run)
 
 
-async def test_huidige_run_van_een_bron(live_surrealdb) -> None:
+async def test_versie_alleen_verleggen_naar_een_toegestane_run(live_surrealdb) -> None:
+    repo = SourceVersionRepository(live_surrealdb)
+    runs = ProcessingRunRepository(live_surrealdb)
+    bron = await _bron(live_surrealdb, "intern")
+    versie = await _versie(live_surrealdb, bron, await _run(live_surrealdb))
+
+    gesloten = await _run(live_surrealdb)
+    await runs.close(gesloten, status="geslaagd")
+    buiten_git = str((await runs.create(trigger="schema", pipeline_id="test")).id)
+    for run in (gesloten, buiten_git):
+        with pytest.raises(RuntimeError, match="current_run"):
+            await repo.set_current_run(versie, run)
+    goed = await _run(live_surrealdb)
+    await repo.set_current_run(versie, goed)
+    rij = await _lees(live_surrealdb, versie)
+    assert str(rij["current_run"]) == goed
+    # Een afgesloten huidige run blijft geldig bij een andere wijziging.
+    await runs.close(goed, status="geslaagd")
+    await _q(live_surrealdb, "UPDATE type::thing($id) SET classification = 'intern'", {"id": versie})
+
+
+async def test_alleen_fragmenten_van_de_huidige_versie_en_run(live_surrealdb) -> None:
     from surrealdb_service.repositories.source import SourceRepository
 
-    bron = await _bron(live_surrealdb)
+    bron = await _bron(live_surrealdb, "extern")
+    eerste = await _run(live_surrealdb)
+    versie = await _versie(live_surrealdb, bron, eerste)
+    await _fragment(live_surrealdb, bron, source_version=versie, run=eerste)
+    tweede = await _run(live_surrealdb)
+    nieuw = await _fragment(live_surrealdb, bron, source_version=versie, run=tweede)
+    await SourceVersionRepository(live_surrealdb).set_current_run(versie, tweede)
     repo = SourceRepository(live_surrealdb)
-    assert await repo.get_current_run(bron) is None
-    run = await _run(live_surrealdb)
-    await _versie(live_surrealdb, bron, run)
-    assert await repo.get_current_run(bron) == run
+    assert len(await repo.get_chunks(bron)) == 2
+    assert [c.id for c in await repo.get_chunks(bron, huidig=True)] == [nieuw]
+    assert await repo.get_chunks(await _bron(live_surrealdb), huidig=True) == []
 
 
 async def test_herverwerking_laat_de_fragmenten_van_de_oude_run_staan(live_surrealdb) -> None:
@@ -454,10 +487,27 @@ async def test_vermelding_slaat_run_en_classificatie_op(live_surrealdb) -> None:
         intern: {"chunk_id": frag_i, "run": run, "classification": "extern"},
     })
     grounding = (await _lees(live_surrealdb, eid))["properties"]["grounding"]
-    # De opgeslagen waarde is berekend; een meegegeven waarde telt niet.
+    # De opgeslagen waarden zijn berekend; een meegegeven waarde telt niet. De
+    # run komt van het fragment.
     assert grounding[extern]["classification"] == "extern"
     assert grounding[intern]["classification"] == "intern"
-    assert grounding[extern]["run"] == run
+    run_e = (await _lees(live_surrealdb, frag_e))["run"]
+    assert grounding[extern]["run"] == str(run_e) != run
+
+
+async def test_vermelding_na_herverwerking_krijgt_de_run_van_haar_fragment(live_surrealdb) -> None:
+    bron = await _bron(live_surrealdb, "extern")
+    eerste = await _run(live_surrealdb)
+    versie = await _versie(live_surrealdb, bron, eerste)
+    oud = await _fragment(live_surrealdb, bron, source_version=versie, run=eerste)
+    tweede = await _run(live_surrealdb)
+    nieuw = await _fragment(live_surrealdb, bron, source_version=versie, run=tweede)
+    eid = await _entiteit(live_surrealdb, [bron], {bron: {"chunk_id": nieuw, "run": eerste}})
+    assert (await _lees(live_surrealdb, eid))["properties"]["grounding"][bron]["run"] == tweede
+    # Een vermelding zonder fragment houdt de meegegeven run.
+    eid = await _entiteit(live_surrealdb, [bron], {bron: {"context": "x", "run": eerste}})
+    assert (await _lees(live_surrealdb, eid))["properties"]["grounding"][bron]["run"] == eerste
+    assert oud != nieuw
 
 
 async def test_vermelding_met_fragment_van_een_andere_bron_geweigerd(live_surrealdb) -> None:

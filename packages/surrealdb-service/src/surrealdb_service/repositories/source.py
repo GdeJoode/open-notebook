@@ -79,16 +79,6 @@ class SourceRepository(BaseRepository[Source]):
         row = rows[0] if isinstance(rows, list) and rows else rows
         return row.get("classification") if isinstance(row, dict) else None
 
-    async def get_current_run(self, source_id: str) -> Optional[str]:
-        """De huidige run van de huidige bronversie, of ``None`` (F2-04)."""
-        rows = await execute_query(
-            "SELECT VALUE current_version.current_run FROM $bron",
-            {"bron": ensure_record_id(source_id)},
-            self.config,
-        )
-        waarde = rows[0] if rows else None
-        return str(waarde) if waarde else None
-
     async def reclassify(
         self,
         source_id: str,
@@ -252,19 +242,26 @@ class SourceRepository(BaseRepository[Source]):
             logger.error(f"Failed to get insights for source {source_id}: {e}")
             return []
 
-    async def get_chunks(self, source_id: str) -> List[Chunk]:
+    async def get_chunks(self, source_id: str, *, huidig: bool = False) -> List[Chunk]:
         """
         Get all chunks for a source, ordered by position.
 
         Args:
             source_id: Source ID.
+            huidig: Alleen de fragmenten van de huidige bronversie en haar
+                huidige run (F2-04, ADR 0003); zonder versie geen fragmenten.
 
         Returns:
             List of chunks ordered by order field.
         """
+        filter_ = (
+            " AND source_version = $id.current_version"
+            " AND run = $id.current_version.current_run"
+            if huidig else ""
+        )
         try:
             result = await execute_query(
-                "SELECT * FROM chunk WHERE source=$id ORDER BY order ASC",
+                f"SELECT * FROM chunk WHERE source=$id{filter_} ORDER BY order ASC",
                 {"id": ensure_record_id(source_id)},
                 self.config,
             )

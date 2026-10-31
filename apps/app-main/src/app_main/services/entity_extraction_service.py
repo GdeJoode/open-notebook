@@ -573,14 +573,6 @@ class SchemaReviewPendingError(JobPausedForReviewError):
 class EntityExtractionService:
     """Runs ontology-guided entity extraction on a source's chunks."""
 
-    async def _huidige_run(self, source_id: str) -> Optional[str]:
-        """De huidige run van de huidige bronversie, of ``None`` (F2-04)."""
-        repo = getattr(self, "_source_repo", None)
-        if repo is None:
-            return None
-        run = await repo.get_current_run(source_id)
-        return run if isinstance(run, str) else None
-
     def __init__(
         self,
         source_repo: SourceRepository,
@@ -1730,7 +1722,10 @@ class EntityExtractionService:
         logger.info(f"Starting entity extraction for source: {source_id}")
 
         # 1. Fetch chunks
-        chunks = await self._source_repo.get_chunks(source_id)
+        # F2-04 (ADR 0003): alleen de huidige versie en run, zodat oude en
+        # nieuwe tekst niet allebei naar het model gaan. De run van een
+        # vermelding leidt de database af uit haar fragment (migratie 90).
+        chunks = await self._source_repo.get_chunks(source_id, huidig=True)
         if not chunks:
             logger.warning(f"No chunks found for source {source_id}")
             # AC#3: every run_extraction call writes exactly ONE
@@ -2060,10 +2055,6 @@ class EntityExtractionService:
                     # notebook's edits (set by _run_multi_schema). No
                     # re-detection here.
                     applicable_schemas=await self._typing_schemas_or_all(),
-                    # F2-04 (ADR 0003): de run van de vermelding. Tot de
-                    # extractie een stap in een run is (F2-16), de huidige run
-                    # van de huidige bronversie, waarvan de fragmenten komen.
-                    run_id=await self._huidige_run(source_id),
                 )
 
                 # Q.4 R1 hook (main path): fire triage AFTER the persist, OUTSIDE
@@ -2338,7 +2329,6 @@ class EntityExtractionService:
             # re-detect. `_typing_schemas` was reset above, so a reused instance
             # cannot leak a prior run's vocabulary.
             applicable_schemas=await self._typing_schemas_or_all(),
-            run_id=await self._huidige_run(source_id),  # F2-04
         )
 
         # Q.4 R1 hook (re-filter path): triage fires here too (operator-confirmed,
