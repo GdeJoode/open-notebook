@@ -25,7 +25,11 @@ from app_main.api.schemas import (
 )
 from app_main.dependencies import get_source_map_service
 from app_main.services.intake_service import IntakeConflictError
-from app_main.services.source_map_service import SourceMapService, VerbodenLocatieError
+from app_main.services.source_map_service import (
+    AlBevestigdError,
+    SourceMapService,
+    VerbodenLocatieError,
+)
 
 router = APIRouter(prefix="/v1/source-map-rules", tags=["source-map"])
 
@@ -58,6 +62,8 @@ def fout_naar_http(e: Exception) -> HTTPException:
         return HTTPException(status_code=422, detail="Locatie niet toegestaan")
     if isinstance(e, PermissionError):
         return HTTPException(status_code=403, detail="Onvoldoende recht")
+    if isinstance(e, AlBevestigdError):
+        return HTTPException(status_code=409, detail="Al extern bevestigd")
     if isinstance(e, IntakeConflictError):
         return HTTPException(status_code=409, detail="Status staat dit niet toe")
     return HTTPException(status_code=500, detail="Interne fout")
@@ -112,7 +118,8 @@ async def update_rule(
             permission=key.permission, person=key.person, key_id=key.key_id,
             reason=body.reason,
         )
-    except (RevConflictError, RecordNotFoundError, VerbodenLocatieError, PermissionError) as e:
+    except (RevConflictError, RecordNotFoundError, VerbodenLocatieError, PermissionError,
+            AlBevestigdError) as e:
         raise fout_naar_http(e) from None
     return antwoord(regel)
 
@@ -129,6 +136,6 @@ async def confirm_rule(
             rule_id, rev=body.rev, permission=key.permission, person=key.person,
             key_id=key.key_id, reason=body.reason,
         )
-    except (RevConflictError, RecordNotFoundError, PermissionError) as e:
+    except (RevConflictError, RecordNotFoundError, PermissionError, AlBevestigdError) as e:
         raise fout_naar_http(e) from None
     return antwoord(regel)

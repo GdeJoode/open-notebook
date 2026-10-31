@@ -10,19 +10,24 @@
 * Elke inhoudelijke wijziging trekt een bevestiging in; alleen
   :data:`ZONDER_INTREKKING` (``name``, ``owner``, ``document_type``: puur
   beschrijvend) niet. Ook ``active`` van false naar true trekt haar in.
-* Verandert de **effectieve** classificatie (voor en na), dan komt er één
-  regel in ``classification_log`` met de persoon, in dezelfde transactie als
-  de wijziging: bij bevestigen (intern -> extern) en bij elke intrekking of
-  wijziging die een externe regel intern maakt (extern -> intern).
-* Een wijziging gaat met ``rev`` (``wijzig_met_rev``); verouderd geeft 409.
+* Elke intrekking van een externe regel (extern -> intern) en elke bevestiging
+  (intern -> extern) geeft een eigen regel in ``classification_log`` met de
+  persoon, in dezelfde transactie als de wijziging, ook als ze samen in één
+  verzoek vallen. Bevestigen van een regel die al bevestigd extern is (en
+  door de wijziging niet wordt ingetrokken) geeft 409.
+* Een wijziging gaat met ``rev``: die moet gelijk zijn aan de gelezen ``rev``,
+  en de database controleert haar nog eens (``wijzig_met_rev``); anders 409.
 * **Locatie** (ADR 0004, 0020): een padlocatie moet onder een toegestane
   hoofdmap liggen (``SIGNAAL_INNAME_PADEN``, allowlist; leeg weigert elk pad)
   en niet in de vault of de exportmap. Omwegen via Windows-padvormen worden
-  geweigerd (zie :func:`weigerreden`).
+  geweigerd (zie :func:`weigerreden`). Een URL alleen met ``http`` of
+  ``https`` en niet naar een interne of lokale host (:func:`is_interne_host`),
+  tenzij de host op ``SIGNAAL_INNAME_URLS`` staat.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import posixpath
 import re
@@ -38,6 +43,7 @@ from shared.models.source_map import (
     standaard_classificatie,
     standaard_fetch_content,
 )
+from surrealdb_service.repositories.base import RevConflictError
 from surrealdb_service.repositories.source_map import SourceMapRuleRepository
 
 from app_main import config
@@ -57,7 +63,6 @@ _SCHEMA = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*):")
 _WINDOWS = re.compile(r"^([A-Za-z]):/(.*)$")
 _WSL = re.compile(r"^/mnt/([A-Za-z])(?:/|$)(.*)$")
 _KORTE_NAAM = re.compile(r"~\d")
-_LOKAAL = {"localhost", "127.0.0.1", "::1", "[::1]"}
 
 
 def _windows(letter: str, rest: str) -> str:
@@ -124,6 +129,34 @@ def _in_een_van(kind: str, mappen: Iterable[str]) -> bool:
     return False
 
 
+_GETAL = re.compile(r"^(0x[0-9a-f]+|[0-9]+)$")
+
+
+def is_interne_host(host: str) -> bool:
+    """Wijst ``host`` (kleine letters, zonder punt aan het eind) naar de eigen
+    machine of het eigen netwerk? Loopback, ``0.0.0.0``, private en
+    link-local adressen (IPv4 en IPv6, ook IPv4 in IPv6), ``localhost``,
+    ``host.docker.internal`` en elke naam zonder punt (een containernaam of
+    een getal als ``2130706433``). Een naam van alleen getallen die geen geldig
+    adres is (``127.1``, ``0x7f.1``), telt ook als intern.
+    """
+    host = host.strip("[]")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        return (ip.is_loopback or ip.is_private or ip.is_link_local
+                or ip.is_unspecified or ip.is_reserved or ip.is_multicast)
+    if "." not in host or host in ("localhost", "host.docker.internal"):
+        return True
+    if host.endswith((".localhost", ".internal")):
+        return True
+    return all(_GETAL.match(deel) for deel in host.split("."))
+
+
 class Locatiecontrole:
     """Allowlist van innamemappen, en nooit de vault of de exportmap.
 
@@ -136,10 +169,12 @@ class Locatiecontrole:
         vault_paden: Optional[List[str]] = None,
         exportmap_paden: Optional[List[str]] = None,
         inname_paden: Optional[List[str]] = None,
+        inname_urls: Optional[List[str]] = None,
     ) -> None:
         self._vault = vault_paden
         self._export = exportmap_paden
         self._inname = inname_paden
+        self._urls = inname_urls
 
     @property
     def verboden(self) -> List[str]:
@@ -151,6 +186,11 @@ class Locatiecontrole:
     def toegestaan(self) -> List[str]:
         return self._inname if self._inname is not None else config.get_inname_paden()
 
+    @property
+    def toegestane_hosts(self) -> set[str]:
+        urls = self._urls if self._urls is not None else config.get_inname_urls()
+        return {u.strip().lower().rstrip(".") for u in urls if u.strip()}
+
     def _in_vault(self, pad: str) -> bool:
         return weigerreden(pad) is None and _in_een_van(canoniek_pad(pad), self.verboden)
 
@@ -159,16 +199,22 @@ class Locatiecontrole:
         tekst = (locatie or "").strip()
         url = _URL.match(tekst)
         if url:
-            schema = url.group(1).lower()
-            if schema == "file":
-                raise VerbodenLocatieError("file-adres")
-            if schema == "obsidian":
-                raise VerbodenLocatieError("obsidian-adres")
-            delen = urlsplit(tekst)
-            if (delen.hostname or "").lower() in _LOKAAL:
-                pad = unquote(delen.path)
+            if url.group(1).lower() not in ("http", "https"):
+                raise VerbodenLocatieError("alleen http en https")
+            try:
+                host = (urlsplit(tekst).hostname or "").lower().rstrip(".")
+            except ValueError:
+                raise VerbodenLocatieError("ongeldig adres") from None
+            if not host:
+                raise VerbodenLocatieError("adres zonder host")
+            if host in self.toegestane_hosts:
+                # Expliciet toegestaan; ook dan nooit een pad in de vault.
+                pad = unquote(urlsplit(tekst).path)
                 if self._in_vault(pad) or self._in_vault(pad.lstrip("/")):
                     raise VerbodenLocatieError("lokaal adres naar de vault")
+                return
+            if is_interne_host(host):
+                raise VerbodenLocatieError("interne of lokale host")
             return
         schema = _SCHEMA.match(tekst)
         if schema and len(schema.group(1)) > 1:
@@ -215,6 +261,48 @@ def logregel(*, van: str, naar: str, reden: str, key_id: str, person: str) -> Di
     """Een regel voor ``classification_log`` (zonder onderwerp)."""
     return {"from_classification": van, "to_classification": naar,
             "reason": reden, "agent_key": key_id, "person": person}
+
+
+class AlBevestigdError(Exception):
+    """Bevestigen van iets dat al effectief extern is (HTTP 409)."""
+
+
+def controleer_rev(gestuurd: int, gelezen: int, record_id: Any) -> None:
+    """De meegestuurde ``rev`` moet die van het gelezen record zijn (anders 409)."""
+    if gestuurd != gelezen:
+        raise RevConflictError([str(record_id)])
+
+
+def classificatielogs(
+    *,
+    voor: str,
+    tussen: str,
+    bevestig: bool,
+    reden: Optional[str],
+    onderwerp: str,
+    key_id: str,
+    person: str,
+) -> List[Dict[str, Any]]:
+    """De regels voor ``classification_log`` bij één wijziging.
+
+    ``voor``: effectief vóór de wijziging; ``tussen``: na een eventuele
+    intrekking, vóór een bevestiging. Elke intrekking (extern -> intern) en
+    elke bevestiging (intern -> extern) is een eigen regel, ook als ze samen in
+    één verzoek vallen en de regel per saldo extern blijft. Bevestigen van iets
+    dat (na de wijziging) nog bevestigd extern is, geeft ``AlBevestigdError``.
+    """
+    logs: List[Dict[str, Any]] = []
+    if voor == "extern" and tussen == "intern":
+        logs.append(logregel(van="extern", naar="intern",
+                             reden=reden or f"Bevestiging {onderwerp.lower()} ingetrokken",
+                             key_id=key_id, person=person))
+    if bevestig:
+        if tussen == "extern":
+            raise AlBevestigdError(f"{onderwerp} is al extern bevestigd")
+        logs.append(logregel(van="intern", naar="extern",
+                             reden=reden or f"{onderwerp} extern bevestigd",
+                             key_id=key_id, person=person))
+    return logs
 
 
 def _controleer_extern(route_type: str, classification: str) -> None:
@@ -291,6 +379,7 @@ class SourceMapService:
         """Wijzig een regel met ``rev``; ``None`` wist een optioneel veld."""
         person = beheerder(permission, person)
         huidig = await self.get(rule_id)
+        controleer_rev(rev, huidig.rev, huidig.id)
         leeg = [k for k in _VERPLICHT if k in changes and changes[k] is None]
         if leeg:
             raise InvalidInputError(f"Verplicht veld leeg: {', '.join(leeg)}")
@@ -307,19 +396,16 @@ class SourceMapService:
             data.update(classification_confirmed_by=None, classification_confirmed_at=None)
             na = na.model_copy(update={"classification_confirmed_by": None,
                                        "classification_confirmed_at": None})
+        tussen = na.effectieve_classificatie
         if bevestig:
             self._kan_bevestigen(na.classification, na.active)
             data.update(classification_confirmed_by=person, classification_confirmed_at=_nu())
             na = na.model_copy(update={"classification_confirmed_by": person})
-
-        log = None
-        voor, daarna = huidig.effectieve_classificatie, na.effectieve_classificatie
-        if voor != daarna:
-            standaard = ("Bronkaartregel extern bevestigd" if daarna == "extern"
-                         else "Bevestiging bronkaartregel ingetrokken")
-            log = logregel(van=voor, naar=daarna, reden=reason or standaard,
-                           key_id=key_id, person=person)
-        return await self.repo.update(str(huidig.id), rev=rev, data=data, door=person, log=log)
+        logs = classificatielogs(
+            voor=huidig.effectieve_classificatie, tussen=tussen, bevestig=bevestig,
+            reden=reason, onderwerp="Bronkaartregel", key_id=key_id, person=person)
+        return await self.repo.update(
+            str(huidig.id), rev=huidig.rev, data=data, door=person, logs=logs)
 
     async def confirm(
         self,

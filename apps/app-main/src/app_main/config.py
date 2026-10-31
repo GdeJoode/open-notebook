@@ -270,3 +270,9 @@ def get_inname_paden() -> list[str]:
     geweigerd.
     """
     return _paden_env("SIGNAAL_INNAME_PADEN", ())
+
+
+def get_inname_urls() -> list[str]:
+    """Hosts die als URL-locatie mogen, ook als ze lokaal of intern zijn
+    (``SIGNAAL_INNAME_URLS``, gescheiden door ``;``). Leeg: geen uitzonderingen."""
+    return _paden_env("SIGNAAL_INNAME_URLS", ())

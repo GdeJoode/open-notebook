@@ -83,7 +83,7 @@ async def env(live_surrealdb, monkeypatch, app, mappen, git_flows):
 
     monkeypatch.setattr(agent_auth, "authenticate_request", _sleutel)
     vault, export, buiten = mappen
-    controle = Locatiecontrole([str(vault)], [str(export)], [str(buiten)])
+    controle = Locatiecontrole([str(vault)], [str(export)], [str(buiten)], [])
     app.dependency_overrides[get_source_map_service] = lambda: SourceMapService(
         locatiecontrole=controle)
     app.dependency_overrides[get_intake_service] = lambda: IntakeService(locatiecontrole=controle)
@@ -240,6 +240,75 @@ async def test_inhoudelijke_wijziging_trekt_bevestiging_in(env, app, wijziging) 
                 intrekking["person"]) == ("extern", "intern", "Testpersoon")
 
 
+async def _overgangen(onderwerp: str, rid: str) -> list[tuple[str, str]]:
+    return sorted((lg["from_classification"], lg["to_classification"])
+                  for lg in await _log(onderwerp, rid))
+
+
+@pytest.mark.parametrize("wijziging", [
+    {"location": "https://example.org/api/besluiten"},
+    {"route_type": "feed", "location": "https://example.org/feed.xml"},
+])
+async def test_intrekken_en_opnieuw_bevestigen_geeft_twee_logregels(env, app, wijziging) -> None:
+    async with _client(app) as c:
+        regel = await _bevestigde_regel(c)
+        r = await c.patch(f"/api/v1/source-map-rules/{regel['id']}",
+                          json={"rev": regel["rev"], "confirm": True, **wijziging})
+        assert r.status_code == 200, r.text
+        assert r.json()["effective_classification"] == "extern"
+        # Aanmaken (bevestiging), dan in een verzoek intrekking en bevestiging.
+        assert await _overgangen("source_map_rule", regel["id"]) == [
+            ("extern", "intern"), ("intern", "extern"), ("intern", "extern")]
+        assert {lg["person"] for lg in await _log("source_map_rule", regel["id"])} == {"Testpersoon"}
+
+
+async def test_activeren_en_bevestigen_in_een_verzoek(env, app) -> None:
+    async with _client(app) as c:
+        regel = await _bevestigde_regel(c)
+        pad = f"/api/v1/source-map-rules/{regel['id']}"
+        r = await c.patch(pad, json={"rev": regel["rev"], "active": False})
+        r = await c.patch(pad, json={"rev": r.json()["rev"], "active": True, "confirm": True})
+        assert r.status_code == 200, r.text
+        assert r.json()["effective_classification"] == "extern"
+        assert await _overgangen("source_map_rule", regel["id"]) == [
+            ("extern", "intern"), ("intern", "extern"), ("intern", "extern")]
+
+
+async def test_bevestigen_van_bevestigde_regel_geeft_409(env, app) -> None:
+    async with _client(app) as c:
+        regel = await _bevestigde_regel(c)
+        pad = f"/api/v1/source-map-rules/{regel['id']}"
+        r = await c.post(f"{pad}/confirm", json={"rev": regel["rev"]})
+        assert r.status_code == 409
+        # Ook met een beschrijvende wijziging: niets ingetrokken, dus al bevestigd.
+        r = await c.patch(pad, json={"rev": regel["rev"], "name": "x", "confirm": True})
+        assert r.status_code == 409
+        r = await c.get(pad)
+        assert (r.json()["rev"], r.json()["name"]) == (regel["rev"], regel["name"])
+        assert len(await _log("source_map_rule", regel["id"])) == 1
+
+
+async def test_gelijktijdig_bevestigen_en_wijzigen(env, app) -> None:
+    import asyncio
+
+    async with _client(app) as c:
+        regel = (await c.post("/api/v1/source-map-rules", json=_regel())).json()
+        pad = f"/api/v1/source-map-rules/{regel['id']}"
+        bevestig, wijzig = await asyncio.gather(
+            c.post(f"{pad}/confirm", json={"rev": regel["rev"]}),
+            c.patch(pad, json={"rev": regel["rev"], "location": "https://example.org/ander"}),
+        )
+        assert sorted([bevestig.status_code, wijzig.status_code]) == [200, 409]
+        na = (await c.get(pad)).json()
+        assert na["rev"] == regel["rev"] + 1
+        # Een PATCH met de rev van voor de bevestiging, na afloop: 409.
+        r = await c.patch(pad, json={"rev": regel["rev"], "location": "https://example.org/x"})
+        assert r.status_code == 409
+        if bevestig.status_code == 200:
+            assert na["effective_classification"] == "extern"
+            assert len(await _log("source_map_rule", regel["id"])) == 1
+
+
 @pytest.mark.parametrize("wijziging", [
     {"name": "Nieuwe naam"}, {"owner": "Testpersoon"}, {"document_type": ["motie"]}])
 async def test_beschrijvende_wijziging_houdt_bevestiging(env, app, wijziging) -> None:
@@ -373,23 +442,51 @@ async def test_locatie_in_vault_exportmap_of_via_koppeling_geeft_422(env, app, m
     r"E:\Data\inbox\x.pdf", "http://localhost/D:/%23%20Vault/x.md",
 ])
 async def test_windows_omwegen_geweigerd(locatie) -> None:
-    controle = Locatiecontrole([r"D:\# Vault"], [], [r"D:\Data\inbox"])
+    controle = Locatiecontrole([r"D:\# Vault"], [], [r"D:\Data\inbox"], [])
     with pytest.raises(VerbodenLocatieError):
         controle.controleer(locatie)
 
 
 @pytest.mark.parametrize("locatie", [
     r"D:\Data\inbox", r"D:\Data\inbox\verslag.pdf", "d:/data/INBOX/sub/x.pdf",
-    "/mnt/d/Data/inbox/x.pdf", "https://example.org/D:/# Vault", "https://localhost/api",
+    "/mnt/d/Data/inbox/x.pdf", "https://example.org/D:/# Vault", "https://example.org/api",
+    "http://8.8.8.8/feed.xml",
 ])
 async def test_toegestane_locaties(locatie) -> None:
-    Locatiecontrole([r"D:\# Vault"], [], [r"D:\Data\inbox"]).controleer(locatie)
+    Locatiecontrole([r"D:\# Vault"], [], [r"D:\Data\inbox"], []).controleer(locatie)
+
+
+@pytest.mark.parametrize("locatie", [
+    "http://127.0.0.2/api", "http://127.1/api", "http://2130706433/api",
+    "http://host.docker.internal/api", "http://localhost./api", "http://localhost/api",
+    "http://0.0.0.0/api", "http://[0:0:0:0:0:0:0:1]/api", "http://[::1]/api",
+    "http://[::ffff:127.0.0.1]/api", "http://10.1.2.3/api", "http://172.16.0.1/api",
+    "http://192.168.1.1/api", "http://169.254.169.254/latest", "http://[fe80::1]/api",
+    "http://[fc00::1]/api", "http://ollama:11434/api", "http://open-notebook/api",
+    "http://api.localhost/x", "smb://server/share/x.pdf", "ftp://example.org/x.pdf",
+    "ws://example.org/x", "http:///geen-host",
+])
+async def test_url_naar_interne_host_of_ander_schema_geweigerd(locatie) -> None:
+    with pytest.raises(VerbodenLocatieError):
+        Locatiecontrole([], [], [], []).controleer(locatie)
+
+
+async def test_url_allowlist(tmp_path) -> None:
+    vault = tmp_path / "vault"
+    controle = Locatiecontrole([str(vault)], [], [], ["localhost", "ollama"])
+    controle.controleer("http://localhost:8080/api")
+    controle.controleer("http://localhost./api")
+    controle.controleer("http://ollama:11434/api")
+    with pytest.raises(VerbodenLocatieError):
+        controle.controleer(f"http://localhost{vault}/x.md")
+    with pytest.raises(VerbodenLocatieError):
+        controle.controleer("http://127.0.0.2/api")
 
 
 async def test_zonder_innamemappen_geen_pad() -> None:
     with pytest.raises(VerbodenLocatieError):
-        Locatiecontrole([], [], []).controleer("/data/inbox/x.pdf")
-    Locatiecontrole([], [], []).controleer("https://example.org/api")
+        Locatiecontrole([], [], [], []).controleer("/data/inbox/x.pdf")
+    Locatiecontrole([], [], [], []).controleer("https://example.org/api")
 
 
 # --------------------------------------------------------------------------
@@ -420,6 +517,26 @@ async def test_batch_zonder_keuze_is_intern(env, app, mappen) -> None:
         assert r.json()["effective_classification"] == "intern"
         assert [lg["to_classification"] for lg in await _log("intake_batch", r.json()["id"])] == [
             "extern", "intern"]
+
+
+async def test_batch_bestanden_wijzigen_en_bevestigen(env, app, mappen) -> None:
+    inbox = mappen[2] / "inbox"
+    async with _client(app) as c:
+        r = await c.post("/api/v1/intake/batches", json={
+            "route": "inname_pdf", "classification": "extern", "confirm": True,
+            "files": [str(inbox / "a.pdf")]})
+        batch = r.json()
+        assert r.status_code == 201 and batch["effective_classification"] == "extern"
+        r = await c.patch(f"/api/v1/intake/batches/{batch['id']}", json={
+            "rev": batch["rev"], "files": [str(inbox / "a.pdf"), str(inbox / "b.pdf")],
+            "confirm": True})
+        assert r.status_code == 200, r.text
+        assert r.json()["effective_classification"] == "extern"
+        assert await _overgangen("intake_batch", batch["id"]) == [
+            ("extern", "intern"), ("intern", "extern"), ("intern", "extern")]
+        r = await c.post(f"/api/v1/intake/batches/{batch['id']}/confirm",
+                         json={"rev": r.json()["rev"]})
+        assert r.status_code == 409
 
 
 async def test_batch_alleen_bij_een_regel_voor_bulkupload(env, app, mappen) -> None:

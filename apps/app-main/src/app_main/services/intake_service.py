@@ -29,7 +29,13 @@ from surrealdb_service.repositories.intake import (
 from surrealdb_service.repositories.source_map import SourceMapRuleRepository
 
 from app_main.exceptions import InvalidInputError, NotFoundError
-from app_main.services.source_map_service import Locatiecontrole, beheerder, logregel
+from app_main.services.source_map_service import (
+    Locatiecontrole,
+    beheerder,
+    classificatielogs,
+    controleer_rev,
+    logregel,
+)
 
 #: Velden van een batch die een eerdere bevestiging intrekken als ze veranderen.
 _BATCH_TREKT_BEVESTIGING_IN = ("classification", "route", "files")
@@ -123,6 +129,7 @@ class IntakeService:
     ) -> IntakeBatch:
         person = beheerder(permission, person)
         huidig = await self.get_batch(batch_id)
+        controleer_rev(rev, huidig.rev, huidig.id)
         leeg = [k for k in ("route", "classification", "files") if k in changes and changes[k] is None]
         if leeg:
             raise InvalidInputError(f"Verplicht veld leeg: {', '.join(leeg)}")
@@ -133,22 +140,16 @@ class IntakeService:
         if any(getattr(na, k) != getattr(huidig, k) for k in _BATCH_TREKT_BEVESTIGING_IN):
             data.update(classification_confirmed_by=None, classification_confirmed_at=None)
             na = na.model_copy(update={"classification_confirmed_by": None})
+        tussen = na.effectieve_classificatie
         if bevestig:
             if na.classification != "extern":
                 raise InvalidInputError("Alleen extern wordt bevestigd")
             data.update(classification_confirmed_by=person, classification_confirmed_at=_nu())
-            na = na.model_copy(update={"classification_confirmed_by": person})
-        # Eén logregel als de effectieve classificatie verandert (bevestiging of
-        # intrekking), zoals bij een bronkaartregel.
-        log = None
-        voor, daarna = huidig.effectieve_classificatie, na.effectieve_classificatie
-        if voor != daarna:
-            log = logregel(
-                van=voor, naar=daarna,
-                reden=reason or ("Batch extern bevestigd" if daarna == "extern"
-                                 else "Bevestiging batch ingetrokken"),
-                key_id=key_id, person=person)
-        return await self.batch_repo.update(str(huidig.id), rev=rev, data=data, door=person, log=log)
+        logs = classificatielogs(
+            voor=huidig.effectieve_classificatie, tussen=tussen, bevestig=bevestig,
+            reden=reason, onderwerp="Batch", key_id=key_id, person=person)
+        return await self.batch_repo.update(
+            str(huidig.id), rev=huidig.rev, data=data, door=person, logs=logs)
 
     async def confirm_batch(self, batch_id: str, *, rev: int, permission: Right,
                             person: Optional[str], key_id: str,
@@ -211,6 +212,7 @@ class IntakeService:
         """Het besluit van de beheerder: route en classificatie (status ``besloten``)."""
         person = beheerder(permission, person)
         huidig = await self.get_item(item_id)
+        controleer_rev(rev, huidig.rev, huidig.id)
         if huidig.status != "wacht":
             # Het besluit ligt vast; een ander besluit vraagt een nieuw item.
             raise IntakeConflictError("Over dit item is al besloten")
@@ -220,14 +222,15 @@ class IntakeService:
                        reden=reason or "Besluit over wachtrij-item",
                        key_id=key_id, person=person)
         return await self.item_repo.update(
-            str(huidig.id), rev=rev, data={"status": "besloten", "decision": besluit},
-            door=person, log=log)
+            str(huidig.id), rev=huidig.rev, data={"status": "besloten", "decision": besluit},
+            door=person, logs=[log])
 
     async def mark_processed(
         self, item_id: str, *, rev: int, run_id: Optional[str], door: str
     ) -> IntakeItem:
         """Zet een besloten item op ``verwerkt`` (``pijplijn``)."""
         huidig = await self.get_item(item_id)
+        controleer_rev(rev, huidig.rev, huidig.id)
         if huidig.status != "besloten":
             raise IntakeConflictError("Alleen een besloten item wordt verwerkt")
         data: Dict[str, Any] = {"status": "verwerkt"}
@@ -236,4 +239,4 @@ class IntakeService:
             if run is None:
                 raise InvalidInputError("Geen id van een verwerkingsrun")
             data["run"] = run
-        return await self.item_repo.update(str(huidig.id), rev=rev, data=data, door=door)
+        return await self.item_repo.update(str(huidig.id), rev=huidig.rev, data=data, door=door)
