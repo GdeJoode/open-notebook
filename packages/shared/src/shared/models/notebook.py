@@ -106,8 +106,10 @@ class ChatSession(ObjectModel):
     table_name: ClassVar[str] = "chat_session"
 
     title: Optional[str] = None
+    # Genegeerd sinds F2-09: het modelregister bepaalt het model. Het veld blijft
+    # in het schema van chat_session (migratie 8) tot de chat in F3 opnieuw komt.
     model_override: Optional[str] = Field(
-        None, description="Override the default model for this session"
+        None, description="Genegeerd: het modelregister bepaalt het model (F2-09, ADR 0007)"
     )
     metadata: Dict[str, Any] = Field(default_factory=dict)
     classification: Optional[Classification] = Field(

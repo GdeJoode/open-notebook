@@ -12,7 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { Search, ChevronDown, AlertCircle, Settings, Save, MessageCircleQuestion } from 'lucide-react'
+import { Search, ChevronDown, AlertCircle, Save, MessageCircleQuestion } from 'lucide-react'
 import { PageBody } from '@/components/layout/PageBody'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { useSearch } from '@/lib/hooks/use-search'
@@ -22,7 +22,6 @@ import { modelVoorTaak } from '@/lib/utils/modelregister'
 import { useModalManager } from '@/lib/hooks/use-modal-manager'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { StreamingResponse } from '@/components/search/StreamingResponse'
-import { AdvancedModelsDialog } from '@/components/search/AdvancedModelsDialog'
 import { SaveToNotebooksDialog } from '@/components/search/SaveToNotebooksDialog'
 import { ErrorBanner } from '@/components/common/ErrorBanner'
 import { displaySourceTitle } from '@/lib/utils/source-title'
@@ -37,14 +36,6 @@ export default function SearchPage() {
 
   // Ask state
   const [askQuestion, setAskQuestion] = useState('')
-
-  // Advanced models dialog
-  const [showAdvancedModels, setShowAdvancedModels] = useState(false)
-  const [customModels, setCustomModels] = useState<{
-    strategy: string
-    answer: string
-    finalAnswer: string
-  } | null>(null)
 
   // Save to notebooks dialog
   const [showSaveDialog, setShowSaveDialog] = useState(false)
@@ -87,7 +78,8 @@ export default function SearchPage() {
   const handleAsk = () => {
     if (!askQuestion.trim() || !modelDefaults?.default_chat_model) return
 
-    const models = customModels || {
+    // Het register bepaalt het model; een eigen keuze bestaat niet meer (F2-09)
+    const models = {
       strategy: modelDefaults.default_chat_model,
       answer: modelDefaults.default_chat_model,
       finalAnswer: modelDefaults.default_chat_model
@@ -162,33 +154,10 @@ export default function SearchPage() {
                 </div>
               ) : (
                 <>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs text-muted-foreground">
-                        {customModels ? 'Using Custom Models' : 'Using Default Models'}
-                      </Label>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setShowAdvancedModels(true)}
-                        disabled={ask.isStreaming}
-                        className="h-auto py-1 px-2"
-                      >
-                        <Settings className="h-3 w-3 mr-1" />
-                        Advanced
-                      </Button>
-                    </div>
-                    <div className="flex gap-2 text-xs flex-wrap">
-                      <Badge variant="secondary">
-                        Strategy: {resolveModelName(customModels?.strategy || modelDefaults?.default_chat_model)}
-                      </Badge>
-                      <Badge variant="secondary">
-                        Answer: {resolveModelName(customModels?.answer || modelDefaults?.default_chat_model)}
-                      </Badge>
-                      <Badge variant="secondary">
-                        Final: {resolveModelName(customModels?.finalAnswer || modelDefaults?.default_chat_model)}
-                      </Badge>
-                    </div>
+                  <div className="flex gap-2 text-xs flex-wrap">
+                    <Badge variant="secondary">
+                      Model (register): {resolveModelName(modelDefaults?.default_chat_model)}
+                    </Badge>
                   </div>
 
                   <div className="flex flex-col sm:flex-row gap-2">
@@ -235,18 +204,6 @@ export default function SearchPage() {
                 strategy={ask.strategy}
                 answers={ask.answers}
                 finalAnswer={ask.finalAnswer}
-              />
-
-              {/* Advanced Models Dialog */}
-              <AdvancedModelsDialog
-                open={showAdvancedModels}
-                onOpenChange={setShowAdvancedModels}
-                defaultModels={{
-                  strategy: customModels?.strategy || modelDefaults?.default_chat_model || '',
-                  answer: customModels?.answer || modelDefaults?.default_chat_model || '',
-                  finalAnswer: customModels?.finalAnswer || modelDefaults?.default_chat_model || ''
-                }}
-                onSave={setCustomModels}
               />
 
               {/* Save to Notebooks Dialog */}

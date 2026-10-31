@@ -216,11 +216,6 @@ export function SessionManager({
                             {session.message_count} messages
                           </Badge>
                         )}
-                        {session.model_override && (
-                          <Badge variant="outline" className="mt-2 ml-2 text-xs">
-                            {session.model_override}
-                          </Badge>
-                        )}
                       </>
                     )}
                   </div>

@@ -158,9 +158,9 @@ class AskRequest(BaseModel):
     question: str = Field(..., description="Question to ask the knowledge base")
     # F2-08: de modellen komen uit het register; deze velden tellen niet meer
     # en vervallen met F2-09.
-    strategy_model: Optional[str] = Field(None, description="Vervalt; het register beslist")
-    answer_model: Optional[str] = Field(None, description="Vervalt; het register beslist")
-    final_answer_model: Optional[str] = Field(None, description="Vervalt; het register beslist")
+    strategy_model: Optional[str] = Field(None, description="Genegeerd: het modelregister bepaalt het model (F2-09, ADR 0007)")
+    answer_model: Optional[str] = Field(None, description="Genegeerd: het modelregister bepaalt het model (F2-09, ADR 0007)")
+    final_answer_model: Optional[str] = Field(None, description="Genegeerd: het modelregister bepaalt het model (F2-09, ADR 0007)")
 
 
 class AskResponse(BaseModel):

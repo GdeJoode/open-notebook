@@ -28,14 +28,14 @@ class CreateSessionRequest(BaseModel):
     notebook_id: str = Field(..., description="Notebook ID to create session for")
     title: Optional[str] = Field(None, description="Optional session title")
     model_override: Optional[str] = Field(
-        None, description="Optional model override for this session"
+        None, description="Genegeerd: het modelregister bepaalt het model (F2-09, ADR 0007)"
     )
 
 
 class UpdateSessionRequest(BaseModel):
     title: Optional[str] = Field(None, description="New session title")
     model_override: Optional[str] = Field(
-        None, description="Model override for this session"
+        None, description="Genegeerd: het modelregister bepaalt het model (F2-09, ADR 0007)"
     )
 
 
@@ -56,7 +56,7 @@ class ChatSessionResponse(BaseModel):
         None, description="Number of messages in session"
     )
     model_override: Optional[str] = Field(
-        None, description="Model override for this session"
+        None, description="Genegeerd: het modelregister bepaalt het model (F2-09, ADR 0007)"
     )
 
 
@@ -73,7 +73,7 @@ class ExecuteChatRequest(BaseModel):
         ..., description="Chat context with sources and notes"
     )
     model_override: Optional[str] = Field(
-        None, description="Optional model override for this message"
+        None, description="Genegeerd: het modelregister bepaalt het model (F2-09, ADR 0007)"
     )
 
 

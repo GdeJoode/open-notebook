@@ -14,7 +14,6 @@ import {
   SourceChatContextIndicator,
   BaseChatSession
 } from '@/lib/types/api'
-import { ModelSelector } from './ModelSelector'
 import { ContextIndicator } from '@/components/common/ContextIndicator'
 import { SessionManager } from '@/components/source/SessionManager'
 import { MessageActions } from '@/components/source/MessageActions'
@@ -34,9 +33,7 @@ interface ChatPanelProps {
   messages: SourceChatMessage[]
   isStreaming: boolean
   contextIndicators: SourceChatContextIndicator | null
-  onSendMessage: (message: string, modelOverride?: string) => void
-  modelOverride?: string
-  onModelChange?: (model?: string) => void
+  onSendMessage: (message: string) => void
   // Session management props
   sessions?: BaseChatSession[]
   currentSessionId?: string | null
@@ -59,8 +56,6 @@ export function ChatPanel({
   isStreaming,
   contextIndicators,
   onSendMessage,
-  modelOverride,
-  onModelChange,
   sessions = [],
   currentSessionId,
   onCreateSession,
@@ -100,7 +95,7 @@ export function ChatPanel({
 
   const handleSend = () => {
     if (input.trim() && !isStreaming) {
-      onSendMessage(input.trim(), modelOverride)
+      onSendMessage(input.trim())
       setInput('')
     }
   }
@@ -274,18 +269,6 @@ export function ChatPanel({
 
         {/* Input Area */}
         <div className="flex-shrink-0 p-4 space-y-3 border-t">
-          {/* Model selector */}
-          {onModelChange && (
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">Model</span>
-              <ModelSelector
-                currentModel={modelOverride}
-                onModelChange={onModelChange}
-                disabled={isStreaming}
-              />
-            </div>
-          )}
-
           <div className="flex gap-2 items-end">
             <Textarea
               value={input}

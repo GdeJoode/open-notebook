@@ -29,14 +29,14 @@ class CreateSourceChatSessionRequest(BaseModel):
     source_id: str = Field(..., description="Source ID to create chat session for")
     title: Optional[str] = Field(None, description="Optional session title")
     model_override: Optional[str] = Field(
-        None, description="Optional model override for this session"
+        None, description="Genegeerd: het modelregister bepaalt het model (F2-09, ADR 0007)"
     )
 
 
 class UpdateSourceChatSessionRequest(BaseModel):
     title: Optional[str] = Field(None, description="New session title")
     model_override: Optional[str] = Field(
-        None, description="Model override for this session"
+        None, description="Genegeerd: het modelregister bepaalt het model (F2-09, ADR 0007)"
     )
 
 
@@ -64,7 +64,7 @@ class SourceChatSessionResponse(BaseModel):
     title: str = Field(..., description="Session title")
     source_id: str = Field(..., description="Source ID")
     model_override: Optional[str] = Field(
-        None, description="Model override for this session"
+        None, description="Genegeerd: het modelregister bepaalt het model (F2-09, ADR 0007)"
     )
     created: str = Field(..., description="Creation timestamp")
     updated: str = Field(..., description="Last update timestamp")
@@ -85,7 +85,7 @@ class SourceChatSessionWithMessagesResponse(SourceChatSessionResponse):
 class SendMessageRequest(BaseModel):
     message: str = Field(..., description="User message content")
     model_override: Optional[str] = Field(
-        None, description="Optional model override for this message"
+        None, description="Genegeerd: het modelregister bepaalt het model (F2-09, ADR 0007)"
     )
 
 

@@ -59,9 +59,9 @@ async def provision_langchain_model(
 ) -> BaseChatModel:
     """Het chatmodel voor een stap van de chatgrafen, via de modelpoort (F2-08).
 
-    Het model komt uit het register bij de taak (ADR 0007). ``model_id`` is een
-    keuze uit de vroegere modelrijen in de database; die telt niet meer en
-    vervalt in F2-09. ``classificatie`` is die van de invoer (verplicht);
+    Het model komt uit het register bij de taak (ADR 0007). ``model_id`` (ook een
+    ``model_override`` van een chatsessie) wordt genegeerd: er zijn geen
+    modelrijen meer (F2-09). ``classificatie`` is die van de invoer (verplicht);
     ``onbekend`` telt als intern.
 
     ``kwargs``: ``max_tokens`` en ``structured`` (JSON-antwoord).

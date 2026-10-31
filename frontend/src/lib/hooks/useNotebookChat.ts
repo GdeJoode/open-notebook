@@ -102,7 +102,7 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
   }, [notebookId, sources, notes, contextSelections])
 
   // Send message (synchronous, no streaming)
-  const sendMessage = useCallback(async (message: string, modelOverride?: string) => {
+  const sendMessage = useCallback(async (message: string) => {
     let sessionId = currentSessionId
 
     // Auto-create session if none exists
@@ -141,8 +141,7 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
       const response = await chatApi.sendMessage({
         session_id: sessionId,
         message,
-        context,
-        model_override: modelOverride ?? (currentSession?.model_override ?? undefined)
+        context
       })
 
       setMessages(response.messages)
@@ -157,7 +156,6 @@ export function useNotebookChat({ notebookId, sources, notes, contextSelections 
   }, [
     notebookId,
     currentSessionId,
-    currentSession,
     buildContext,
     refetchCurrentSession,
     queryClient,

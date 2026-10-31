@@ -321,12 +321,7 @@ export interface ExtractionResultResponse {
 
 export interface RunEntitiesOptions {
   ontology_name?: string
-  extractor_type?: 'llm' | 'langextract'
-  langextract_model_id?: string
-  langextract_model_url?: string
-  langextract_temperature?: number
-  langextract_use_schema_constraints?: boolean
-  langextract_fence_output?: boolean
+  extractor_type?: 'llm'
 }
 
 export interface APIError {
@@ -341,12 +336,10 @@ export interface BaseChatSession {
   created: string
   updated: string
   message_count?: number
-  model_override?: string | null
 }
 
 export interface SourceChatSession extends BaseChatSession {
   source_id: string
-  model_override?: string
 }
 
 export interface SourceChatMessage {
@@ -370,17 +363,14 @@ export interface SourceChatSessionWithMessages extends SourceChatSession {
 export interface CreateSourceChatSessionRequest {
   source_id: string
   title?: string
-  model_override?: string
 }
 
 export interface UpdateSourceChatSessionRequest {
   title?: string
-  model_override?: string
 }
 
 export interface SendMessageRequest {
   message: string
-  model_override?: string
 }
 
 export interface SourceChatStreamEvent {
@@ -410,12 +400,10 @@ export interface NotebookChatSessionWithMessages extends NotebookChatSession {
 export interface CreateNotebookChatSessionRequest {
   notebook_id: string
   title?: string
-  model_override?: string
 }
 
 export interface UpdateNotebookChatSessionRequest {
   title?: string
-  model_override?: string | null
 }
 
 export interface ContextSourceEntry {
@@ -442,7 +430,6 @@ export interface SendNotebookChatMessageRequest {
   session_id: string
   message: string
   context: ChatContext
-  model_override?: string
 }
 
 export interface BuildContextRequest {
