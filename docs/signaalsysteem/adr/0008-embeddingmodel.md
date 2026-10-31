@@ -76,3 +76,5 @@ Optie 1: `mxbai-embed-large-v1` als GGUF, `ChristianAzinn/mxbai-embed-large-v1-g
 - Input voor proef 3: het videogeheugen van het gekozen embeddingmodel in de vaste groep. Gemeten: 584 MiB (P3, 30-10).
 - llama-server draait het model met `-c 512` (P3, 30-10); dat is de contextlengte van mxbai-embed-large. Een fragment van meer dan 512 tokens past niet in één aanvraag. De bouwtaak voor `pipelines/embeddings` legt vast wat er dan gebeurt (afkappen of opdelen) en test dat.
 - De tests die 1 024 dimensies vastleggen, blijven gelijk.
+
+**Uitwerking in F2-08 (31-10).** mxbai-embed-large heeft een venster van 512 tokens. Een fragment wordt vóór de embedding afgekapt op 1 536 tekens; bij een lengtefout (`exceed_context_size_error`) halveert de tekst, nooit onder 510 tekens. Afkappen in plaats van opdelen, zodat elk fragment één vector houdt. Gevolg: tekst in de staart van een lang fragment is via vectorzoeken niet te vinden (tekstzoeken vindt die wel). Dat wordt zichtbaar gemaakt per embedding (F2-15), en F2-17 begrenst de fragmentgrootte van docling-serve op het venster van het embeddingmodel, zodat afkappen een uitzondering wordt.

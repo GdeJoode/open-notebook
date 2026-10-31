@@ -90,3 +90,5 @@ Optie 2.
   - een test dat `ModelGate` een cloudmodel weigert bij invoer met classificatie intern, ook als het lokale model faalt;
   - de bestaande `test_embedding_local_guardrail.py` blijft en wordt aangepast aan de nieuwe poort.
 - **Documentatie:** `ARCHITECTURE.md` paragraaf 8 wordt herschreven.
+
+**Uitwerking in F2-08 (31-10).** De fork gebruikt geen Esperanto `openai-compatible`, maar een eigen kleine httpx-client (`LlamaSwapClient` in `packages/llm-manager/src/llm_manager/providers/factory.py`) met een vast adres `http://llama-swap:8080/v1` en `trust_env=False`. Reden: Esperanto verpakt een HTTP 502 als `RuntimeError` met de antwoordtekst; dan werkt de herhaalpoging uit ADR 0009 niet en kan modeltekst in logs belanden. Gevolg: dit is code in plaats van alleen configuratie (afwijking van FO 13.2 punt 5); de Esperanto-afhankelijkheden gaan in F2-09 weg. Alle aanroepen in `apps/`, `packages/` en `pipelines/` lopen via `PoortAanroeper` en `ModelGate`; `services/` valt daarbuiten tot F2-17 en F2-23.
