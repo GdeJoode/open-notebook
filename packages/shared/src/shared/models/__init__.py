@@ -36,7 +36,6 @@ from shared.models.jobs import (
     JobStatsResponse,
     JobSubmitRequest,
 )
-from shared.models.llm import ModelUsageRecord
 from shared.models.notebook import ChatMessage, ChatSession, Note, Notebook
 from shared.models.notebook_schema import (
     DEFAULT_BASE_ONTOLOGY,
@@ -55,8 +54,6 @@ __all__ = [
     # Base models
     "ObjectModel",
     "RecordModel",
-    # LLM models
-    "ModelUsageRecord",
     # Notebook models
     "Notebook",
     "Note",
