@@ -1,0 +1,129 @@
+-- ============================================================================
+-- Migratie 98: importeindpunt na de vierde review (F2-14, ADR 0001, 0003).
+--
+-- 1. `fn::inhoud_intern($hash, $vast)` zonder recursie. Eerst de hele groep:
+--    alle bronnen en hashes die via versies met `$hash` verbonden zijn, in een
+--    lus met de tussenstand in een tijdelijk record `inhoud_groep` (een LET in
+--    een FOR-lus verandert de buitenste variabele niet). Dan, bij `$vast`, de
+--    records `inhoud` van de groep op intern, en daarna met vaste statements
+--    de bronnen (een `beheer_melding` per bron die echt van extern naar intern
+--    ging) en de versies. Het event `inhoud_intern_versie` doet niets als het
+--    record `inhoud` al intern is, zodat de events niet in elkaar grijpen.
+--    Een recordveld wordt met `$lijst CONTAINS veld` gezocht: `veld INSIDE
+--    $lijst` gaf onder v2.7.0 voor `source_version.source` geen rijen.
+-- 2. `inhoud` wordt alleen intern bij een expliciet intern besluit: een
+--    interne versie (import of herclassificatie) en een intern itembesluit
+--    (`$vast`). Een interne batch maakt bestaande externe bronnen met de hash
+--    intern, maar zet het record niet: de batch kan nog extern worden
+--    bevestigd. Onbevestigd extern en onbeslist tellen alleen mee in
+--    `fn::inhoud_intern_bekend`. Een batch of een nieuw item schrijft het
+--    record wel aan (zonder de classificatie te wijzigen), zodat een
+--    gelijktijdige externe import een schrijfconflict krijgt.
+-- 3. `inhoud` wordt alleen losser binnen de herclassificatie van een bron
+--    naar extern (`$beheer_inhoud_los`, alleen in `SourceRepository.reclassify`).
+-- 4. `version_seq`: 0 of 1 bij het begin, daarna gelijk of één hoger; nooit
+--    NONE (DEFAULT ALWAYS). Geen backfill: lege database (B3).
+--
+-- Idempotent via OVERWRITE. Alleen hele regels commentaar: de migratieloader
+-- plakt de regels aan elkaar.
+-- ============================================================================
+
+-- 3. Alleen strenger, behalve in de herclassificatie naar extern.
+DEFINE FIELD OVERWRITE classification ON inhoud TYPE string
+    ASSERT $value IN ['intern', 'extern']
+        AND ($before = NONE OR $before = 'extern' OR $value = 'intern' OR $beheer_inhoud_los = true);
+
+-- 1. Tijdelijke tussenstand van de groep, binnen één transactie.
+DEFINE TABLE OVERWRITE inhoud_groep SCHEMAFULL;
+DEFINE FIELD OVERWRITE hashes ON inhoud_groep TYPE array<string> DEFAULT [];
+DEFINE FIELD OVERWRITE bronnen ON inhoud_groep TYPE array<record<source>> DEFAULT [];
+
+DEFINE FUNCTION OVERWRITE fn::inhoud_intern($hash: any, $vast: bool) {
+    LET $g = type::thing('inhoud_groep', rand::uuid());
+    CREATE $g SET hashes = [$hash], bronnen = [] RETURN NONE;
+    FOR $i IN array::repeat(0, 1000) {
+        LET $st = (SELECT hashes, bronnen FROM ONLY $g);
+        LET $b = array::distinct((SELECT VALUE source FROM source_version WHERE content_hash INSIDE $st.hashes));
+        LET $h = array::union($st.hashes, array::distinct((SELECT VALUE content_hash FROM source_version WHERE $b CONTAINS source)));
+        IF array::len($b) = array::len($st.bronnen) AND array::len($h) = array::len($st.hashes) {
+            BREAK;
+        };
+        UPDATE $g SET hashes = $h, bronnen = $b RETURN NONE;
+    };
+    LET $groep = (SELECT hashes, bronnen FROM ONLY $g);
+    DELETE $g RETURN NONE;
+    FOR $h IN $groep.hashes {
+        IF $vast {
+            UPSERT type::thing('inhoud', $h) SET classification = 'intern' RETURN NONE;
+        } ELSE {
+            UPSERT type::thing('inhoud', $h) SET classification = classification ?? 'extern' RETURN NONE;
+        };
+    };
+    LET $gewijzigd = (UPDATE $groep.bronnen SET classification = 'intern'
+        WHERE classification = 'extern' RETURN VALUE id);
+    FOR $bron IN $gewijzigd {
+        CREATE beheer_melding CONTENT {
+            soort: 'inhoud_intern',
+            melding: 'Dezelfde inhoud is intern binnengekomen; bron intern gemaakt',
+            source: $bron
+        } RETURN NONE;
+    };
+    UPDATE source_version SET classification = 'intern'
+        WHERE $groep.bronnen CONTAINS source AND classification != 'intern' RETURN NONE;
+    RETURN array::len($groep.bronnen);
+};
+
+DEFINE EVENT OVERWRITE inhoud_intern_versie ON source_version
+    WHEN $after.classification = 'intern' AND ($event = 'CREATE' OR $before.classification != 'intern')
+        AND (SELECT VALUE classification FROM ONLY type::thing('inhoud', $after.content_hash)) != 'intern'
+    THEN { fn::inhoud_intern($after.content_hash, true); };
+
+DEFINE EVENT OVERWRITE inhoud_intern_item ON intake_item
+    WHEN $event = 'UPDATE' AND $before.decision = NONE AND $after.decision.classification = 'intern'
+    THEN { fn::inhoud_intern(string::replace($after.content_hash, 'sha256:', ''), true); };
+
+-- 2. Een nieuw item schrijft het record aan (geen classificatie).
+DEFINE EVENT OVERWRITE inhoud_item_aangemeld ON intake_item
+    WHEN $event = 'CREATE'
+    THEN {
+        UPSERT type::thing('inhoud', string::replace($after.content_hash, 'sha256:', ''))
+            SET classification = classification ?? 'extern' RETURN NONE;
+    };
+
+-- 2. Een interne batch: bestaande externe bronnen intern, record niet vast.
+-- Een onbevestigde externe batch schrijft alleen het record aan.
+DEFINE EVENT OVERWRITE inhoud_intern_batch ON intake_batch
+    WHEN $event IN ['CREATE', 'UPDATE'] AND !fn::batch_effectief_extern($after)
+        AND ($event = 'CREATE' OR fn::batch_effectief_extern($before)
+            OR $before.classification != $after.classification
+            OR $before.file_hashes != $after.file_hashes)
+    THEN {
+        FOR $f IN $after.file_hashes ?? [] {
+            IF $after.classification = 'intern' {
+                fn::inhoud_intern(string::replace($f.content_hash, 'sha256:', ''), false);
+            } ELSE {
+                UPSERT type::thing('inhoud', string::replace($f.content_hash, 'sha256:', ''))
+                    SET classification = classification ?? 'extern' RETURN NONE;
+            };
+        };
+    };
+
+-- 3. Wie houdt deze inhoud nog intern, buiten `$bron`? Andere interne
+-- versies, wachtrij-items die intern zijn of nog geen besluit hebben, en
+-- batches die niet effectief extern zijn. Voor de herclassificatie naar extern.
+DEFINE FUNCTION OVERWRITE fn::inhoud_elders_intern($hashes: array, $bron: any) {
+    LET $items = $hashes.map(|$h| 'sha256:' + $h);
+    RETURN array::concat(array::concat(
+        (SELECT VALUE id FROM source_version WHERE content_hash INSIDE $hashes
+            AND source != $bron AND classification = 'intern'),
+        (SELECT VALUE id FROM intake_item WHERE content_hash INSIDE $items
+            AND (decision = NONE OR decision.classification != 'extern'))),
+        (SELECT VALUE id FROM intake_batch WHERE file_hashes.*.content_hash CONTAINSANY $items
+            AND (classification != 'extern' OR classification_confirmed_by = NONE)));
+};
+
+-- 4. Versieteller.
+DEFINE FIELD OVERWRITE version_seq ON source TYPE int DEFAULT ALWAYS 0
+    ASSERT ($before = NONE AND $value IN [0, 1]) OR $value = $before OR $value = $before + 1;
+
+RETURN NONE;

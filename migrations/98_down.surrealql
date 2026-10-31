@@ -1,0 +1,45 @@
+-- ============================================================================
+-- Migratie 98 terug (F2-14): de vorm van migratie 97. Idempotent.
+-- ============================================================================
+
+REMOVE EVENT IF EXISTS inhoud_item_aangemeld ON intake_item;
+REMOVE FUNCTION IF EXISTS fn::inhoud_elders_intern;
+REMOVE TABLE IF EXISTS inhoud_groep;
+DEFINE FIELD OVERWRITE classification ON inhoud TYPE string
+    ASSERT $value IN ['intern', 'extern'] AND ($before = NONE OR $before = 'extern' OR $value = 'intern');
+DEFINE FUNCTION OVERWRITE fn::inhoud_intern($hash: any) {
+    UPSERT type::thing('inhoud', $hash) SET classification = 'intern' RETURN NONE;
+    LET $bronnen = array::distinct((SELECT VALUE source FROM source_version WHERE content_hash = $hash));
+    FOR $b IN $bronnen {
+        LET $gewijzigd = (UPDATE $b SET classification = 'intern' WHERE classification = 'extern' RETURN id);
+        IF array::len($gewijzigd) > 0 {
+            CREATE beheer_melding CONTENT {
+                soort: 'inhoud_intern',
+                melding: 'Dezelfde inhoud is intern binnengekomen; bron intern gemaakt',
+                source: $b
+            } RETURN NONE;
+        };
+    };
+    UPDATE source_version SET classification = 'intern'
+        WHERE content_hash = $hash AND classification != 'intern' RETURN NONE;
+    RETURN array::len($bronnen);
+};
+DEFINE EVENT OVERWRITE inhoud_intern_versie ON source_version
+    WHEN $after.classification = 'intern' AND ($event = 'CREATE' OR $before.classification != 'intern')
+    THEN { fn::inhoud_intern($after.content_hash); };
+DEFINE EVENT OVERWRITE inhoud_intern_item ON intake_item
+    WHEN $event = 'UPDATE' AND $before.decision = NONE AND $after.decision.classification = 'intern'
+    THEN { fn::inhoud_intern(string::replace($after.content_hash, 'sha256:', '')); };
+DEFINE EVENT OVERWRITE inhoud_intern_batch ON intake_batch
+    WHEN $event IN ['CREATE', 'UPDATE'] AND !fn::batch_effectief_extern($after)
+        AND ($event = 'CREATE' OR fn::batch_effectief_extern($before)
+            OR $before.file_hashes != $after.file_hashes)
+    THEN {
+        FOR $f IN $after.file_hashes ?? [] {
+            fn::inhoud_intern(string::replace($f.content_hash, 'sha256:', ''));
+        };
+    };
+DEFINE FIELD OVERWRITE version_seq ON source TYPE option<int>
+    ASSERT $value = NONE OR ($value >= 0 AND ($before = NONE OR $value >= $before));
+
+RETURN NONE;
