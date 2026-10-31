@@ -131,6 +131,8 @@ class IntakeBatch(ObjectModel):
     route: str
     source_map_rule: Optional[str] = None
     files: List[str] = Field(default_factory=list)
+    #: Per bestand de SHA-256 die de fork zelf berekende (F2-14, migratie 95).
+    file_hashes: List[Dict[str, Any]] = Field(default_factory=list)
     created_by: str
     rev: int = 0
     modified_by: Optional[str] = None

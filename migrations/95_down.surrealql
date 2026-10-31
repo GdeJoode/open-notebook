@@ -1,0 +1,19 @@
+-- ============================================================================
+-- Migratie 95 terug (F2-14).
+--
+-- De indexen op `content_hash` gaan weg. `dn_run_ref` krijgt de velden van
+-- migratie 90 terug, zonder UNIQUE: na een tweede versie in dezelfde run zijn
+-- er dubbele (bron, run, `self_ref`), en terugdraaien moet dan ook lukken.
+-- `file_hashes` blijft als optioneel veld bestaan (geen herkomst wissen).
+-- Idempotent: IF EXISTS en OVERWRITE.
+-- ============================================================================
+
+REMOVE INDEX IF EXISTS idx_source_version_content_hash ON source_version;
+REMOVE INDEX IF EXISTS idx_intake_item_content_hash ON intake_item;
+DEFINE INDEX OVERWRITE dn_run_ref ON doc_node FIELDS source, run, self_ref;
+REMOVE FIELD IF EXISTS file_hashes.*.content_hash ON intake_batch;
+REMOVE FIELD IF EXISTS file_hashes.*.path ON intake_batch;
+REMOVE FIELD IF EXISTS file_hashes.* ON intake_batch;
+DEFINE FIELD OVERWRITE file_hashes ON intake_batch FLEXIBLE TYPE option<array<object>>;
+
+RETURN NONE;

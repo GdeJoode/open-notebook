@@ -1,0 +1,31 @@
+-- ============================================================================
+-- Migratie 95: importeindpunt na de review (F2-14, ADR 0010, 0001, 0019).
+--
+-- 1. Indexen op `content_hash` van `source_version` en `intake_item`: de import
+--    weigert `extern` als dezelfde ruwe inhoud al intern bekend is.
+-- 2. `intake_batch.file_hashes`: per bestand de SHA-256 die de fork zelf
+--    berekende bij het aanmaken of bevestigen van de batch. De import toetst
+--    het origineel daaraan.
+-- 3. `doc_node` is uniek per bron, versie, run en `self_ref`: een tweede versie
+--    van dezelfde bron in dezelfde run krijgt een eigen structuur.
+--
+-- Lege database (B3). Idempotent via OVERWRITE. Alleen hele regels commentaar:
+-- de migratieloader plakt de regels aan elkaar.
+-- ============================================================================
+
+-- 1. Bekende inhoud.
+DEFINE INDEX OVERWRITE idx_source_version_content_hash ON source_version FIELDS content_hash;
+DEFINE INDEX OVERWRITE idx_intake_item_content_hash ON intake_item FIELDS content_hash;
+
+-- 2. Hashes van de batchbestanden.
+DEFINE FIELD OVERWRITE file_hashes ON intake_batch TYPE array<object> DEFAULT [];
+DEFINE FIELD OVERWRITE file_hashes.* ON intake_batch TYPE object;
+DEFINE FIELD OVERWRITE file_hashes.*.path ON intake_batch TYPE string
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE file_hashes.*.content_hash ON intake_batch TYPE string
+    ASSERT string::matches($value, '^sha256:[0-9a-f]{64}$');
+
+-- 3. Structuur per versie.
+DEFINE INDEX OVERWRITE dn_run_ref ON doc_node FIELDS source, source_version, run, self_ref UNIQUE;
+
+RETURN NONE;

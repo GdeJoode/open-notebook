@@ -1075,6 +1075,7 @@ class IntakeBatchResponse(BaseModel):
     route: str
     source_map_rule: Optional[str] = None
     files: List[str] = Field(default_factory=list)
+    file_hashes: List[Dict[str, Any]] = Field(default_factory=list)
     created_by: str
     rev: int
     modified_by: Optional[str] = None

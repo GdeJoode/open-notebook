@@ -527,6 +527,9 @@ async def test_batch_zonder_keuze_is_intern(env, app, mappen) -> None:
 
 async def test_batch_bestanden_wijzigen_en_bevestigen(env, app, mappen) -> None:
     inbox = mappen[2] / "inbox"
+    # De fork hasht de bestanden zelf bij het bevestigen (F2-14).
+    (inbox / "a.pdf").write_bytes(b"%PDF-1.7 a")
+    (inbox / "b.pdf").write_bytes(b"%PDF-1.7 b")
     async with _client(app) as c:
         r = await c.post("/api/v1/intake/batches", json={
             "route": "inname_pdf", "classification": "extern", "confirm": True,

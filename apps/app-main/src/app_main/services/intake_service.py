@@ -11,12 +11,18 @@
   poortwachter. Tot het besluit van de beheerder geldt ``intern`` (FO 9).
   Het besluit (route en classificatie) neemt alleen een ``beheerder``, met
   één regel in ``classification_log``; daarna ligt het vast (409).
+* **Bestandshashes** (F2-14): bij het aanmaken en wijzigen van een batch
+  berekent de fork per bestand zelf de SHA-256 (``file_hashes``); bij een
+  bevestiging naar ``extern`` moet elk bestand leesbaar zijn (anders 422). De
+  import toetst het origineel aan die hash.
 * Paden volgen de locatiecontrole van een regel: onder een innamemap, niet in
   de vault of de exportmap (ADR 0004).
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -50,6 +56,30 @@ class IntakeConflictError(Exception):
 
 def _nu() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _sha256(pad: str) -> str:
+    h = hashlib.sha256()
+    with open(pad, "rb") as f:
+        for blok in iter(lambda: f.read(1 << 20), b""):
+            h.update(blok)
+    return "sha256:" + h.hexdigest()
+
+
+async def bestandshashes(files: List[str], *, streng: bool) -> List[Dict[str, str]]:
+    """Per bestand de SHA-256, door de fork zelf berekend (F2-14).
+
+    ``streng``: elk bestand moet leesbaar zijn (bevestiging naar extern),
+    anders 422; zonder ``streng`` ontbreekt een onleesbaar bestand in de lijst.
+    """
+    uit = []
+    for pad in files:
+        try:
+            uit.append({"path": pad, "content_hash": await asyncio.to_thread(_sha256, pad)})
+        except OSError:
+            if streng:
+                raise InvalidInputError("Batchbestand niet leesbaar") from None
+    return uit
 
 
 class IntakeService:
@@ -102,6 +132,7 @@ class IntakeService:
             "created_by": person,
             "modified_by": person,
             "modified_at": _nu(),
+            "file_hashes": await bestandshashes(files, streng=bevestig),
         }
         if source_map_rule:
             regel = await self.rule_repo.get(source_map_rule)
@@ -146,6 +177,8 @@ class IntakeService:
             data.update(classification_confirmed_by=None, classification_confirmed_at=None)
             na = na.model_copy(update={"classification_confirmed_by": None})
         tussen = na.effectieve_classificatie
+        if bevestig or "files" in changes:
+            data["file_hashes"] = await bestandshashes(na.files, streng=bevestig)
         if bevestig:
             if na.classification != "extern":
                 raise InvalidInputError("Alleen extern wordt bevestigd")
