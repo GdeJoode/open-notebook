@@ -1246,9 +1246,14 @@ async def test_batch_die_later_intern_wordt(env, app) -> None:
         resp = await client.post("/api/v1/import", json=_verzoek(
             run, original=original, content_hash=h, regel=bulk, batch=batch, location=pad))
     assert resp.status_code == 201 and resp.json()["classification"] == "extern"
+    bron = resp.json()["source_id"]
+    # Alleen de bevestiging intrekken: onbevestigd telt in de controle, maar
+    # maakt bestaande bronnen niet intern (vierde review, B2).
     await _q("UPDATE type::thing($b) SET classification_confirmed_by = NONE,"
              " classification_confirmed_at = NONE", {"b": batch})
-    bron = resp.json()["source_id"]
+    assert (await _een("SELECT VALUE classification FROM type::thing($b)", {"b": bron})) == "extern"
+    # Bewust intern: de bron wordt intern, met een melding.
+    await _q("UPDATE type::thing($b) SET classification = 'intern'", {"b": batch})
     assert (await _een("SELECT VALUE classification FROM type::thing($b)", {"b": bron})) == "intern"
     assert [m["soort"] for m in await _meldingen(bron)] == ["inhoud_intern"]
 
@@ -1278,3 +1283,127 @@ async def test_interne_batch_zonder_passende_hash_geeft_een_melding(env, app) ->
     assert resp.status_code == 201
     assert await _q("SELECT id FROM beheer_melding WHERE intake_batch = type::thing($b)",
                     {"b": batch2}) == []
+
+
+# --------------------------------------------------------------------------
+# Vierde review F2-14
+# --------------------------------------------------------------------------
+
+
+async def _importeer(client, env, regel, original, h, **kw):
+    run = await _start(client, env, regel=regel)
+    return await client.post("/api/v1/import", json=_verzoek(
+        run, original=original, content_hash=h, regel=regel, **kw))
+
+
+async def test_vijftig_bronnen_met_een_hash_rocksdb(env_rocksdb, app) -> None:
+    env = env_rocksdb
+    extern = await _regel()
+    intern = await _regel(bevestigd=False)
+    original, h = env.origineel(b"%PDF-1.7 vijftig " + uuid.uuid4().hex.encode())
+    async with _client(app) as client:
+        for _ in range(50):
+            assert (await _importeer(client, env, extern, original, h)).status_code == 201
+        resp = await _importeer(client, env, intern, original, h)
+    assert resp.status_code == 201, resp.text
+    klassen = await _q("SELECT VALUE classification FROM source WHERE current_version.content_hash"
+                       " = $h", {"h": h.removeprefix("sha256:")})
+    assert len(klassen) == 51 and set(klassen) == {"intern"}
+    [meldingen] = await _q("SELECT count() AS n FROM beheer_melding WHERE soort = 'inhoud_intern'"
+                           " AND source.current_version.content_hash = $h GROUP ALL",
+                           {"h": h.removeprefix("sha256:")})
+    assert meldingen["n"] == 50
+
+
+async def test_keten_van_dertig_rocksdb(env_rocksdb, app) -> None:
+    env = env_rocksdb
+    extern = await _regel()
+    intern = await _regel(bevestigd=False)
+    inhoud = [env.origineel(b"%PDF-1.7 keten " + uuid.uuid4().hex.encode()) for _ in range(31)]
+    bronnen = []
+    async with _client(app) as client:
+        for i in range(30):
+            extern_id = f"stuk-{uuid.uuid4().hex}"
+            for j in (i, i + 1):
+                resp = await _importeer(client, env, extern, *inhoud[j], external_id=extern_id)
+                assert resp.status_code == 201, resp.text
+            bronnen.append(resp.json()["source_id"])
+        resp = await _importeer(client, env, intern, *inhoud[0])
+    assert resp.status_code == 201, resp.text
+    klassen = [await _een("SELECT VALUE classification FROM type::thing($b)", {"b": b})
+               for b in bronnen]
+    assert set(klassen) == {"intern"}
+
+
+@pytest.mark.parametrize("begin", ["extern_onbevestigd", "intern"])
+async def test_batch_eerst_aanmaken_dan_bevestigen(env, app, begin) -> None:
+    bulk = await _regel("bulkupload", "intern", location=str(env.inname))
+    original, h = env.origineel(b"%PDF-1.7 tweestaps " + uuid.uuid4().hex.encode())
+    pad = str(env.inname / f"{uuid.uuid4().hex}.pdf")
+    rij = await _een("CREATE intake_batch CONTENT $d RETURN id", {"d": {
+        "route": "inname_pdf", "files": [pad],
+        "classification": "extern" if begin == "extern_onbevestigd" else "intern",
+        "created_by": "Testpersoon", "source_map_rule": conn.ensure_record_id(bulk),
+        "file_hashes": [{"path": pad, "content_hash": h}]}})
+    batch = str(rij["id"])
+
+    async def bevestig() -> None:
+        await _q("UPDATE type::thing($b) SET classification = 'extern',"
+                 " classification_confirmed_by = 'Testpersoon', classification_confirmed_at = $t",
+                 {"b": batch, "t": datetime.now(timezone.utc)})
+
+    await bevestig()
+    async with _client(app) as client:
+        run = await _start(client, env, regel=bulk, batch=batch)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=bulk, batch=batch, location=pad))
+        assert resp.status_code == 201 and resp.json()["classification"] == "extern", resp.text
+        # Intrekken en opnieuw bevestigen: weer extern te importeren.
+        await _q("UPDATE type::thing($b) SET classification_confirmed_by = NONE,"
+                 " classification_confirmed_at = NONE", {"b": batch})
+        await bevestig()
+        run = await _start(client, env, regel=bulk, batch=batch)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=bulk, batch=batch, location=pad,
+            external_id=f"stuk-{uuid.uuid4().hex}"))
+    assert resp.status_code == 201 and resp.json()["classification"] == "extern", resp.text
+
+
+async def _herclassificeer(client, bron: str, naar: str):
+    return await client.post(f"/api/v1/sources/{bron}/classification",
+                             json={"classification": naar, "reason": "Toets F2-14"})
+
+
+async def test_herclassificatie_naar_extern_maakt_herimport_mogelijk(env, app) -> None:
+    extern = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 terug " + uuid.uuid4().hex.encode())
+    extern_id = f"stuk-{uuid.uuid4().hex}"
+    async with _client(app) as client:
+        resp = await _importeer(client, env, extern, original, h, external_id=extern_id)
+        bron = resp.json()["source_id"]
+        env.als(BEHEERDER)
+        assert (await _herclassificeer(client, bron, "intern")).status_code == 200
+        resp = await _herclassificeer(client, bron, "extern")
+        assert resp.status_code == 200, resp.text
+        env.als(LANGFLOW)
+        resp = await _importeer(client, env, extern, original, h, external_id=extern_id)
+    assert resp.status_code == 200 and resp.json()["classification"] == "extern", resp.text
+    assert (await _een("SELECT VALUE classification FROM type::thing('inhoud', $h)",
+                       {"h": h.removeprefix("sha256:")})) == "extern"
+
+
+async def test_herclassificatie_naar_extern_geweigerd_als_elders_intern(env, app) -> None:
+    extern = await _regel()
+    intern = await _regel(bevestigd=False)
+    original, h = env.origineel(b"%PDF-1.7 elders " + uuid.uuid4().hex.encode())
+    async with _client(app) as client:
+        a = (await _importeer(client, env, extern, original, h)).json()["source_id"]
+        c = (await _importeer(client, env, intern, original, h)).json()["source_id"]
+        env.als(BEHEERDER)
+        resp = await _herclassificeer(client, a, "extern")
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "inhoud_elders_intern"
+    versie_c = await _een("SELECT VALUE current_version FROM type::thing($c)", {"c": c})
+    assert str(versie_c) in detail["records"]
+    assert (await _een("SELECT VALUE classification FROM type::thing($a)", {"a": a})) == "intern"

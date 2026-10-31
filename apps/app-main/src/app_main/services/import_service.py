@@ -174,6 +174,12 @@ class Origineel:
         os.chmod(self.tijdelijk, 0o444)
         try:
             os.link(self.tijdelijk, doel)
+            # Ook de map: de nieuwe naam staat dan op schijf.
+            mapfd = os.open(self.archief, os.O_RDONLY)
+            try:
+                os.fsync(mapfd)
+            finally:
+                os.close(mapfd)
         except FileExistsError:
             info = os.lstat(doel)
             if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o222
@@ -422,15 +428,31 @@ class ImportService:
         for poging in range(POGINGEN):
             try:
                 return await self._importeer(verzoek, key_id=key_id)
-            except ClassificationConflictError:
-                raise
+            except ClassificationConflictError as e:
+                await self._weiger_opslag(verzoek.run_id, e)
             except RuntimeError as e:
                 # Een gelijktijdig verzoek schreef dezelfde bron of versie, of
                 # een volgnummer: opnieuw lezen en opnieuw proberen.
                 if not (is_schrijfconflict(e) or any(i in str(e) for i in _GELIJKTIJDIG)):
-                    raise
+                    await self._weiger_opslag(verzoek.run_id, e)
                 await asyncio.sleep(random.uniform(0.01, 0.05) * (poging + 1))
+        await self._log(verzoek.run_id, "gelijktijdig",
+                        "Gelijktijdige wijziging; na de herhaalpogingen geweigerd")
         raise ImportWeigering(409, "gelijktijdig", "Gelijktijdige wijziging; probeer opnieuw")
+
+    async def _log(self, run_id: str, status: str, melding: str) -> None:
+        try:
+            await self.run_repo.append_log(run_id, [_logregel(status, melding)])
+        except Exception:  # noqa: BLE001 - een onbekende run heeft geen logboek
+            logger.warning("Geen logregel in run {run}", run=run_id)
+
+    async def _weiger_opslag(self, run_id: str, fout: Exception) -> None:
+        """De database weigerde de transactie: een herkenbare 409 met een
+        logregel in de run, geen kale 500 (F2-14). Alleen het soort fout gaat
+        naar het lokale log, geen inhoud."""
+        logger.warning("Import geweigerd door de opslag: {soort}", soort=type(fout).__name__)
+        await self._log(run_id, "opslag_geweigerd", "De opslag weigerde de import")
+        raise ImportWeigering(409, "opslag_geweigerd", "De opslag weigerde de import") from None
 
     async def _importeer(self, verzoek: ImportRequest, *, key_id: str) -> ImportResultaat:
         run = await self._run(verzoek.run_id, key_id)
