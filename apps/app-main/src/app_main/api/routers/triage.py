@@ -279,7 +279,7 @@ async def decide(
     try:
         updated = await queue.set_decision(
             queue_id, decision_label, rev=body.rev, door=await _persoon(request),
-            pin=(item.entity, body.status),
+            entiteit=(item.entity, {"status": body.status, "manual_override": True}),
         )
     except RevConflictError:
         raise _verouderd() from None
@@ -340,16 +340,21 @@ async def decide_tooi(
     if chosen is None:
         raise HTTPException(status_code=422, detail="uri must be one of the row's candidates")
     names = list(chosen.get("current_names") or [chosen.get("label")])
-    wrote = await entity_repo.update_external_ids(item.entity, [chosen["uri"]], names)
-    if not wrote:
-        raise HTTPException(
-            status_code=502,
-            detail=f"the link was not written for {item.entity}; the row stays open",
-        )
+    # The link and the closed row in one transaction (F2-06): a 409 or a
+    # missing entity writes neither, and the row stays open.
+    koppeling = await entity_repo.external_ids_wijziging(item.entity, [chosen["uri"]], names)
     try:
-        await queue.set_decision(queue_id, DECISION_LINKED, rev=body.rev, door=persoon)
+        updated = None if koppeling is None else await queue.set_decision(
+            queue_id, DECISION_LINKED, rev=body.rev, door=persoon,
+            entiteit=(item.entity, koppeling),
+        )
     except RevConflictError:
         raise _verouderd() from None
+    if updated is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"entity {item.entity} not found; the row stays open",
+        )
     return TooiDecisionResponse(queue_id=item.id, entity=item.entity,
                                 decision=DECISION_LINKED, uri=chosen["uri"])
 

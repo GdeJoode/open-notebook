@@ -359,7 +359,7 @@ class TriageQueueRepository:
         *,
         rev: Optional[int],
         door: str,
-        pin: Optional[Tuple[str, str]] = None,
+        entiteit: Optional[Tuple[str, Dict[str, Any]]] = None,
     ) -> Optional[QueueItem]:
         """Record an operator decision on a queue row (moves it off 'open').
 
@@ -373,20 +373,19 @@ class TriageQueueRepository:
             rev: The row version the operator read; ``None`` only for a row
                 closed as a consequence of another checked write.
             door: The person of the key.
-            pin: ``(entity_id, status)`` to pin that entity (status +
-                ``manual_override``) in the same transaction.
+            entiteit: ``(entity_id, data)`` written to the row's entity in the
+                same transaction (the pin, or the TOOI link), unchecked
+                (``rev=None``) but stamped with ``modified_by``.
 
         Returns:
             The updated :class:`QueueItem`, or ``None`` if the row (or the
-            entity to pin) is absent.
+            entity) is absent; then nothing is written.
         """
         nu = datetime.now(timezone.utc)
         wijzigingen = [RevWijziging(queue_id, rev, {"decision": decision, "updated_at": nu})]
-        if pin is not None:
-            entity_id, status = pin
-            wijzigingen.append(RevWijziging(
-                entity_id, None, {"status": status, "manual_override": True, "updated_at": nu}
-            ))
+        if entiteit is not None:
+            entity_id, data = entiteit
+            wijzigingen.append(RevWijziging(entity_id, None, {**data, "updated_at": nu}))
         try:
             rows = await wijzig_met_rev(wijzigingen, door=door, config=self.config)
         except RecordNotFoundError:

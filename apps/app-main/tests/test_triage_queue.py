@@ -191,19 +191,53 @@ async def test_set_decision_with_a_stale_rev_changes_nothing(
     )
     with pytest.raises(RevConflictError):
         await q.set_decision(rid, "active", rev=gelezen, door="Testpersoon",
-                             pin=(eid, "active"))
+                             entiteit=(eid, {"status": "active", "manual_override": True}))
     rows = await execute_query("SELECT manual_override FROM $id", {"id": ensure_record_id(eid)},
                                live_surrealdb)
     assert not rows[0].get("manual_override")
     assert (await q.get(rid)).decision == "open"
 
     beslist = await q.set_decision(rid, "active", rev=(await q.get(rid)).rev,
-                                   door="Testpersoon", pin=(eid, "active"))
+                                   door="Testpersoon",
+                                   entiteit=(eid, {"status": "active", "manual_override": True}))
     assert beslist.decision == "active"
     rows = await execute_query("SELECT manual_override, status, modified_by FROM $id",
                                {"id": ensure_record_id(eid)}, live_surrealdb)
     assert (rows[0]["manual_override"], rows[0]["status"], rows[0]["modified_by"]) == (
         True, "active", "Testpersoon")
+
+
+@pytest.mark.requires_docker
+async def test_a_tooi_link_with_a_stale_rev_writes_nothing(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """F2-06: the TOOI link and the closed row are one transaction; a 409 writes neither."""
+    from surrealdb_service.repositories.base import RevConflictError
+    from surrealdb_service.repositories.entity import EntityRepository
+
+    q = _bind_queue(None, live_surrealdb)  # type: ignore[arg-type]
+    eid = await _seed_entity(live_surrealdb, _u("Gemeente"))
+    rid = await q.upsert_tooi(eid, name="G", type="administrative_area", reason="tooi: x",
+                              candidates=[{"uri": "https://example.org/tooi/1"}], batch_id="r1")
+    gelezen = (await q.get(rid)).rev
+    koppeling = await EntityRepository(config=live_surrealdb).external_ids_wijziging(
+        eid, ["https://example.org/tooi/1"], ["G"])
+    await execute_query("UPDATE $id SET reason = 'tooi: y'", {"id": ensure_record_id(rid)},
+                        live_surrealdb)
+    with pytest.raises(RevConflictError):
+        await q.set_decision(rid, "linked", rev=gelezen, door="Testpersoon",
+                             entiteit=(eid, koppeling))
+    rows = await execute_query("SELECT external_ids, modified_by FROM $id",
+                               {"id": ensure_record_id(eid)}, live_surrealdb)
+    assert not rows[0].get("external_ids") and rows[0].get("modified_by") is None
+    assert (await q.get(rid)).decision == "open"
+
+    await q.set_decision(rid, "linked", rev=(await q.get(rid)).rev, door="Testpersoon",
+                         entiteit=(eid, koppeling))
+    rows = await execute_query("SELECT external_ids, modified_by FROM $id",
+                               {"id": ensure_record_id(eid)}, live_surrealdb)
+    assert rows[0]["external_ids"] == ["https://example.org/tooi/1"]
+    assert rows[0]["modified_by"] == "Testpersoon"
 
 
 @pytest.mark.requires_docker
