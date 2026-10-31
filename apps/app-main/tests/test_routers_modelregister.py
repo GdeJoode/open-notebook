@@ -42,7 +42,9 @@ def client(monkeypatch):
         monkeypatch.setattr("llm_manager.register.get_register", lambda: _register(*taken))
         app = FastAPI()
         app.include_router(search_router.router, prefix="/api")
-        app.include_router(embedding_router.router, prefix="/api")
+        # Eigen prefix: het pad van de fork valt anders samen met een
+        # Ollama-eindpunt in de stoptest.
+        app.include_router(embedding_router.router, prefix="/fork")
         zoek = SimpleNamespace(vector_search=AsyncMock(return_value=[]))
         app.dependency_overrides[get_search_service] = lambda: zoek
         app.dependency_overrides[get_model_service] = _geen_database
@@ -93,6 +95,6 @@ def test_ask_neemt_geen_model_id_uit_de_aanvraag(client):
 @pytest.mark.parametrize("taken,status", [(("embedding",), 200), (("chat",), 400)])
 def test_embed_neemt_het_model_uit_het_register(client, taken, status):
     c, _ = client(*taken)
-    resp = c.post("/api/embed", json={"item_id": "source:s", "item_type": "source",
+    resp = c.post("/fork/embed", json={"item_id": "source:s", "item_type": "source",
                                       "async_processing": False})
     assert resp.status_code == status, resp.text
