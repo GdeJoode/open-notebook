@@ -60,3 +60,5 @@ Optie 2.
   - de regressiepoort van Track N.
 - **Planning:** labels met Kev (FO 7) zijn een aparte bouwsteen in Langflow en vallen buiten deze ADR.
 - **ARCHITECTURE.md:** paragraaf 1 (`services/extraction`) en paragraaf 6 worden bijgewerkt.
+
+**Uitwerking in F2-02 (31-10).** `vocabulary_manager.py` is verhuisd naar `packages/shared/src/shared/vocabulary/`. `entity_validator.py` is niet verhuisd: de cachelaag zit al in `ReferenceEntityRepository` (`lookup_by_name`, `lookup_by_alias`) en `vocabulary_reconcile_service`, en de module deed externe aanroepen (ROR, OpenAlex) met entiteitnamen, die met harde eis 1 niet zonder meer terug mogen komen. De knoop "valideren tegen `reference_entity`" in F3-06 gebruikt de heuristieken (fuzzy naamvergelijking, personen, generieke namen) uit `22a9f182:services/extraction/entity_validator.py` als bron, zonder de externe aanroepen.
