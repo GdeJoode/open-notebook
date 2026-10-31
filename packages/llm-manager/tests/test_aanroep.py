@@ -12,7 +12,7 @@ from typing import List
 import httpx
 import pytest
 from llm_manager import aanroep
-from llm_manager.aanroep import GeenPoort, PoortAanroeper
+from llm_manager.aanroep import GeenPoort, OngeldigAntwoord, PoortAanroeper
 from llm_manager.gate import ModelCallRegel, ModelGate, ModelGeweigerd, classificatie_van
 from llm_manager.providers.factory import LLAMA_SWAP_URL, LlamaSwapClient, LlamaSwapFout
 from llm_manager.register import ModelRegister, RegisterModel
@@ -195,3 +195,47 @@ def test_zonder_auditschrijver_geen_aanroep():
 ])
 def test_classificatie_van_meer_delen(waarden, verwacht):
     assert classificatie_van(waarden) == verwacht
+
+
+class Vast:
+    """Nagebootst llama-swap dat altijd hetzelfde (afwijkende) antwoord geeft."""
+
+    def __init__(self, antwoord) -> None:
+        self.antwoord = antwoord
+        self.verzoeken: List[httpx.Request] = []
+
+    def __call__(self, verzoek: httpx.Request) -> httpx.Response:
+        self.verzoeken.append(verzoek)
+        return httpx.Response(200, json=self.antwoord)
+
+
+@pytest.mark.parametrize("antwoord", [
+    {"choices": []},
+    {"choices": [{"message": {}}]},
+    {"choices": [{"message": {"content": None}}]},
+    {"geen": "choices"},
+])
+async def test_een_ongeldig_chatantwoord_is_mislukt_in_de_audit(antwoord):
+    audit = Audit()
+    poort = _poort(Vast(antwoord), audit)
+    with pytest.raises(OngeldigAntwoord):
+        await poort.chat(taak="chat", classificatie="intern", messages=BERICHTEN)
+    [regel] = audit.regels
+    assert (regel.status, regel.error_code) == ("mislukt", "ongeldigantwoord")
+
+
+@pytest.mark.parametrize("antwoord", [
+    {"data": [{"index": 0, "embedding": [0.1]}]},  # te weinig vectoren
+    {"data": [{"index": 0, "embedding": [0.1]}, {"index": 0, "embedding": [0.2]}]},
+    {"data": [{"index": 0, "embedding": []}, {"index": 1, "embedding": []}]},
+    {"data": [{"index": 0, "embedding": [0.1]}, {"index": 1, "embedding": [0.1, 0.2]}]},
+    {"data": [{"index": 0, "embedding": ["x"]}, {"index": 1, "embedding": [0.1]}]},
+    {"geen": "data"},
+])
+async def test_een_ongeldig_embeddingantwoord_is_mislukt_in_de_audit(antwoord):
+    audit = Audit()
+    poort = _poort(Vast(antwoord), audit)
+    with pytest.raises(OngeldigAntwoord):
+        await poort.embed(teksten=["a", "b"], classificatie="intern")
+    [regel] = audit.regels
+    assert (regel.status, regel.error_code) == ("mislukt", "ongeldigantwoord")

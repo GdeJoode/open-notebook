@@ -32,6 +32,14 @@ class GeenPoort(RuntimeError):
     """De poort is niet ingesteld; er is geen weg naar een model."""
 
 
+class OngeldigAntwoord(RuntimeError):
+    """llama-swap gaf een antwoord met een onverwachte vorm.
+
+    Wordt binnen de poort opgeworpen, zodat de auditregel ``mislukt`` wordt
+    (foutcode ``ongeldigantwoord``) en nooit ``geslaagd`` met daarna een fout.
+    """
+
+
 @dataclass(frozen=True)
 class ChatAntwoord:
     """Het antwoord van een chataanroep: tekst en het model dat antwoordde."""
@@ -40,11 +48,29 @@ class ChatAntwoord:
     model: str
 
 
-def _tekst(data: Dict[str, Any]) -> str:
+def _chat_vorm(data: Any) -> Dict[str, Any]:
+    """Controleer een chatantwoord: ``choices[0].message.content`` is tekst."""
     try:
-        return data["choices"][0]["message"].get("content") or ""
-    except (KeyError, IndexError, TypeError, AttributeError):
-        return ""
+        inhoud = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise OngeldigAntwoord("chatantwoord zonder choices[0].message.content") from None
+    if not isinstance(inhoud, str):
+        raise OngeldigAntwoord("chatantwoord zonder tekst")
+    return {"tekst": inhoud, "usage": data.get("usage")}
+
+
+def _embedding_vorm(data: Any, aantal: int) -> Dict[str, Any]:
+    """Controleer een embeddingantwoord: precies één getallenvector per tekst."""
+    try:
+        rijen = sorted(data["data"], key=lambda r: r["index"])
+        vectoren = [[float(v) for v in r["embedding"]] for r in rijen]
+    except (KeyError, TypeError, ValueError):
+        raise OngeldigAntwoord("embeddingantwoord met onverwachte vorm") from None
+    if len(vectoren) != aantal or [r["index"] for r in rijen] != list(range(aantal)):
+        raise OngeldigAntwoord("llama-swap gaf niet één vector per tekst")
+    if not all(vectoren) or len({len(v) for v in vectoren}) != 1:
+        raise OngeldigAntwoord("vectoren leeg of van ongelijke lengte")
+    return {"vectoren": vectoren, "usage": data.get("usage")}
 
 
 class PoortAanroeper:
@@ -80,12 +106,14 @@ class PoortAanroeper:
             opties["temperature"] = temperature
 
         async def uitvoer(gekozen: RegisterModel) -> Dict[str, Any]:
-            return await self.client.chat(gekozen.naam, messages, **opties)
+            # De vorm wordt binnen de poort gecontroleerd: een afwijking is een
+            # mislukte aanroep in de auditregel.
+            return _chat_vorm(await self.client.chat(gekozen.naam, messages, **opties))
 
         naam = model or self.model_voor(taak)
         data = await self.gate.roep_aan(model=naam, classificatie=classificatie, taak=taak,
                                         uitvoer=uitvoer, run_id=run_id)
-        return ChatAntwoord(tekst=_tekst(data), model=naam)
+        return ChatAntwoord(tekst=data["tekst"], model=naam)
 
     async def embed(
         self,
@@ -96,16 +124,12 @@ class PoortAanroeper:
         model: Optional[str] = None,
     ) -> List[List[float]]:
         async def uitvoer(gekozen: RegisterModel) -> Dict[str, Any]:
-            return await self.client.embed(gekozen.naam, teksten)
+            return _embedding_vorm(await self.client.embed(gekozen.naam, teksten), len(teksten))
 
         data = await self.gate.roep_aan(model=model or self.model_voor(EMBEDDING),
                                         classificatie=classificatie, taak=EMBEDDING,
                                         uitvoer=uitvoer, run_id=run_id)
-        rijen = sorted(data.get("data", []), key=lambda r: r.get("index", 0))
-        vectoren = [[float(v) for v in r["embedding"]] for r in rijen]
-        if len(vectoren) != len(teksten):
-            raise ValueError("llama-swap gaf niet één vector per tekst")
-        return vectoren
+        return data["vectoren"]
 
 
 _aanroeper: Optional[PoortAanroeper] = None
