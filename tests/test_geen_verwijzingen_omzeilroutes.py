@@ -134,8 +134,8 @@ def test_de_zoektest_ziet_de_mappen() -> None:
         ("script-ingang file-manager", "file-manager = { workspace = true }"),
     ):
         assert not VERBODEN[naam].search(bron), naam
-    # `services/extraction_chunking` in app-main is een ander pakket en blijft.
-    assert not VERBODEN["services/extraction"].search("app_main/services/extraction_chunking/")
+    # Een ander pakket met hetzelfde voorvoegsel telt niet.
+    assert not VERBODEN["services/extraction"].search("app_main/services/extraction_service/")
 
 
 @pytest.mark.parametrize(
