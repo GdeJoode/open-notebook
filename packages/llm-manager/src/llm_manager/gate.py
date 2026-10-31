@@ -65,7 +65,8 @@ class ModelCallRegel(BaseModel):
     status: CallStatus
     attempts: int = Field(default=1, ge=0)
     error_code: Optional[str] = Field(default=None, pattern=CODE_PATROON)
-    origin: Herkomst
+    #: Langflow stuurt dit niet mee; de fork zet het zelf.
+    origin: Herkomst = "langflow"
 
 
 class AuditSchrijver(Protocol):

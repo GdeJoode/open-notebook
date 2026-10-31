@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app_main.api.routers.models import router
 from app_main.dependencies import get_model_service
 from app_main.services.model_service import ModelService
-from tests.conftest import make_default_models, make_model
+from tests.conftest import make_default_models
 
 
 def _make_app(model_svc):
@@ -19,65 +19,32 @@ def _make_app(model_svc):
 
 
 class TestListModels:
+    """``GET /api/models`` toont het modelregister, alleen lezen (F2-07, ADR 0007)."""
 
-    def test_list_all(self):
+    def test_list_toont_het_register(self):
         svc = AsyncMock(spec=ModelService)
-        svc.get_all.return_value = [make_model()]
         client = _make_app(svc)
 
         resp = client.get("/api/models")
 
         assert resp.status_code == 200
-        assert len(resp.json()) == 1
+        namen = {m["naam"]: m for m in resp.json()}
+        assert namen["werkmodel"]["aanroepwijze"] == "llama-swap"
+        assert namen["werkmodel"]["toegestaan_intern"] == "ja"
+        svc.get_all.assert_not_called()
 
-    def test_list_by_type(self):
+
+class TestGeenSchrijfroutes:
+
+    def test_aanmaken_en_verwijderen_bestaan_niet(self):
         svc = AsyncMock(spec=ModelService)
-        svc.get_by_type.return_value = [make_model(type="embedding")]
         client = _make_app(svc)
 
-        resp = client.get("/api/models?type=embedding")
-
-        assert resp.status_code == 200
-        svc.get_by_type.assert_called_once_with("embedding")
-
-
-class TestCreateModel:
-
-    def test_create_model(self):
-        svc = AsyncMock(spec=ModelService)
-        m = make_model()
-        svc.create.return_value = m
-        client = _make_app(svc)
-
-        resp = client.post(
-            "/api/models",
-            json={"name": "gpt-4o-mini", "provider": "openai", "type": "language"},
-        )
-
-        assert resp.status_code == 201
-        assert resp.json()["name"] == "gpt-4o-mini"
-
-
-class TestDeleteModel:
-
-    def test_delete_model(self):
-        svc = AsyncMock(spec=ModelService)
-        svc.get.return_value = make_model()
-        svc.delete.return_value = True
-        client = _make_app(svc)
-
-        resp = client.delete("/api/models/model:1")
-
-        assert resp.status_code == 204
-
-    def test_delete_model_not_found(self):
-        svc = AsyncMock(spec=ModelService)
-        svc.get.return_value = None
-        client = _make_app(svc)
-
-        resp = client.delete("/api/models/model:missing")
-
-        assert resp.status_code == 404
+        assert client.post("/api/models", json={"name": "m", "provider": "openai",
+                                                "type": "language"}).status_code == 405
+        assert client.delete("/api/models/model:1").status_code in (404, 405)
+        svc.create.assert_not_called()
+        svc.delete.assert_not_called()
 
 
 class TestDefaultModels:

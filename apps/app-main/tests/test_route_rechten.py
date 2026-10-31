@@ -43,6 +43,8 @@ LAGER_DAN_BEHEERDER = {
     ("PATCH", "/api/v1/runs/{run_id}"): Right.PIJPLIJN,
     ("GET", "/api/v1/runs/{run_id}"): Right.PIJPLIJN,
     ("POST", "/api/v1/import"): Right.PIJPLIJN,
+    # F2-07: auditregels van modelaanroepen uit Langflow (ADR 0007).
+    ("POST", "/api/v1/model-calls"): Right.PIJPLIJN,
     # F2-13: bronkaart en batches lezen, wachtrij-items aanmelden, ophalen en
     # op `verwerkt` zetten (ADR 0020).
     ("GET", "/api/v1/source-map-rules"): Right.PIJPLIJN,

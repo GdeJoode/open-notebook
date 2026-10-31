@@ -1,15 +1,19 @@
-"""Models router - AI model management."""
+"""Models router - AI model management.
+
+``GET /api/models`` is een alleen-lezen weergave van het modelregister
+(``config/modelregister.yaml``, F2-07, ADR 0007); de schrijfroutes voor
+modellen zijn vervallen. De standaardmodellen, de status en de providers lezen
+nog de modelrijen in de database, tot hun lezers zijn omgezet (F2-08, F2-09).
+"""
 
 import os
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
+from llm_manager.register import RegisterModel, get_register
 from loguru import logger
 
 from app_main.api.schemas import (
     DefaultModelsResponse,
-    ModelCreate,
-    ModelResponse,
     ModelStatusIssue,
     ModelStatusResponse,
     ProviderAvailabilityResponse,
@@ -21,53 +25,10 @@ from app_main.api.agent_auth import RECHT_BEHEERDER
 router = APIRouter(prefix="/models", tags=["models"], dependencies=[RECHT_BEHEERDER])
 
 
-def _model_to_response(model) -> ModelResponse:
-    """Convert a Model domain model to a ModelResponse schema."""
-    return ModelResponse(
-        id=model.id,
-        name=model.name,
-        provider=model.provider,
-        type=model.type,
-        created=str(model.created),
-        updated=str(model.updated),
-    )
-
-
-@router.get("", response_model=list[ModelResponse])
-async def list_models(
-    type: Optional[str] = None,
-    model_service: ModelService = Depends(get_model_service),
-):
-    """List all models, optionally filtered by type."""
-    if type:
-        models = await model_service.get_by_type(type)
-    else:
-        models = await model_service.get_all()
-    return [_model_to_response(m) for m in models]
-
-
-@router.post("", response_model=ModelResponse, status_code=201)
-async def create_model(
-    body: ModelCreate,
-    model_service: ModelService = Depends(get_model_service),
-):
-    """Create a new model."""
-    model = await model_service.create(body.model_dump())
-    logger.info("Created model {} ({})", model.name, model.provider)
-    return _model_to_response(model)
-
-
-@router.delete("/{model_id}", status_code=204)
-async def delete_model(
-    model_id: str,
-    model_service: ModelService = Depends(get_model_service),
-):
-    """Delete a model."""
-    existing = await model_service.get(model_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Model not found")
-    await model_service.delete(model_id)
-    logger.info("Deleted model {}", model_id)
+@router.get("", response_model=list[RegisterModel])
+async def list_models():
+    """De modellen uit het register; alleen lezen."""
+    return get_register().modellen
 
 
 @router.get("/defaults", response_model=DefaultModelsResponse)

@@ -9,7 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from llm_manager.register import (
     STANDAARD_PAD,
     RegisterFout,

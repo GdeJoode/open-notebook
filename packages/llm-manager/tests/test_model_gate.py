@@ -16,7 +16,6 @@ from typing import List
 
 import httpx
 import pytest
-
 from llm_manager.gate import (
     AuditNietGeschreven,
     ModelCallRegel,
