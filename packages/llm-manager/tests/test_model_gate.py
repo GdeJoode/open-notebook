@@ -12,6 +12,7 @@ Het register in deze tests is synthetisch.
 
 from __future__ import annotations
 
+import asyncio
 from typing import List
 
 import httpx
@@ -159,7 +160,70 @@ async def test_onbekend_model_geweigerd(model) -> None:
     assert aanroeper.aangeroepen == []
     [regel] = audit.regels
     assert regel.status == "geweigerd" and regel.error_code == "model_onbekend"
+    assert regel.model == "ongeldige_naam" and regel.model_version is None
     assert GEHEIM not in regel.model_dump_json()
+
+
+@pytest.mark.parametrize("model", ["Lokaal-model", "lokaal-model ", "lokaal-model\n"])
+async def test_bijna_juiste_naam_is_onbekend(model) -> None:
+    audit, aanroeper = Audit(), Aanroeper()
+    with pytest.raises(ModelGeweigerd):
+        await _gate(audit).roep_aan(model=model, classificatie="intern", taak="chat",
+                                    uitvoer=aanroeper)
+    assert aanroeper.aangeroepen == []
+    assert [r.model for r in audit.regels] == ["ongeldige_naam"]
+
+
+async def test_taak_niet_in_register_geweigerd() -> None:
+    audit, aanroeper = Audit(), Aanroeper()
+    with pytest.raises(ModelGeweigerd) as fout:
+        await _gate(audit).roep_aan(model="lokaal-model", classificatie="extern",
+                                    taak="embedding", uitvoer=aanroeper)
+    assert fout.value.code == "taak_niet_in_register"
+    assert aanroeper.aangeroepen == []
+    [regel] = audit.regels
+    assert (regel.status, regel.error_code) == ("geweigerd", "taak_niet_in_register")
+
+
+async def test_annulering_geeft_een_regel() -> None:
+    audit = Audit()
+
+    async def traag(_: RegisterModel):
+        await asyncio.sleep(10)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_gate(audit).roep_aan(
+            model="lokaal-model", classificatie="intern", taak="chat", uitvoer=traag,
+            run_id="processing_run:r1"), 0.1)
+    [regel] = audit.regels
+    assert (regel.status, regel.error_code, regel.run) == (
+        "mislukt", "geannuleerd", "processing_run:r1")
+
+
+async def test_annulering_tijdens_de_pauze_na_502() -> None:
+    audit = Audit()
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(ModelGate(_register(), audit, pauze=10).roep_aan(
+            model="lokaal-model", classificatie="intern", taak="chat",
+            uitvoer=Aanroeper(fouten=[_http(502)])), 0.1)
+    [regel] = audit.regels
+    assert (regel.status, regel.error_code, regel.attempts) == ("mislukt", "geannuleerd", 1)
+
+
+async def test_fout_in_de_auditregel_verdringt_de_eigenlijke_fout_niet() -> None:
+    # Een ongeldige run maakt de regel ongeldig; de oorspronkelijke fout gaat voor.
+    async def faalt(_: RegisterModel):
+        raise RuntimeError("model weg")
+
+    with pytest.raises(RuntimeError, match="model weg"):
+        await _gate(Audit()).roep_aan(model="lokaal-model", classificatie="intern",
+                                      taak="chat", uitvoer=faalt, run_id=123)
+    cloud = Aanroeper()
+    with pytest.raises(ModelGeweigerd):
+        await _gate(Audit(), herkomst="langflow").roep_aan(
+            model="cloudmodel", classificatie="intern", taak="chat", uitvoer=cloud,
+            run_id=123)
+    assert cloud.aangeroepen == []
 
 
 async def test_502_nieuwe_poging_tot_het_maximum() -> None:
@@ -264,3 +328,7 @@ def test_auditregel_weigert_tekstvelden() -> None:
         ModelCallRegel(model="m", invocation="llama-swap", location="lokaal", task="chat",
                        classification="intern", status="mislukt", origin="langflow",
                        error_code=GEHEIM)
+    with pytest.raises(ValueError):
+        ModelCallRegel(model="m", invocation="llama-swap", location="lokaal", task="chat",
+                       classification="intern", status="geslaagd", origin="langflow",
+                       model_version="v1 " + GEHEIM)

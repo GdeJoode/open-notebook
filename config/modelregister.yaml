@@ -5,7 +5,7 @@
 # staat, wordt geweigerd. Per model:
 #
 # - naam: het model-id in de llama-swap-configuratie (of in de gateway);
-# - versie: modelbestand, revisie of image;
+# - versie: modelbestand, revisie of image, als korte code zonder spaties;
 # - aanroepwijze: llama-swap, api of cli (api en cli alleen via de gateway, ADR 0022);
 # - locatie: lokaal of cloud. Een externe verwerkingsdienst is cloud (ADR 0019);
 # - toegestaan_intern: ja of nee, standaard nee. Bij interne of onbekende invoer
@@ -19,7 +19,7 @@ versie: 1
 modellen:
   # Werkmodel (B4, besloten 30-10): Qwen3.5-9B Q4_K_M, context 8 192 (P1, P3).
   - naam: werkmodel
-    versie: unsloth/Qwen3.5-9B-GGUF Qwen3.5-9B-Q4_K_M.gguf, context 8192
+    versie: unsloth/Qwen3.5-9B-GGUF:Qwen3.5-9B-Q4_K_M.gguf:ctx-8192
     aanroepwijze: llama-swap
     locatie: lokaal
     toegestaan_intern: ja
@@ -27,19 +27,11 @@ modellen:
 
   # Embeddingmodel (ADR 0008): mxbai-embed-large Q8_0, 1 024 dimensies.
   - naam: embed
-    versie: ChristianAzinn/mxbai-embed-large-v1-gguf@3ec6d46af11ba2b982d8c6a1e11183c4995f76a7 q8_0
+    versie: ChristianAzinn/mxbai-embed-large-v1-gguf@3ec6d46af11ba2b982d8c6a1e11183c4995f76a7:q8_0
     aanroepwijze: llama-swap
     locatie: lokaal
     toegestaan_intern: ja
     taken: [embedding]
-
-  # Kev-4B (ADR 0009): adapter op Qwen3.5-4B-Base, achter llama-swap.
-  - naam: kev-4b
-    versie: jaredpalmer/kev-4b@6cfce5c2fa4b4bd64026336ab649c5ca78857d52
-    aanroepwijze: llama-swap
-    locatie: lokaal
-    toegestaan_intern: ja
-    taken: [labeling]
 
   # docling-serve (ADR 0014), lokaal onder llama-swap.
   - naam: docling
@@ -49,10 +41,5 @@ modellen:
     toegestaan_intern: ja
     taken: [document_extraction]
 
-  # WhisperX variant A (ADR 0014, P1), lokaal onder llama-swap.
-  - naam: whisperx
-    versie: public.ecr.aws/deep-learning-containers/whisperx:3.8.6-cu128-amzn2023
-    aanroepwijze: llama-swap
-    locatie: lokaal
-    toegestaan_intern: ja
-    taken: [transcription]
+  # WhisperX en Kev-4B komen in het register met de taak die hun container
+  # levert (F3-01, F4-03).

@@ -4,15 +4,18 @@ Per aanroep doet :class:`ModelGate`:
 
 1. het model opzoeken in het register (:mod:`llm_manager.register`); een onbekend
    model wordt geweigerd;
-2. de invoer toetsen: is die intern of onbekend en staat het register het model
+2. de taak toetsen: staat die niet bij het model in het register, dan weigert
+   de poort;
+3. de invoer toetsen: is die intern of onbekend en staat het register het model
    niet toe voor intern, dan weigert de poort. Er is geen terugval naar een
    ander model of een ander adres: de aanroep krijgt alleen het gevraagde model;
-3. vanuit de fork alleen aanroepwijze ``llama-swap`` toelaten (ADR 0006);
-4. bij HTTP 502 van llama-swap opnieuw proberen, na een pauze en tot een
+4. vanuit de fork alleen aanroepwijze ``llama-swap`` toelaten (ADR 0006);
+5. bij HTTP 502 van llama-swap opnieuw proberen, na een pauze en tot een
    maximum (ADR 0009: na een stop van buiten llama-swap);
-5. precies één auditregel schrijven, ook bij een weigering of een fout. De
-   regel bevat nooit prompt- of antwoordtekst, alleen kenmerken en een
-   foutcode (ADR 0007).
+6. precies één auditregel schrijven, ook bij een weigering, een fout of een
+   annulering. De regel bevat nooit prompt- of antwoordtekst, alleen
+   kenmerken en een foutcode (ADR 0007). Een onbekende modelnaam gaat als
+   ``ongeldige_naam`` in de regel.
 
 De aanroep zelf is een functie van de aanroeper die het registermodel krijgt;
 zo blijft de poort los van Esperanto of HTTP (F2-08).
@@ -29,7 +32,12 @@ from typing import Any, Awaitable, Callable, Literal, Optional, Protocol, TypeVa
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
-from llm_manager.register import ModelRegister, RegisterModel
+from llm_manager.register import (
+    MODEL_PATROON,
+    VERSIE_PATROON,
+    ModelRegister,
+    RegisterModel,
+)
 
 T = TypeVar("T")
 
@@ -39,7 +47,8 @@ CallStatus = Literal["geslaagd", "mislukt", "geweigerd"]
 
 #: Foutcodes en taaknamen zijn korte codes, geen vrije tekst.
 CODE_PATROON = r"^[a-z0-9_.:-]{1,64}$"
-MODEL_PATROON = r"^[A-Za-z0-9_.:/@-]{1,128}$"
+#: De modelnaam in een regel als het model niet in het register staat.
+ONGELDIGE_NAAM = "ongeldige_naam"
 
 
 class ModelCallRegel(BaseModel):
@@ -54,7 +63,8 @@ class ModelCallRegel(BaseModel):
     at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     run: Optional[str] = None
     model: str = Field(pattern=MODEL_PATROON)
-    model_version: Optional[str] = Field(default=None, max_length=256)
+    #: De fork vult de versie zelf in uit het register.
+    model_version: Optional[str] = Field(default=None, pattern=VERSIE_PATROON)
     invocation: Literal["llama-swap", "api", "cli"]
     location: Literal["lokaal", "cloud"]
     task: str = Field(pattern=CODE_PATROON)
@@ -145,7 +155,8 @@ class ModelGate:
         self.pauze = pauze
         self._slaap = slaap
 
-    def toets(self, model: str, classificatie: Optional[str]) -> RegisterModel:
+    def toets(self, model: str, classificatie: Optional[str],
+              taak: Optional[str] = None) -> RegisterModel:
         """Zoek het model op en toets de invoer; zonder aanroep en zonder auditregel.
 
         Voor de validatie bij het verbinden in Langflow (FO 11). Weigert met
@@ -156,6 +167,8 @@ class ModelGate:
             raise ModelGeweigerd("model_onbekend", model)
         if self.herkomst == "fork" and gevonden.aanroepwijze != "llama-swap":
             raise ModelGeweigerd("aanroepwijze_niet_in_fork", model)
+        if taak is not None and taak not in gevonden.taken:
+            raise ModelGeweigerd("taak_niet_in_register", model)
         if _classificatie(classificatie) != "extern" and not gevonden.intern_toegestaan:
             raise ModelGeweigerd("niet_toegestaan_intern", model)
         return gevonden
@@ -178,12 +191,11 @@ class ModelGate:
             raise ValueError("taak is een korte code")
         klasse = _classificatie(classificatie)
         gevonden = self.register.zoek(model)
-        # Een onbekende naam kan vrije tekst zijn; die gaat niet in de auditregel.
-        naam = model if re.fullmatch(MODEL_PATROON, model) else "ongeldige_naam"
 
         def regel(status: CallStatus, **velden: Any) -> ModelCallRegel:
+            # Een onbekende naam kan vrije tekst zijn; die gaat niet in de regel.
             return ModelCallRegel(
-                run=run_id, model=naam,
+                run=run_id, model=gevonden.naam if gevonden else ONGELDIGE_NAAM,
                 model_version=gevonden.versie if gevonden else None,
                 invocation=gevonden.aanroepwijze if gevonden else "llama-swap",
                 location=gevonden.locatie if gevonden else "lokaal",
@@ -192,10 +204,11 @@ class ModelGate:
             )
 
         try:
-            gevonden = self.toets(model, klasse)
+            gevonden = self.toets(model, klasse, taak)
         except ModelGeweigerd as weigering:
+            code = weigering.code
             await self._schrijf_zonder_te_falen(
-                regel("geweigerd", attempts=0, error_code=weigering.code))
+                lambda: regel("geweigerd", attempts=0, error_code=code))
             raise
 
         begin = time.monotonic()
@@ -209,11 +222,19 @@ class ModelGate:
                 if _http_status(fout) == 502 and poging < self.max_pogingen:
                     logger.warning("Model {} gaf 502 (poging {}); opnieuw na {} s",
                                    model, poging, self.pauze)
-                    await self._slaap(self.pauze)
+                    try:
+                        await self._slaap(self.pauze)
+                    except BaseException:
+                        await self._geannuleerd(regel, poging, begin)
+                        raise
                     continue
-                await self._schrijf_zonder_te_falen(regel(
-                    "mislukt", attempts=poging, error_code=_foutcode(fout),
-                    duration_ms=_ms(begin)))
+                code = _foutcode(fout)
+                await self._schrijf_zonder_te_falen(lambda: regel(
+                    "mislukt", attempts=poging, error_code=code, duration_ms=_ms(begin)))
+                raise
+            except BaseException:
+                # Annulering (time-out, afsluiten): ook dan één regel.
+                await self._geannuleerd(regel, poging, begin)
                 raise
 
         invoer, uitvoer_tokens = _tokens(resultaat)
@@ -225,13 +246,21 @@ class ModelGate:
             raise AuditNietGeschreven("Auditregel niet geschreven") from e
         return resultaat
 
-    async def _schrijf_zonder_te_falen(self, regel: ModelCallRegel) -> None:
-        """Bij een weigering of fout gaat de oorspronkelijke uitzondering voor."""
+    async def _geannuleerd(self, regel: Callable[..., ModelCallRegel], poging: int,
+                           begin: float) -> None:
+        await self._schrijf_zonder_te_falen(lambda: regel(
+            "mislukt", attempts=poging, error_code="geannuleerd", duration_ms=_ms(begin)))
+
+    async def _schrijf_zonder_te_falen(self, maak: Callable[[], ModelCallRegel]) -> None:
+        """Bij een weigering, fout of annulering gaat de oorspronkelijke uitzondering voor.
+
+        Ook het opbouwen van de regel valt hieronder: een fout daarin verdringt
+        de eigenlijke fout niet.
+        """
         try:
-            await self.audit.schrijf(regel)
+            await self.audit.schrijf(maak())
         except Exception as e:  # noqa: BLE001
-            logger.error("Auditregel voor {} niet geschreven ({}): {}",
-                         regel.model, regel.status, type(e).__name__)
+            logger.error("Auditregel niet geschreven: {}", type(e).__name__)
 
 
 def _ms(begin: float) -> int:

@@ -92,6 +92,15 @@ def test_standaard_niet_toegestaan_voor_intern(tmp_path) -> None:
     " taken: []}",
     # geen versie van het register
     "modellen: []",
+    # versie met vrije tekst of te lang
+    "versie: 1\nmodellen:\n  - {naam: m, versie: 'v1 met spaties', aanroepwijze: llama-swap,"
+    " locatie: lokaal, taken: [chat]}",
+    "versie: 1\nmodellen:\n  - {naam: m, versie: " + "x" * 129 + ", aanroepwijze: llama-swap,"
+    " locatie: lokaal, taken: [chat]}",
+    # dubbele sleutel: PyYAML neemt anders stil de laatste waarde
+    "versie: 1\nmodellen:\n  - naam: m\n    versie: v\n    aanroepwijze: llama-swap\n"
+    "    locatie: cloud\n    locatie: lokaal\n    taken: [chat]",
+    "versie: 1\nversie: 2\nmodellen: []",
 ])
 def test_ongeldig_register(tmp_path, tekst) -> None:
     with pytest.raises(RegisterFout):

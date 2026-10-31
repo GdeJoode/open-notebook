@@ -6,8 +6,9 @@ invoer mag krijgen (``toegestaan_intern``, standaard ``nee``) en de taken.
 :class:`llm_manager.gate.ModelGate` leest het register; de Langflow-componenten
 lezen hetzelfde bestand.
 
-Het schema is streng: een onbekende sleutel, een dubbele naam of een cloudmodel
-met ``toegestaan_intern: ja`` maakt het register ongeldig (harde eis 1).
+Het schema is streng: een onbekende of dubbele sleutel, een dubbele naam of een
+cloudmodel met ``toegestaan_intern: ja`` maakt het register ongeldig (harde eis
+1). Naam en versie zijn korte codes zonder spaties; ze gaan in het auditlog.
 
 Plaats: ``SIGNAAL_MODELREGISTER``, anders ``config/modelregister.yaml`` in de
 root van de repository.
@@ -26,6 +27,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 Aanroepwijze = Literal["llama-swap", "api", "cli"]
 Locatie = Literal["lokaal", "cloud"]
 
+#: Naam en versie zijn korte codes; zo past er geen vrije tekst in het auditlog.
+MODEL_PATROON = r"^[A-Za-z0-9_.:/@-]{1,128}$"
+VERSIE_PATROON = r"^[A-Za-z0-9_.:/@+-]{1,128}$"
+
 _ROOT = Path(__file__).resolve().parents[4]
 STANDAARD_PAD = _ROOT / "config" / "modelregister.yaml"
 
@@ -39,8 +44,8 @@ class RegisterModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    naam: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:/@-]+$")
-    versie: str = Field(min_length=1)
+    naam: str = Field(max_length=128, pattern=MODEL_PATROON)
+    versie: str = Field(max_length=128, pattern=VERSIE_PATROON)
     aanroepwijze: Aanroepwijze
     locatie: Locatie
     #: ``ja`` of ``nee``; standaard ``nee`` (ADR 0007).
@@ -91,11 +96,25 @@ class ModelRegister(BaseModel):
         return {m.naam: m for m in self.modellen}
 
 
+class _StrengeLoader(yaml.SafeLoader):
+    """Een ``SafeLoader`` die een dubbele sleutel weigert (PyYAML neemt anders de laatste)."""
+
+    def construct_mapping(self, node, deep=False):
+        gezien = set()
+        for sleutel_node, _ in node.value:
+            sleutel = self.construct_object(sleutel_node, deep=deep)
+            if sleutel in gezien:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"dubbele sleutel {sleutel!r}", sleutel_node.start_mark)
+            gezien.add(sleutel)
+        return super().construct_mapping(node, deep=deep)
+
+
 def lees_register(pad: Optional[Path | str] = None) -> ModelRegister:
     """Lees en valideer het register; een fout geeft :class:`RegisterFout`."""
     pad = Path(pad or os.environ.get("SIGNAAL_MODELREGISTER") or STANDAARD_PAD)
     try:
-        inhoud = yaml.safe_load(pad.read_text(encoding="utf-8"))
+        inhoud = yaml.load(pad.read_text(encoding="utf-8"), Loader=_StrengeLoader)
     except (OSError, yaml.YAMLError) as e:
         raise RegisterFout(f"Modelregister niet te lezen: {pad}") from e
     try:
