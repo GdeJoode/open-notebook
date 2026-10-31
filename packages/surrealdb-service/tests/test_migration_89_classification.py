@@ -387,9 +387,12 @@ async def test_down_draait_terug_en_zet_private_op_alle_bronnen(
     live_surrealdb: SurrealDBConfig,
 ) -> None:
     extern = await _bron(live_surrealdb, "extern")
-    await _q(live_surrealdb, "UPDATE type::thing($id) SET private = false", {"id": extern})
     logregel = str((await _logregel(live_surrealdb))[0]["id"])
     try:
+        # Terugdraaien gaat in omgekeerde volgorde: eerst 103 (F2-09), die het
+        # veld ``private`` weer definieert.
+        await execute_transaction(_migratie(103, down=True), config=live_surrealdb)
+        await _q(live_surrealdb, "UPDATE type::thing($id) SET private = false", {"id": extern})
         await execute_transaction(_migratie(89, down=True), config=live_surrealdb)
         # Twee keer na elkaar: idempotent.
         await execute_transaction(_migratie(89, down=True), config=live_surrealdb)
@@ -412,6 +415,7 @@ async def test_down_draait_terug_en_zet_private_op_alle_bronnen(
         assert rows and all(p is True for p in rows)
     finally:
         await execute_transaction(_migratie(89), config=live_surrealdb, _herclassificatie=True)
+        await execute_transaction(_migratie(103), config=live_surrealdb)
 
     bron = await _bron(live_surrealdb)
     assert (await _lees(live_surrealdb, bron))["classification"] == "intern"

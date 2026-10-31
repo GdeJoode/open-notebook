@@ -1,0 +1,24 @@
+-- ============================================================================
+-- Migratie 103: Track J-routering en oude privacyvelden weg (F2-09, ADR 0006,
+-- 0007 en 0001).
+--
+-- 1. De velddefinities `source.private`, `notebook.privacy_mode` en
+--    `open_notebook.default_privacy_mode` (migraties 52 en 53) vervallen. Wat
+--    intern blijft, bepaalt het veld `classification` (migratie 89). Alleen de
+--    definities gaan weg; er worden geen gegevens omgezet (B3: de database
+--    start leeg).
+-- 2. De tabel `model_route` (migratie 51) vervalt met de Track J-routering.
+--    Welk model een taak uitvoert, staat in het modelregister (ADR 0007). In de
+--    lege database staan geen rijen: de seeds die ze schreven zijn weg.
+--
+-- Idempotent via IF EXISTS. Alleen hele regels commentaar: de migratieloader
+-- plakt de regels aan elkaar.
+-- ============================================================================
+
+REMOVE FIELD IF EXISTS private ON TABLE source;
+REMOVE FIELD IF EXISTS privacy_mode ON TABLE notebook;
+REMOVE FIELD IF EXISTS default_privacy_mode ON TABLE open_notebook;
+
+REMOVE TABLE IF EXISTS model_route;
+
+RETURN NONE;

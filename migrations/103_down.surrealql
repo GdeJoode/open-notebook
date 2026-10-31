@@ -1,0 +1,25 @@
+-- ============================================================================
+-- Migratie 103 terug (F2-09): de oude privacyvelden en de tabel `model_route`
+-- weer zoals na migratie 53.
+--
+-- Daarna `private = true` op alle bronnen: oude code die het veld leest, mag na
+-- een terugdraaiactie niets naar een cloudmodel sturen (zoals `89_down`). De
+-- tabel `model_route` komt leeg terug. Idempotent: OVERWRITE en een UPDATE
+-- zonder voorwaarde.
+-- ============================================================================
+
+DEFINE FIELD OVERWRITE private ON TABLE source TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE privacy_mode ON TABLE notebook TYPE option<string>;
+DEFINE FIELD OVERWRITE default_privacy_mode ON TABLE open_notebook TYPE option<string> DEFAULT 'cloud';
+
+DEFINE TABLE OVERWRITE model_route SCHEMAFULL;
+DEFINE FIELD OVERWRITE task ON TABLE model_route TYPE string
+    ASSERT $value INSIDE ['entity_extraction', 'summarization', 'chat'];
+DEFINE FIELD OVERWRITE provider_chain ON TABLE model_route FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD OVERWRITE private_chain ON TABLE model_route FLEXIBLE TYPE array DEFAULT [];
+DEFINE FIELD OVERWRITE updated_at ON TABLE model_route TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE idx_model_route_task ON model_route FIELDS task UNIQUE;
+
+UPDATE source SET private = true RETURN NONE;
+
+RETURN NONE;

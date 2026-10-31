@@ -207,6 +207,11 @@ async def test_source_drift_fails_pre_passes_post(
     )
     assert rows[0]["private"] is False
     assert rows[0]["title"] == "x"
+    # Migratie 103 (F2-09) heeft het veld verwijderd; de vervalsing hierboven
+    # zette de definitie terug. Ruim die op voor de volgende tests.
+    await execute_query(
+        "REMOVE FIELD IF EXISTS private ON TABLE source;", config=live_surrealdb
+    )
 
 
 @pytest.mark.requires_docker

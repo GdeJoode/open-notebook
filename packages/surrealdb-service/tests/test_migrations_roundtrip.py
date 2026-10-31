@@ -328,190 +328,6 @@ async def test_entity_persistence_field_alignment(
         )
 
 
-# --------------------------------------------------------------------------
-# Migration 52 — layered privacy mode (Track J.3)
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.requires_docker
-@pytest.mark.asyncio
-async def test_source_private_default_and_override(
-    live_surrealdb: SurrealDBConfig,
-) -> None:
-    """``source.private`` defaults to False (migration 52) and accepts True.
-
-    A source created without ``private`` reads back ``False`` (the SCHEMAFULL
-    DEFAULT), and one created with ``private = true`` persists ``True`` — the
-    per-document sticky override the J.3 privacy resolver reads.
-    """
-    # Default path: omit ``private`` -> DEFAULT false.
-    default_title = _unique("src-priv-default")
-    await execute_query(
-        "CREATE source SET title = $title, full_text = 'x';",
-        {"title": default_title},
-        config=live_surrealdb,
-    )
-    rows = await execute_query(
-        "SELECT title, private FROM source WHERE title = $title;",
-        {"title": default_title},
-        config=live_surrealdb,
-    )
-    assert len(rows) == 1
-    assert rows[0]["private"] is False
-
-    # Override path: private = true persists.
-    private_title = _unique("src-priv-true")
-    await execute_query(
-        "CREATE source SET title = $title, full_text = 'x', private = true;",
-        {"title": private_title},
-        config=live_surrealdb,
-    )
-    rows = await execute_query(
-        "SELECT title, private FROM source WHERE title = $title;",
-        {"title": private_title},
-        config=live_surrealdb,
-    )
-    assert len(rows) == 1
-    assert rows[0]["private"] is True
-
-
-@pytest.mark.requires_docker
-@pytest.mark.asyncio
-async def test_notebook_privacy_mode_optional(
-    live_surrealdb: SurrealDBConfig,
-) -> None:
-    """``notebook.privacy_mode`` is option<string>: NONE by default, settable."""
-    inherit_name = _unique("nb-inherit")
-    await execute_query(
-        "CREATE notebook SET name = $name;",
-        {"name": inherit_name},
-        config=live_surrealdb,
-    )
-    rows = await execute_query(
-        "SELECT name, privacy_mode FROM notebook WHERE name = $name;",
-        {"name": inherit_name},
-        config=live_surrealdb,
-    )
-    assert len(rows) == 1
-    # option<string> with no value reads back as None (inherit global).
-    assert rows[0].get("privacy_mode") is None
-
-    private_name = _unique("nb-private")
-    await execute_query(
-        "CREATE notebook SET name = $name, privacy_mode = 'private';",
-        {"name": private_name},
-        config=live_surrealdb,
-    )
-    rows = await execute_query(
-        "SELECT name, privacy_mode FROM notebook WHERE name = $name;",
-        {"name": private_name},
-        config=live_surrealdb,
-    )
-    assert len(rows) == 1
-    assert rows[0]["privacy_mode"] == "private"
-
-
-@pytest.mark.requires_docker
-@pytest.mark.asyncio
-async def test_settings_default_privacy_mode_seeded_cloud(
-    live_surrealdb: SurrealDBConfig,
-) -> None:
-    """The settings singleton's ``default_privacy_mode`` defaults to 'cloud'.
-
-    Migration 52 declares the field with DEFAULT 'cloud' and backfills the
-    singleton, so a write to the singleton reads it back as 'cloud' (Track J's
-    "cloud by default" — a privacy-first operator flips this one setting).
-    """
-    # The migration's backfill UPDATE only touches an EXISTING singleton; on a
-    # fresh container the record may be absent, so UPSERT it first. The DEFINE
-    # FIELD ... DEFAULT 'cloud' applies on the write because migration 52 defined
-    # the field on the open_notebook table.
-    await execute_query(
-        "UPSERT open_notebook:content_settings SET parser_engine = 'docling';",
-        config=live_surrealdb,
-    )
-    rows = await execute_query(
-        "SELECT default_privacy_mode FROM open_notebook:content_settings;",
-        config=live_surrealdb,
-    )
-    assert rows, "settings singleton missing"
-    assert rows[0]["default_privacy_mode"] == "cloud"
-
-
-@pytest.mark.requires_docker
-@pytest.mark.asyncio
-async def test_migration_52_idempotent(
-    live_surrealdb: SurrealDBConfig,
-) -> None:
-    """Re-applying migration 52 is a no-op (all DEFINEs use IF NOT EXISTS).
-
-    Replays the forward migration body against the already-migrated DB and
-    asserts it does not raise and leaves the fields intact.
-    """
-    from surrealdb_service.testing import fixtures as fx
-
-    migration_sql = (fx._MIGRATIONS_DIR / "52.surrealql").read_text()
-    # Should not raise on replay.
-    await execute_query(migration_sql, config=live_surrealdb)
-
-    # Fields still usable post-replay.
-    title = _unique("src-replay")
-    await execute_query(
-        "CREATE source SET title = $title, full_text = 'x';",
-        {"title": title},
-        config=live_surrealdb,
-    )
-    rows = await execute_query(
-        "SELECT private FROM source WHERE title = $title;",
-        {"title": title},
-        config=live_surrealdb,
-    )
-    assert rows[0]["private"] is False
-
-
-@pytest.mark.requires_docker
-@pytest.mark.asyncio
-async def test_default_models_update_without_privacy_field(
-    live_surrealdb: SurrealDBConfig,
-) -> None:
-    """A sibling ``open_notebook`` record updates without default_privacy_mode.
-
-    Regression for the migration 52 bug fixed by migration 53: migration 52
-    declared ``default_privacy_mode`` as a REQUIRED ``string`` on the whole
-    ``open_notebook`` table (intending only the content_settings singleton), so
-    the sibling ``open_notebook:default_models`` record — which never carries the
-    field — failed every UPDATE with "Found NONE for field default_privacy_mode,
-    expected a string". Migration 53 relaxes it to ``option<string>``. This test
-    creates a default_models record WITHOUT the field and updates it; pre-53 this
-    raised, post-53 it succeeds.
-    """
-    await execute_query(
-        "UPSERT open_notebook:default_models SET default_chat_model = 'model:x';",
-        config=live_surrealdb,
-    )
-    # Clear the field so this record carries NONE — the exact state the
-    # required-string definition rejected on the next write.
-    await execute_query(
-        "UPDATE open_notebook:default_models UNSET default_privacy_mode;",
-        config=live_surrealdb,
-    )
-    # The update that the bug rejected ("Found NONE for field
-    # default_privacy_mode, expected a string") — must not raise now.
-    await execute_query(
-        "UPDATE open_notebook:default_models SET default_chat_model = 'model:y';",
-        config=live_surrealdb,
-    )
-    rows = await execute_query(
-        "SELECT default_chat_model, default_privacy_mode "
-        "FROM open_notebook:default_models;",
-        config=live_surrealdb,
-    )
-    assert rows[0]["default_chat_model"] == "model:y"
-    # option<string> allows this sibling record to carry NONE (the global
-    # default lives on content_settings, not here).
-    assert rows[0].get("default_privacy_mode") is None
-
-
 @pytest.mark.requires_docker
 @pytest.mark.asyncio
 async def test_migration_54_aliases_roundtrip_and_idempotent(
@@ -810,6 +626,23 @@ async def _force_legacy_source_drift(
     return rid
 
 
+@pytest.fixture
+async def _veld_private_van_migratie_52(live_surrealdb: SurrealDBConfig):
+    """De tests van migratie 64 draaien op het veld ``source.private``.
+
+    Migratie 103 (F2-09) verwijdert dat veld; zet de definitie van migratie 52
+    tijdelijk terug en ruim haar daarna weer op.
+    """
+    await execute_query(
+        "DEFINE FIELD OVERWRITE private ON TABLE source TYPE bool DEFAULT false;",
+        config=live_surrealdb,
+    )
+    yield
+    await execute_query(
+        "REMOVE FIELD IF EXISTS private ON TABLE source;", config=live_surrealdb
+    )
+
+
 async def _apply_migration_64(config: SurrealDBConfig) -> None:
     from surrealdb_service.testing import fixtures as fx
 
@@ -819,6 +652,7 @@ async def _apply_migration_64(config: SurrealDBConfig) -> None:
 
 @pytest.mark.requires_docker
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_veld_private_van_migratie_52")
 async def test_migration_64_backfills_drifted_strict_fields(
     live_surrealdb: SurrealDBConfig,
 ) -> None:
@@ -842,6 +676,7 @@ async def test_migration_64_backfills_drifted_strict_fields(
 
 @pytest.mark.requires_docker
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_veld_private_van_migratie_52")
 async def test_migration_64_unblocks_aggregate_embedding_update(
     live_surrealdb: SurrealDBConfig,
 ) -> None:
@@ -888,6 +723,7 @@ async def test_migration_64_unblocks_aggregate_embedding_update(
 
 @pytest.mark.requires_docker
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_veld_private_van_migratie_52")
 async def test_migration_64_idempotent(live_surrealdb: SurrealDBConfig) -> None:
     """Criterion 3: applying 64 twice is a no-op; a clean row is unchanged.
 
