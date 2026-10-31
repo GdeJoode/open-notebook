@@ -94,3 +94,4 @@ Geert beslist, na P10.
   - het oude volume `./surreal_data` blijft een v2-archief. Wie het later wil lezen, gebruikt een v2-container of `surreal v2 export --v3`.
 - **Bij v2.7.0:** een aparte taak "overstap naar SurrealDB v3" in het plan, na fase 2, met de lijst uit P10; een controle per kwartaal op een 2.x-uitgave met beveiligingsoplossingen.
 - **Plan van aanpak:** B3, R10 en F2-10 noemen deze ADR; de planner werkt ze bij.
+- **Memory-opslag in tests (derde review F2-14, 31-10).** De memory-opslag van SurrealDB v2.7.0 dwingt een UNIQUE-index niet af bij gelijktijdige transacties; rocksdb (productie) wel. Gelijktijdigheidstests draaien daarom op een rocksdb-fixture. Dit raakt ook `idx_source_external_id` en `dn_run_ref` in tests.
