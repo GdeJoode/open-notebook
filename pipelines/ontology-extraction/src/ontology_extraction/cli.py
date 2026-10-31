@@ -36,7 +36,7 @@ def main():
     parser.add_argument(
         "--langextract-model-url",
         default=None,
-        help="Model URL for Ollama (default: http://localhost:11434)",
+        help="Model URL (LangExtract is uitgeschakeld, F2-08)",
     )
     parser.add_argument(
         "--langextract-passes",

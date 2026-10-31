@@ -1,24 +1,22 @@
 """
-LLM-based entity matcher via Ollama.
+LLM-based entity matcher via de modelpoort (F2-08, ADR 0006).
 
 Presents candidate entity pairs to a local LLM and asks whether they
 refer to the same real-world entity. Designed for Dutch policy documents
 with abbreviations, formal/informal variants, and government jargon.
 
-Requires an Ollama-compatible endpoint (default http://localhost:11434).
+De matcher roept zelf geen model aan: de aanroeper geeft een chatfunctie mee
+die via ``ModelGate`` naar llama-swap gaat, met de classificatie van de invoer.
 """
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
-try:
-    import httpx
-
-    _HTTPX = True
-except ImportError:
-    _HTTPX = False
+#: ``chat(messages) -> antwoord`` met ``.tekst`` en ``.model``
+#: (``llm_manager.aanroep.ChatAntwoord``), via de modelpoort.
+ChatFunctie = Callable[[List[Dict[str, Any]]], Awaitable[Any]]
 
 
 # Nederlandse overheidsafkortingen als few-shot context
@@ -80,13 +78,12 @@ def _format_abbreviations() -> str:
 
 
 class LLMMatcher:
-    """LLM-based entity matcher using Ollama.
+    """LLM-based entity matcher via de modelpoort.
 
     Args:
-        model: Ollama model name (default: qwen3.5:35b-a3b).
-        base_url: Ollama API endpoint.
+        chat: chatfunctie via ``ModelGate`` (verplicht; F2-08). Het model komt
+            uit het register, de classificatie geeft de aanroeper mee.
         confidence_threshold: Minimum confidence to accept a match.
-        timeout: HTTP timeout in seconds per request.
         custom_abbreviations: Additional abbreviations to include in prompt.
     """
 
@@ -111,10 +108,8 @@ class LLMMatcher:
 
     def __init__(
         self,
-        model: str = "qwen3.5:35b-a3b",
-        base_url: str = "http://localhost:11434",
+        chat: ChatFunctie,
         confidence_threshold: float = 0.7,
-        timeout: int = 60,
         custom_abbreviations: Optional[Dict[str, str]] = None,
         agentic_enabled: bool = False,
         agentic_lower_threshold: float = 0.3,
@@ -122,13 +117,10 @@ class LLMMatcher:
         agentic_max_iterations: int = 2,
         context_provider: Optional[Any] = None,
     ) -> None:
-        if not _HTTPX:
-            raise ImportError("httpx is required for LLMMatcher")
-
-        self._model = model
-        self._base_url = base_url.rstrip("/")
+        self._chat = chat
+        #: Het model dat het laatst antwoordde (herkomst).
+        self._model: Optional[str] = None
         self._confidence_threshold = confidence_threshold
-        self._timeout = timeout
 
         # Agentic matching config (stap 2E)
         self._agentic_enabled = agentic_enabled
@@ -211,7 +203,7 @@ class LLMMatcher:
         user_prompt = f"{lines_a}\n{lines_b}\n\nZijn dit dezelfde entiteit?"
 
         try:
-            result = await self._call_ollama(user_prompt)
+            result = await self._call_model(user_prompt)
             iterations = 1
 
             # Agentic loop: if uncertain and context provider available,
@@ -242,7 +234,7 @@ class LLMMatcher:
                         f"Aanvullende context:\n{extra_context}\n\n"
                         f"Herbeoordeel op basis van de aanvullende context."
                     )
-                    result = await self._call_ollama(enriched_prompt)
+                    result = await self._call_model(enriched_prompt)
 
                     # If now confident enough, stop iterating
                     conf = result.get("confidence", 0)
@@ -342,25 +334,14 @@ class LLMMatcher:
 
         return None
 
-    async def _call_ollama(self, user_prompt: str) -> Dict[str, Any]:
-        """Call the Ollama chat API and parse JSON response."""
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.post(
-                f"{self._base_url}/api/chat",
-                json={
-                    "model": self._model,
-                    "messages": [
-                        {"role": "system", "content": self._system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "stream": False,
-                    "format": "json",
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-
-        content = data.get("message", {}).get("content", "")
+    async def _call_model(self, user_prompt: str) -> Dict[str, Any]:
+        """Call the model via the model gate and parse the JSON response."""
+        antwoord = await self._chat([
+            {"role": "system", "content": self._system_prompt},
+            {"role": "user", "content": user_prompt},
+        ])
+        self._model = getattr(antwoord, "model", None)
+        content = getattr(antwoord, "tekst", "") or ""
 
         # Parse JSON from response
         try:

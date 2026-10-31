@@ -314,7 +314,10 @@ class TestRaptorStrategy:
             call_count += 1
             return f"Cluster summary {call_count}."
 
-        with patch.object(strategy, "_call_llm", side_effect=mock_llm):
+        # F2-08: ook de tussensamenvattingen (``_call_llm_minimal``) gaan naar
+        # het model; zonder deze patch zocht de test een draaiend Ollama.
+        with patch.object(strategy, "_call_llm", side_effect=mock_llm), \
+                patch.object(strategy, "_call_llm_minimal", side_effect=mock_llm):
             result = await strategy.summarize(_make_chunks(["A", "B", "C", "D"]))
 
         assert result.strategy == SummarizationStrategy.RAPTOR

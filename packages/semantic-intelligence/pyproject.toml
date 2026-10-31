@@ -5,6 +5,7 @@ description = "Semantic intelligence layer — graph algorithms, reasoning, deci
 requires-python = ">=3.10"
 dependencies = [
     "surrealdb-service",
+    "llm-manager",
     "loguru>=0.7.2",
     "networkx>=3.0",
     "httpx>=0.25.0",
@@ -12,6 +13,7 @@ dependencies = [
 
 [tool.uv.sources]
 surrealdb-service = { workspace = true }
+llm-manager = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

@@ -70,8 +70,6 @@ class TestMatchPair:
         matcher._abbreviations = dict(_NL_ABBREVIATIONS)
         matcher._confidence_threshold = 0.7
         matcher._model = "test"
-        matcher._base_url = "http://localhost:11434"
-        matcher._timeout = 10
 
         result = await matcher.match_pair(
             {"text": "BZK", "label": "ORG"},
@@ -86,24 +84,20 @@ class TestMatchPair:
         matcher._abbreviations = dict(_NL_ABBREVIATIONS)
         matcher._confidence_threshold = 0.7
         matcher._model = "test"
-        matcher._base_url = "http://localhost:11434"
-        matcher._timeout = 10
 
         result = await matcher.match_pair(
             {"text": "VWS", "label": "ORG"},
             {"text": "Ministerie van Volksgezondheid, Welzijn en Sport", "label": "ORG"},
         )
         assert result["match"] is True
-        # Should not have called Ollama
+        # Should not have called the model
 
     @pytest.mark.asyncio
-    async def test_calls_ollama_for_unknown_pair(self):
+    async def test_calls_model_for_unknown_pair(self):
         matcher = LLMMatcher.__new__(LLMMatcher)
         matcher._abbreviations = dict(_NL_ABBREVIATIONS)
         matcher._confidence_threshold = 0.7
         matcher._model = "test"
-        matcher._base_url = "http://localhost:11434"
-        matcher._timeout = 10
         matcher._system_prompt = "test prompt"
         # PC.1b: production `__init__` also sets these five. Without them
         # `match_pair` raises AttributeError, and its broad `except Exception`
@@ -117,17 +111,7 @@ class TestMatchPair:
         matcher._agentic_max_iter = 1
         matcher._context_provider = None
 
-        mock_response = {
-            "message": {
-                "content": json.dumps({
-                    "match": True,
-                    "confidence": 0.85,
-                    "reasoning": "Same ministry",
-                })
-            }
-        }
-
-        with patch.object(matcher, "_call_ollama", new_callable=AsyncMock) as mock_llm:
+        with patch.object(matcher, "_call_model", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = {
                 "match": True,
                 "confidence": 0.85,
@@ -148,8 +132,6 @@ class TestMatchPair:
         matcher._abbreviations = dict(_NL_ABBREVIATIONS)
         matcher._confidence_threshold = 0.7
         matcher._model = "test"
-        matcher._base_url = "http://localhost:11434"
-        matcher._timeout = 10
         matcher._system_prompt = "test prompt"
         # PC.1b: production `__init__` also sets these five. Without them
         # `match_pair` raises AttributeError, and its broad `except Exception`
@@ -163,7 +145,7 @@ class TestMatchPair:
         matcher._agentic_max_iter = 1
         matcher._context_provider = None
 
-        with patch.object(matcher, "_call_ollama", new_callable=AsyncMock) as mock_llm:
+        with patch.object(matcher, "_call_model", new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = Exception("Connection refused")
 
             result = await matcher.match_pair(
@@ -182,8 +164,6 @@ class TestMatchBatch:
         matcher._abbreviations = dict(_NL_ABBREVIATIONS)
         matcher._confidence_threshold = 0.7
         matcher._model = "test"
-        matcher._base_url = "http://localhost:11434"
-        matcher._timeout = 10
         matcher._system_prompt = "test"
 
         with patch.object(matcher, "match_pair", new_callable=AsyncMock) as mock_match:
@@ -212,3 +192,27 @@ class TestFilterMatches:
 
         indices = matcher.filter_matches(results)
         assert indices == [0, 3]  # Only high-confidence matches
+
+
+class TestModelpoort:
+    """F2-08: de matcher roept het model alleen aan via de meegegeven chatfunctie."""
+
+    @pytest.mark.asyncio
+    async def test_call_model_gebruikt_de_chatfunctie(self):
+        class Antwoord:
+            tekst = json.dumps({"match": True, "confidence": 0.9, "reasoning": "zelfde"})
+            model = "werkmodel"
+
+        chat = AsyncMock(return_value=Antwoord())
+        matcher = LLMMatcher(chat=chat)
+
+        result = await matcher._call_model("Zijn dit dezelfde entiteit?")
+
+        assert result == {"match": True, "confidence": 0.9, "reasoning": "zelfde"}
+        [berichten] = chat.await_args.args
+        assert [b["role"] for b in berichten] == ["system", "user"]
+        assert matcher._model == "werkmodel"
+
+    def test_zonder_chatfunctie_geen_matcher(self):
+        with pytest.raises(TypeError):
+            LLMMatcher()  # type: ignore[call-arg]

@@ -10,7 +10,6 @@ import uuid
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from esperanto import AIFactory
 from loguru import logger
 
 from summarization.config import SummarizationConfig
@@ -44,18 +43,7 @@ class TreeKGStrategy(BaseSummarizationStrategy):
     # ------------------------------------------------------------------
 
     def _get_model(self, max_tokens: int):
-        if self.injected_model is not None:
-            return self.injected_model
-        return AIFactory.create_language(
-            self._llm_config.provider,
-            model_name=self._llm_config.model_name,
-            config={
-                "base_url": self._llm_config.base_url,
-                "temperature": self._llm_config.temperature,
-                "max_tokens": max_tokens,
-                "num_ctx": self._llm_config.num_ctx,
-            },
-        )
+        return self._poortmodel()
 
     async def _call_llm(self, prompt: str, max_tokens: int = 500) -> str:
         model = self._get_model(max_tokens)

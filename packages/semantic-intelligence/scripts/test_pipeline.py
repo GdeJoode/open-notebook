@@ -31,14 +31,12 @@ async def extract_entities_from_text(
     text: str,
     source_id: str = "",
 ) -> tuple[List[Dict], List[Dict]]:
-    """Extract entities and relations from text using Ollama.
+    """Extract entities and relations from text via the model gate (F2-08).
 
     Returns:
         Tuple of (entities, relations) as dicts.
     """
-    import httpx
-
-    from semantic_intelligence.config import OLLAMA_LLM_MODEL, OLLAMA_URL
+    from llm_manager.aanroep import get_aanroeper
 
     prompt = f"""Extract entities and relations from this Dutch government document text.
 
@@ -59,18 +57,15 @@ TEXT:
 
 Return ONLY valid JSON, no other text."""
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": OLLAMA_LLM_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": 0.1, "num_ctx": 8192},
-            },
-        )
-        resp.raise_for_status()
-        response_text = resp.json().get("response", "")
+    # Via ModelGate naar llama-swap; de herkomst van de tekst is onbekend en
+    # telt dus als intern.
+    antwoord = await get_aanroeper().chat(
+        taak="entity_extraction",
+        classificatie="onbekend",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1,
+    )
+    response_text = antwoord.tekst
 
     # Parse JSON from response
     try:
@@ -147,7 +142,7 @@ async def write_entities_to_db(
 
         # Generate embedding
         try:
-            embedding = await embed_text(f"{etype}: {name}. {desc}")
+            embedding = await embed_text(f"{etype}: {name}. {desc}", classificatie="onbekend")
         except Exception:
             embedding = []
 

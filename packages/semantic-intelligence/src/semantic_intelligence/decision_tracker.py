@@ -96,7 +96,8 @@ async def record_decision(
     # Generate embedding
     if embed:
         embed_text_str = f"{category}: {scenario or ''} {reasoning}"
-        embedding = await embed_text(embed_text_str)
+        # De classificatie van de redenering is onbekend en telt als intern.
+        embedding = await embed_text(embed_text_str, classificatie="onbekend")
         params["embedding"] = embedding
 
     # Create record
@@ -183,7 +184,7 @@ async def find_precedents(
     from surrealdb_service.connection import execute_query
 
     # Generate embedding for the query text
-    query_embedding = await embed_text(reasoning_text)
+    query_embedding = await embed_text(reasoning_text, classificatie="onbekend")
 
     # Build SurrealQL query with cosine similarity
     where_clause = "WHERE status = 'active' AND embedding != NONE"

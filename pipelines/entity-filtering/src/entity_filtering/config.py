@@ -266,10 +266,7 @@ class LLMMatcherConfig:
     """
 
     enabled: bool = False
-    model: str = "qwen3.5:35b-a3b"
-    base_url: str = "http://localhost:11434"
     confidence_threshold: float = 0.7
-    timeout: int = 60
     agentic_enabled: bool = False
     agentic_lower_threshold: float = 0.3
     agentic_upper_threshold: float = 0.8

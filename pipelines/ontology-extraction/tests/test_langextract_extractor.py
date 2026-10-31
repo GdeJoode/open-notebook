@@ -493,7 +493,7 @@ class TestLangExtractExtractorExtract:
 
         extractor = _make_extractor(
             model_id="qwen2.5:latest",
-            model_url="http://localhost:11434",
+            model_url="http://modelserver.test:8080",
         )
         extractor._example_builder = ExampleBuilder()
 
@@ -821,3 +821,18 @@ class TestImportGuard:
 
         extractor = LLMExtractor()
         assert extractor._llm_model == "default"
+
+
+class TestUitgeschakeld:
+    """F2-08: LangExtract gaat om de modelpoort heen en is uitgeschakeld (ADR 0006)."""
+
+    def test_de_constructor_weigert(self):
+        _, LangExtractExtractor = _patch_and_import()
+        from ontology_extraction.extractors.langextract_extractor import (
+            LangExtractUitgeschakeld,
+        )
+
+        with pytest.raises(LangExtractUitgeschakeld):
+            LangExtractExtractor()
+        with pytest.raises(LangExtractUitgeschakeld):
+            LangExtractExtractor(provider="openai", api_key="x")

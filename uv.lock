@@ -7284,6 +7284,7 @@ version = "0.1.0"
 source = { editable = "packages/semantic-intelligence" }
 dependencies = [
     { name = "httpx" },
+    { name = "llm-manager" },
     { name = "loguru" },
     { name = "networkx" },
     { name = "surrealdb-service" },
@@ -7292,6 +7293,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.25.0" },
+    { name = "llm-manager", editable = "packages/llm-manager" },
     { name = "loguru", specifier = ">=0.7.2" },
     { name = "networkx", specifier = ">=3.0" },
     { name = "surrealdb-service", editable = "packages/surrealdb-service" },

@@ -20,8 +20,17 @@ except ImportError:
     lx = None  # type: ignore[assignment]
 
 
+class LangExtractUitgeschakeld(RuntimeError):
+    """LangExtract roept zelf een modelserver aan, buiten de modelpoort om."""
+
+
 class LangExtractExtractor(ExtractorBase):
     """Extract entities using LangExtract's few-shot example-driven approach.
+
+    UITGESCHAKELD (F2-08, ADR 0006): LangExtract roept zelf een modelserver of
+    een cloudaanbieder aan (``model_url``, ``provider``, ``api_key``), buiten
+    ``ModelGate`` om: geen register, geen toets op de classificatie, geen
+    auditregel. De constructor weigert daarom altijd.
 
     LangExtract uses example-based extraction patterns instead of ontology-guided
     system prompts, and returns results with precise source grounding (character
@@ -34,7 +43,7 @@ class LangExtractExtractor(ExtractorBase):
     def __init__(
         self,
         model_id: str = "qwen2.5:latest",
-        model_url: str | None = "http://localhost:11434",
+        model_url: str | None = None,
         confidence_threshold: float = 0.5,
         extraction_passes: int = 1,
         max_workers: int = 4,
@@ -61,6 +70,9 @@ class LangExtractExtractor(ExtractorBase):
         visualize: bool = False,
         visualize_output_dir: str | None = None,
     ):
+        raise LangExtractUitgeschakeld(
+            "LangExtract gaat om de modelpoort heen (ADR 0006); gebruik extractor_type 'llm'"
+        )
         if lx is None:
             raise ImportError(
                 "langextract is required for LangExtractExtractor. "

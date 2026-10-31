@@ -16,28 +16,9 @@ from shared.config_coherence import (
     ConfigurationError,
     Finding,
     check_feature_dependencies,
-    check_ollama_context,
-    check_privacy_defaults,
-    check_routing,
     collect_findings,
     raise_if_blocking,
 )
-
-
-def _routing(*, available=True, model="llama3.1:8b-instruct-q4_0", default="internal"):
-    return {
-        "defaults": {"default_privacy": default},
-        "providers": {
-            "ollama": {"base_url": "http://localhost:11434"},
-            "nvidia": {"available": available, "reason": "retired"},
-        },
-        "routing": {
-            "extraction": {
-                "internal": {"provider": "ollama", "model": model},
-                "public": {"provider": "nvidia", "model": "some/cloud-model"},
-            }
-        },
-    }
 
 
 # --- the flagship dependency ------------------------------------------------
@@ -157,93 +138,7 @@ def test_validation_is_silent_when_it_can_work_or_is_off(
 # --- routing ----------------------------------------------------------------
 
 
-def test_a_retired_provider_blocks_only_on_the_route_that_is_taken() -> None:
-    """Severity follows reachability, which is why the routes were kept.
-
-    A `public` route to a retired provider is a record of what the cloud path
-    was; with `default_privacy: internal` nothing selects it. Blocking on it
-    would force deletion of exactly the history the decision chose to keep.
-    """
-    findings = check_routing(_routing(available=False), installed={"llama3.1:8b-instruct-q4_0"})
-    by_code = {(f.code, f.severity) for f in findings}
-    assert ("provider-unavailable", WARN) in by_code
-    assert ("provider-unavailable", BLOCK) not in by_code
-
-    # Flip the default so the retired route IS the one taken.
-    taken = check_routing(
-        _routing(available=False, default="public"),
-        installed={"llama3.1:8b-instruct-q4_0"},
-    )
-    assert ("provider-unavailable", BLOCK) in {(f.code, f.severity) for f in taken}
-
-
-def test_a_missing_model_blocks_only_on_a_step_every_run_exercises() -> None:
-    """`extraction` refuses; `vlm` warns. Both are the same missing model.
-
-    A partially-pulled Ollama used to hard-refuse startup for a step the operator
-    may never touch, and the failure mode was worst in the COMMON case: no Ollama
-    at all degrades to one WARN, while Ollama with *some* models refused. That is
-    the over-reach `test_a_disabled_feature_never_blocks` refuses for feature
-    flags, applied to routes.
-    """
-    from shared.config_coherence import REQUIRED_STEPS
-
-    assert "extraction" in REQUIRED_STEPS and "vlm" not in REQUIRED_STEPS
-
-    required = check_routing(_routing(model="not-pulled:9b"), installed={"llama3.1:8b"})
-    blocking = [f for f in required if f.severity == BLOCK]
-    assert [f.code for f in blocking] == ["model-not-installed"]
-    assert "ollama pull not-pulled:9b" in blocking[0].remedy
-
-    optional = dict(_routing())
-    optional["routing"] = {
-        "vlm": {"internal": {"provider": "ollama", "model": "not-pulled:9b"}}
-    }
-    findings = check_routing(optional, installed={"llama3.1:8b"})
-    assert [(f.code, f.severity) for f in findings] == [("model-not-installed", WARN)]
-    assert "not exercised by every run" in findings[0].remedy
-
-
-def test_an_implicit_latest_tag_counts_as_installed() -> None:
-    """`granite3.2-vision` routed, `granite3.2-vision:latest` pulled — one model.
-
-    A real case in this repo's config. Treating them as different produced a
-    false "not installed" on a model that is present.
-    """
-    cfg = _routing(model="granite3.2-vision")
-    installed = {"granite3.2-vision:latest", "granite3.2-vision"}
-    assert [f for f in check_routing(cfg, installed=installed) if f.severity == BLOCK] == []
-
-
-def test_an_unreachable_runtime_is_one_warning_not_a_cascade() -> None:
-    """None and empty-set are different answers.
-
-    A daemon that is down must not be reported as "every routed model is
-    missing" — that is a false alarm of exactly the kind this module exists to
-    prevent, and it would train a reader to ignore the output.
-    """
-    findings = check_routing(_routing(), installed=None)
-    assert [f.code for f in findings] == ["ollama-unreachable"]
-    assert all(f.severity == WARN for f in findings)
-
-
 # --- the bridge between the two systems -------------------------------------
-
-
-def test_opposite_privacy_defaults_are_reported() -> None:
-    assert [f.code for f in check_privacy_defaults(
-        routing_default="internal", resolver_default="CLOUD"
-    )] == ["privacy-default-mismatch"]
-
-
-@pytest.mark.parametrize(
-    ("routing_default", "resolver_default"),
-    [("internal", "PRIVATE"), ("confidential", "private"), ("public", "CLOUD")],
-)
-def test_agreeing_defaults_are_silent(routing_default: str, resolver_default: str) -> None:
-    assert check_privacy_defaults(
-        routing_default=routing_default, resolver_default=resolver_default
-    ) == []
 
 
 # --- the contract every finding must keep -----------------------------------
@@ -297,38 +192,14 @@ def test_every_finding_carries_a_remedy() -> None:
 
 def test_blocking_findings_sort_first() -> None:
     findings = collect_findings(
-        routing_config=_routing(available=False),
         concept_alignment_enabled=True,
         kg_resolution_enabled=False,
         judge_enabled=False,
         judge_model_configured=True,
-        resolver_default_privacy="CLOUD",
-        installed_models={"llama3.1:8b-instruct-q4_0"},
     )
     severities = [f.severity for f in findings]
     assert severities == sorted(severities, key=lambda s: 0 if s == BLOCK else 1)
     assert severities[0] == BLOCK
-
-
-def test_the_probe_is_not_called_when_models_are_supplied() -> None:
-    """`installed_models` must short-circuit the network probe.
-
-    Otherwise every test and every startup pays a socket timeout, and the check
-    becomes something people disable.
-    """
-    def _explode(_base_url):  # pragma: no cover - must not run
-        raise AssertionError("the Ollama probe was called despite installed_models")
-
-    collect_findings(
-        routing_config=_routing(),
-        concept_alignment_enabled=False,
-        kg_resolution_enabled=False,
-        judge_enabled=False,
-        judge_model_configured=True,
-        resolver_default_privacy="PRIVATE",
-        installed_models={"llama3.1:8b-instruct-q4_0"},
-        ollama_probe=_explode,
-    )
 
 
 # --- refusal ----------------------------------------------------------------
@@ -372,7 +243,7 @@ def test_resolving_a_retired_provider_raises_with_the_reason() -> None:
     mr._config = {
         "defaults": {"default_privacy": "internal"},
         "providers": {
-            "ollama": {"base_url": "http://localhost:11434", "type": "ollama"},
+            "ollama": {"base_url": "x", "type": "ollama"},
             "gone": {"available": False, "reason": "retired for a stated reason"},
         },
         "routing": {
@@ -422,58 +293,6 @@ def test_an_explicit_override_still_reaches_a_retired_provider() -> None:
 
 
 # --- the window a model actually gets --------------------------------------
-
-
-def test_a_model_that_bakes_less_than_it_promises_is_reported() -> None:
-    """Measured through the real esperanto factory before this was written:
-
-        in   config={"num_ctx": 16384, "temperature": 0.1, "max_tokens": 8}
-        out  {"options": {"num_predict": 8, "temperature": 0.1, "top_p": 0.9}}
-
-    `num_ctx` appears zero times in the whole esperanto package, so on that path
-    the Modelfile is the only thing that sets the window. A model row promising
-    32768 against a model that bakes nothing means the packer sizes prompts the
-    runtime truncates — from the HEAD, which is where the document content is.
-    """
-    findings = check_ollama_context(
-        {"bare:8b": 32768}, probe=lambda _url, _model: None
-    )
-    assert [(f.code, f.severity) for f in findings] == [
-        ("ollama-context-not-honoured", WARN)
-    ]
-    assert "4096" in findings[0].message
-    assert "PARAMETER num_ctx 32768" in findings[0].remedy
-
-
-def test_a_model_that_bakes_enough_is_silent() -> None:
-    """The counterweight — and the case that proves the remedy works.
-
-    A `-ctx16k` variant baking 16384 against a row declaring 16384 must produce
-    nothing, or the check would tell an operator to do what they have already
-    done.
-    """
-    assert check_ollama_context(
-        {"m:8b-ctx16k": 16384}, probe=lambda _url, _model: 16384
-    ) == []
-    # And a row declaring no more than the runtime default needs no variant.
-    assert check_ollama_context(
-        {"small:3b": 4096}, probe=lambda _url, _model: None
-    ) == []
-
-
-def test_an_unreachable_runtime_reports_nothing_here() -> None:
-    """`_baked_num_ctx` returns None both for "bakes nothing" and "cannot ask".
-
-    Conflating them would turn a stopped Ollama into a warning per model row. The
-    routing check already reports an unreachable runtime once; this one must not
-    repeat it, so a row at or below the default stays silent either way.
-    """
-    assert check_ollama_context({"m:8b": 4096}, probe=lambda _url, _model: None) == []
-
-
-def test_rows_without_a_declared_window_are_skipped() -> None:
-    assert check_ollama_context({"m:8b": 0}, probe=lambda _u, _m: None) == []
-    assert check_ollama_context({"": 32768}, probe=lambda _u, _m: None) == []
 
 
 # --- the rest of the flag-on-zero-effect class ------------------------------

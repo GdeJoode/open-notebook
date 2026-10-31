@@ -9,12 +9,20 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from esperanto import EmbeddingModel
+from llm_manager.gate import classificatie_van
 from loguru import logger
 
 from embeddings.config import EmbeddingConfig
+from embeddings.providers import PoortEmbedder
 from shared.models import Chunk, Source, SourceEmbedding
 from surrealdb_service.repositories.source import SourceRepository
+
+
+#: Een tekst van ten hoogste zoveel tekens past altijd in 512 tokens (ADR 0008).
+ZEKER_TEKENS = 510
+
+#: Fouttypen van llama-server bij een te lange invoer (``error.type``).
+LENGTEFOUTEN = frozenset({"exceed_context_size_error", "server_error"})
 
 
 @dataclass
@@ -43,12 +51,16 @@ class EmbeddingService:
 
     Uses structural chunks from the ingestion pipeline when available,
     falling back to text splitting for legacy sources or notes.
+
+    ``embedding_model`` is een :class:`~embeddings.providers.PoortEmbedder`:
+    elke aanroep gaat via ``ModelGate`` naar llama-swap, met de classificatie
+    van de invoer (F2-08).
     """
 
     def __init__(
         self,
         source_repo: SourceRepository,
-        embedding_model: EmbeddingModel,
+        embedding_model: PoortEmbedder,
         config: Optional[EmbeddingConfig] = None,
     ):
         self.source_repo = source_repo
@@ -56,7 +68,9 @@ class EmbeddingService:
         self.config = config or EmbeddingConfig()
         self._semaphore = asyncio.Semaphore(self.config.max_concurrent)
 
-    async def embed_source(self, source_id: str) -> EmbeddingResult:
+    async def embed_source(
+        self, source_id: str, run_id: Optional[str] = None
+    ) -> EmbeddingResult:
         """
         Embed a source using its stored chunks.
 
@@ -84,7 +98,7 @@ class EmbeddingService:
             # 3a. Use structural chunks from ingestion pipeline
             result.used_structural_chunks = True
             result.chunks_used = len(chunks)
-            embeddings = await self._embed_chunks(source_id, chunks)
+            embeddings = await self._embed_chunks(source_id, chunks, run_id)
             result.embeddings_created = len(embeddings)
         else:
             # 3b. Geen fragmenten, geen embeddings. De terugval op
@@ -135,6 +149,7 @@ class EmbeddingService:
         self,
         source_id: str,
         chunks: List[Chunk],
+        run_id: Optional[str] = None,
     ) -> List[SourceEmbedding]:
         """Generate embeddings for structural chunks with chunk linkage.
 
@@ -168,7 +183,13 @@ class EmbeddingService:
                 continue
 
             texts = [chunk.text for _, chunk in embeddable]
-            vectors = await self._embed_with_retry(texts)
+            vectors = await self._embed_with_retry(
+                texts,
+                classificatie=classificatie_van(
+                    getattr(chunk, "classification", None) for _, chunk in embeddable
+                ),
+                run_id=run_id,
+            )
 
             for (order, chunk), vector in zip(embeddable, vectors):
                 chunk_id = chunk.id if hasattr(chunk, "id") and chunk.id else None
@@ -185,14 +206,13 @@ class EmbeddingService:
 
     @staticmethod
     def _is_context_length_error(error: Exception) -> bool:
-        """True when ``error`` is Ollama's over-long-input rejection.
+        """True als llama-server de invoer kan hebben geweigerd wegens lengte.
 
-        The legacy ``/api/embeddings`` endpoint (used by the esperanto Ollama
-        provider) returns HTTP 500 ``"input length exceeds the context
-        length"`` and ignores the ``truncate`` option, so we detect it from
-        the message and recover by shrinking the text client-side.
+        llama-server meldt dat met ``exceed_context_size_error`` of, bij een
+        invoer groter dan de batch, met ``server_error``; de fout draagt alleen
+        dat type, nooit de tekst (``LlamaSwapFout``).
         """
-        return "input length exceeds the context length" in str(error).lower()
+        return getattr(error, "soort", None) in LENGTEFOUTEN
 
     def _cap_texts(self, texts: List[str]) -> List[str]:
         """Tail-truncate each text to the configured char cap, logging cuts.
@@ -217,20 +237,23 @@ class EmbeddingService:
                 capped.append(text)
         return capped
 
-    async def _embed_one_with_shrink(self, text: str) -> List[float]:
+    async def _embed_one_with_shrink(
+        self, text: str, *, classificatie: Optional[str], run_id: Optional[str] = None
+    ) -> List[float]:
         """Embed a single text, halving its length until it fits the context.
 
-        Char counts are not a reliable proxy for tokens (dense scripts such as
-        CJK pack far more tokens per char), so the static cap can still miss.
-        When the model rejects a text for length, we halve and retry until it
-        is accepted. This guarantees a vector for every chunk regardless of
-        script/density without dropping it. Halving converges quickly (a 9k
-        char text is accepted within a few iterations).
+        Char counts are not a reliable proxy for tokens, so the static cap can
+        still miss. When the model rejects a text for length, we halve and
+        retry until it is accepted, but never below :data:`ZEKER_TEKENS`: that
+        length always fits, so a rejection there is not about length and is
+        raised. Every attempt is one call through the model gate.
         """
         candidate = text
         while True:
             try:
-                vectors = await self.embedding_model.aembed([candidate])
+                vectors = await self.embedding_model.aembed(
+                    [candidate], classificatie=classificatie, run_id=run_id
+                )
                 if len(candidate) < len(text):
                     logger.warning(
                         f"Embedded after adaptive shrink: {len(text)} -> "
@@ -241,12 +264,15 @@ class EmbeddingService:
                 if not (
                     self.config.truncate_on_context_error
                     and self._is_context_length_error(e)
-                    and len(candidate) > 1
+                    and len(candidate) > ZEKER_TEKENS
                 ):
                     raise
-                candidate = candidate[: max(1, len(candidate) // 2)]
+                candidate = candidate[: max(ZEKER_TEKENS, len(candidate) // 2)]
 
-    async def _embed_with_retry(self, texts: List[str]) -> List[List[float]]:
+    async def _embed_with_retry(
+        self, texts: List[str], *, classificatie: Optional[str],
+        run_id: Optional[str] = None,
+    ) -> List[List[float]]:
         """Embed texts with length-guard, retry logic, and concurrency control.
 
         1. Cap each text to ``max_input_chars`` up front (cheap, one call).
@@ -260,7 +286,9 @@ class EmbeddingService:
             last_error = None
             for attempt in range(self.config.retry_attempts + 1):
                 try:
-                    return (await self.embedding_model.aembed(texts))
+                    return await self.embedding_model.aembed(
+                        texts, classificatie=classificatie, run_id=run_id
+                    )
                 except Exception as e:
                     last_error = e
                     if (
@@ -275,7 +303,10 @@ class EmbeddingService:
                             "char cap; recovering per-text via adaptive shrink"
                         )
                         return [
-                            await self._embed_one_with_shrink(t) for t in texts
+                            await self._embed_one_with_shrink(
+                                t, classificatie=classificatie, run_id=run_id
+                            )
+                            for t in texts
                         ]
                     if attempt < self.config.retry_attempts:
                         logger.warning(
@@ -312,7 +343,8 @@ class EmbeddingService:
             return result
 
         # Embed the full note content as a single vector
-        vectors = await self._embed_with_retry([note.content])
+        # Een notitie is afgeleid (eis 3); haar classificatie is onbekend.
+        vectors = await self._embed_with_retry([note.content], classificatie="onbekend")
         if vectors:
             note.embedding = vectors[0]
             await note_repo.update(note_id, {"embedding": vectors[0]})
@@ -339,7 +371,10 @@ class EmbeddingService:
             logger.warning(f"No content for insight {insight_id}")
             return result
 
-        vectors = await self._embed_with_retry([insight.content])
+        # Een inzicht is afgeleid (eis 3); zijn classificatie is onbekend.
+        vectors = await self._embed_with_retry(
+            [insight.content], classificatie="onbekend"
+        )
         if vectors:
             await insight_repo.update(insight_id, {"embedding": vectors[0]})
             result.embeddings_created = 1

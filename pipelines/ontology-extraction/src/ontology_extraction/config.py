@@ -27,8 +27,9 @@ class ExtractionConfig:
     langextract_model_id: str = field(
         default_factory=lambda: os.getenv("LANGEXTRACT_MODEL_ID", "qwen2.5:latest")
     )
+    # LangExtract is uitgeschakeld (F2-08, ADR 0006): het gaat om de modelpoort heen.
     langextract_model_url: str | None = field(
-        default_factory=lambda: os.getenv("LANGEXTRACT_MODEL_URL", "http://localhost:11434")
+        default_factory=lambda: os.getenv("LANGEXTRACT_MODEL_URL")
     )
     langextract_extraction_passes: int = 1
     langextract_max_workers: int = 4

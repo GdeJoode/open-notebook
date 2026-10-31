@@ -3,7 +3,6 @@
 import uuid
 from typing import List
 
-from esperanto import AIFactory
 from loguru import logger
 
 from summarization.config import SummarizationConfig
@@ -31,20 +30,7 @@ class NaiveLLMStrategy(BaseSummarizationStrategy):
         self._naive_config = config.naive
 
     def _get_model(self):
-        """Return the LanguageModel: app-injected (J.4 routed) when present, else
-        constructed from the env-driven LLMConfig (back-compat ollama path)."""
-        if self.injected_model is not None:
-            return self.injected_model
-        return AIFactory.create_language(
-            self._llm_config.provider,
-            model_name=self._llm_config.model_name,
-            config={
-                "base_url": self._llm_config.base_url,
-                "temperature": self._llm_config.temperature,
-                "max_tokens": self._naive_config.summarization_max_tokens,
-                "num_ctx": self._llm_config.num_ctx,
-            },
-        )
+        return self._poortmodel()
 
     def _split_into_windows(self, text: str) -> List[str]:
         """Split text into overlapping windows that fit within max_input_length."""

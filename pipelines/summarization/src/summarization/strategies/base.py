@@ -32,14 +32,26 @@ class BaseSummarizationStrategy(ABC):
 
     @property
     def injected_model(self):
-        """The app-injected routed LanguageModel, or ``None`` (Track J.4).
+        """The app-injected language model, or ``None``.
 
-        Strategies call this from ``_get_model``: when non-``None`` they use it
-        directly (privacy-aware routed model with failover already applied at
-        injection time) instead of constructing one via ``AIFactory`` from the
-        env-driven ``LLMConfig``. ``None`` -> the legacy env path (back-compat).
+        In the fork this is a model behind the model gate (F2-08, ADR 0006):
+        every call goes via ``ModelGate`` to llama-swap.
         """
         return getattr(self.config, "language_model", None)
+
+    def _poortmodel(self):
+        """The injected model; without one there is no model call (F2-08).
+
+        The strategies no longer build a model themselves: that would bypass the
+        model gate (no register, no classification check, no audit row).
+        """
+        model = self.injected_model
+        if model is None:
+            raise RuntimeError(
+                "Geen taalmodel: de aanroeper geeft een model van de modelpoort mee "
+                "(SummarizationConfig.language_model)"
+            )
+        return model
 
     @abstractmethod
     async def summarize(self, chunks: List[ChunkInput]) -> SummarizationResult:

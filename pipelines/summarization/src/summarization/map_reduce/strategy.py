@@ -14,7 +14,6 @@ import asyncio
 import uuid
 from typing import List
 
-from esperanto import LanguageModel
 from loguru import logger
 
 from summarization.config import SummarizationConfig
@@ -43,19 +42,11 @@ class MapReduceStrategy(BaseSummarizationStrategy):
     # LLM helpers
     # ------------------------------------------------------------------
 
-    def _get_model(self, max_tokens: int) -> LanguageModel:
-        return LanguageModel(
-            model_name=self._llm_config.model_name,
-            api_base=self._llm_config.base_url,
-            temperature=self._llm_config.temperature,
-            max_tokens=max_tokens,
-        )
-
     async def _call_llm(self, prompt: str, max_tokens: int = 500) -> str:
-        model = self._get_model(max_tokens)
+        model = self._poortmodel()
         messages = [{"role": "user", "content": prompt}]
-        response = await model.achat(messages)
-        return response.text
+        response = await model.achat_complete(messages)
+        return response.content
 
     # ------------------------------------------------------------------
     # Map phase

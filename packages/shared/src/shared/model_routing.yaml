@@ -22,7 +22,7 @@ defaults:
 providers:
   ollama:
     type: "ollama"
-    base_url: "${OLLAMA_URL:-http://localhost:11434}"
+    base_url: "${OLLAMA_URL}"
 
   nvidia:
     type: "openai_compatible"

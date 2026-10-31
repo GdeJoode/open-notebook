@@ -58,7 +58,7 @@ class TestRetrievalServiceVectorSearch:
         svc = RetrievalService(search_repo=repo, embedding_model=embed_model)
         result = await svc.vector_search("test query", limit=5, scope=S)
 
-        embed_model.aembed.assert_called_once_with(["test query"])
+        embed_model.aembed.assert_called_once_with(["test query"], classificatie="onbekend")
         repo.vector_search.assert_called_once_with(
             [0.1, 0.2, 0.3], 5, 0.2, scope=S, history=False, hydrate=False
         )

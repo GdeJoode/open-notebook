@@ -108,7 +108,10 @@ class FilteringWorkflow:
         gap_recorder: Optional[Any] = None,
         alignment_schemas: Optional[list[Any]] = None,
         gap_ontology_name: Optional[str] = None,
+        llm_chat: Optional[Any] = None,
     ) -> None:
+        """``llm_chat``: chatfunctie via de modelpoort voor de LLM-matcher
+        (F2-08); ``chat(messages)`` met de classificatie van de invoer."""
         self._config = config or FilteringConfig()
         # Kept for Stage 15 (Track N.4 concept alignment), which needs the
         # same repository Stage 10 uses plus the applied ontology for the
@@ -246,14 +249,15 @@ class FilteringWorkflow:
                 min_samples=self._config.semantic_blocking.min_samples,
             )
 
-        # LLM-based matcher
+        # LLM-based matcher, via de modelpoort (F2-08): zonder chatfunctie van
+        # de aanroeper geen LLM-matching.
         self._llm_matcher: Optional[LLMMatcher] = None
-        if self._config.llm_matcher.enabled:
+        if self._config.llm_matcher.enabled and llm_chat is None:
+            logger.warning("LLM-matching staat aan, maar er is geen modelpoort; overgeslagen")
+        if self._config.llm_matcher.enabled and llm_chat is not None:
             self._llm_matcher = LLMMatcher(
-                model=self._config.llm_matcher.model,
-                base_url=self._config.llm_matcher.base_url,
+                chat=llm_chat,
                 confidence_threshold=self._config.llm_matcher.confidence_threshold,
-                timeout=self._config.llm_matcher.timeout,
                 agentic_enabled=self._config.llm_matcher.agentic_enabled,
                 agentic_lower_threshold=self._config.llm_matcher.agentic_lower_threshold,
                 agentic_upper_threshold=self._config.llm_matcher.agentic_upper_threshold,

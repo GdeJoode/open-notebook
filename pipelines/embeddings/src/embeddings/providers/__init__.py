@@ -1,6 +1,6 @@
 """Embedding provider abstractions."""
 
 from embeddings.providers.base import EmbeddingProvider
-from embeddings.providers.esperanto_provider import EsperantoProvider
+from embeddings.providers.poort_provider import PoortEmbedder
 
-__all__ = ["EmbeddingProvider", "EsperantoProvider"]
+__all__ = ["EmbeddingProvider", "PoortEmbedder"]

@@ -114,7 +114,7 @@ async def test_embed_source_writes_aggregate_mean_pool() -> None:
     repo = FakeAggregateRepo(chunks)
     model = AsyncMock()
     # Distinct per-chunk vectors so the mean is non-trivial.
-    model.aembed = AsyncMock(side_effect=lambda texts: [[1.0, 3.0], [3.0, 5.0]])
+    model.aembed = AsyncMock(side_effect=lambda texts, **_: [[1.0, 3.0], [3.0, 5.0]])
 
     service = EmbeddingService(repo, model, EmbeddingConfig(batch_size=10))
     result = await service.embed_source("source:agg")
@@ -132,14 +132,14 @@ async def test_embed_source_recomputes_aggregate_on_reembed() -> None:
     chunks = [_chunk("alpha", 0)]
     repo = FakeAggregateRepo(chunks)
     model = AsyncMock()
-    model.aembed = AsyncMock(side_effect=lambda texts: [[2.0, 2.0]])
+    model.aembed = AsyncMock(side_effect=lambda texts, **_: [[2.0, 2.0]])
 
     service = EmbeddingService(repo, model, EmbeddingConfig(batch_size=10))
     await service.embed_source("source:re")
     assert repo.aggregate_writes[-1] == [2.0, 2.0]
 
     # Re-embed with a different model output -> aggregate recomputed afresh.
-    model.aembed = AsyncMock(side_effect=lambda texts: [[6.0, 8.0]])
+    model.aembed = AsyncMock(side_effect=lambda texts, **_: [[6.0, 8.0]])
     await service.embed_source("source:re")
     assert repo.aggregate_writes[-1] == [6.0, 8.0]
 

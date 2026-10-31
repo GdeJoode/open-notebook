@@ -98,7 +98,9 @@ async def _backfill(
 
         names = [str(r.get("canonical_name") or "") for r in rows]
         try:
-            vectors = await model.aembed(names)
+            # Via de modelpoort (F2-08); de classificatie van de entiteitnamen
+            # is onbekend en telt dus als intern.
+            vectors = await model.aembed(names, classificatie="onbekend")
         except Exception as e:
             # A model-call failure is fatal for this batch; abort rather than
             # write partial/garbage. The next run retries the same rows (they

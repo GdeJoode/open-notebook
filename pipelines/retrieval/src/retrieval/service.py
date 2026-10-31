@@ -19,8 +19,9 @@ class RetrievalService:
 
     Args:
         search_repo: SurrealDB search repository.
-        embedding_model: Esperanto EmbeddingModel (optional; required for
-            vector and hybrid search). If None, vector/hybrid calls fall
+        embedding_model: embeddingmodel achter de modelpoort
+            (``embeddings.providers.PoortEmbedder``, F2-08); optional, required
+            for vector and hybrid search. If None, vector/hybrid calls fall
             back to text search.
     """
 
@@ -39,7 +40,9 @@ class RetrievalService:
                 "Embedding model required for vector search. "
                 "Configure a default embedding model in Settings → Models."
             )
-        vectors = await self._embedding_model.aembed([text])
+        # Een zoekvraag hoort bij geen run; haar classificatie is onbekend en
+        # telt dus als intern (F2-08, ADR 0007).
+        vectors = await self._embedding_model.aembed([text], classificatie="onbekend")
         return vectors[0]
 
     async def search(

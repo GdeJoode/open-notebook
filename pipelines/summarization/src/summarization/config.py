@@ -20,8 +20,11 @@ class LLMConfig:
     provider: str = field(
         default_factory=lambda: os.getenv("SUMMARIZATION_PROVIDER", "ollama")
     )
+    # De strategieën bouwen geen model meer op (F2-08): het model komt van de
+    # modelpoort via ``language_model``. Deze velden lezen alleen nog de losse
+    # samenvattingsdienst (services/summarization, ADR 0015).
     base_url: str = field(
-        default_factory=lambda: os.getenv("SUMMARIZATION_BASE_URL", "http://localhost:11434")
+        default_factory=lambda: os.getenv("SUMMARIZATION_BASE_URL", "")
     )
     temperature: float = 0.3
     max_tokens: int = 3000
@@ -161,12 +164,9 @@ class SummarizationConfig:
     system_prompt: str = ""
     output_instructions: str = ""
 
-    # Track J.4: an injected, pre-built esperanto LanguageModel (or compatible
-    # ``achat_complete`` object). When the app resolves a privacy-aware route +
-    # failover executor for SUMMARIZATION it injects the routed model here, and
-    # strategies use it instead of constructing one from ``llm`` via AIFactory.
-    # Left ``None`` for CLI/test/back-compat callers, which keep the env-driven
-    # ``AIFactory.create_language`` ollama path (no behavior change).
+    # Het taalmodel (een object met ``achat_complete``), van de modelpoort
+    # (F2-08, ADR 0006). Zonder model geen samenvatting met een LLM: de
+    # strategieën bouwen zelf geen model meer op.
     language_model: Optional[Any] = None
 
     llm: LLMConfig = field(default_factory=LLMConfig)
