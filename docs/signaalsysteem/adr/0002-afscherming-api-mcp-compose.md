@@ -158,6 +158,8 @@ Optie 2, in zes onderdelen.
 - **Cloudsleutels.** Na ADR 0006 doet de fork geen cloudaanroepen meer; daar vervallen de cloudsleutels, zoals `NVIDIA_API_KEY` en `api_key_env_var` voor cloudaanbieders. Langflow krijgt geen Claude-sleutel. De Claude-API-sleutel staat alleen in de container `cloud-gateway` (fase 5); een startscript leest hem uit een Docker secret in `/run/secrets/` en geeft hem alleen aan het gatewayproces, niet als omgevingsvariabele van de container (ADR 0022). Hetzelfde geldt voor de CLI-login in `claude-cli`.
 - Images en versies liggen vast. `surrealdb/surrealdb:v2` met `pull_policy: always` (`docker-compose.yml:8`, `:25`) wordt een vaste versie.
 
+**Uitwerking in F2-05 (31-10).** Het bereik is verplicht in nieuwe leesmethoden (`get_scoped`, `list_scoped`, `get_text`, `count_related`, `get_notebook_ids_scoped`, `get_notes_scoped`, `list_with_metadata`, `load_mentions_edges`) en in de zoekfuncties. De algemene `get`, `get_all` en `execute_query` blijven zonder bereik, voor interne processen en beheerroutes; een AST-test faalt als een route voor `lezen_extern` (of wat die aanroept) ze gebruikt. Tekstzoeken met bereik extern gebruikt een eigen BM25-index op alleen externe tekst, zodat score en volgorde niets verraden over interne fragmenten (review F2-05). Foutmeldingen in antwoorden zijn vaste teksten met een fout-id (`api/fouten.py`).
+
 ## Gevolgen
 
 - **Code:** in `apps/app-main/src/app_main/api/` worden `auth.py` en `agent_auth.py` herschreven; `app.py` krijgt de middleware zonder uitzonderingen en de routecontrole. De repositorylaag krijgt een verplicht `scope`. Er komen migraties voor `agent_keys.permission` en de zoekfuncties. Drie MCP-pakketonderdelen en `services_proxy` worden verwijderd.

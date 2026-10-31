@@ -36,7 +36,7 @@ Optie 2.
 - De pipelinestap INSIGHTS vervalt (ADR 0010). `insight_service.py` en de transformaties blijven staan (FO 13.2 punt 7), maar hun uitvoer is afgeleid en niet zoekbaar.
 - De MCP-tool `add_note` vervalt met `surrealdb-mcp` (ADR 0002). `create_note` via open-notebook-mcp krijgt HTTP 403, omdat de sleutel alleen `lezen_extern` heeft.
 - Koppelingen van notitie naar notitie en van notitie naar bron (Tracks Y en NS: `related_note`, `note_about`; `ARCHITECTURE.md` paragraaf 12 en 12a) blijven. Ze leggen een relatie vanuit een kennisproduct, maar voeren dat product niet terug als bron.
-- Bestaande gegevens: de migratie zet `is_derived = true` op alle bestaande `note`- en `source_insight`-records.
+- Bestaande gegevens: de migratie zet `is_derived = true` op alle bestaande `note`- en `source_insight`-records. Uitwerking in F2-05: migratie 91 doet dat niet, omdat de omgeving met een lege database start (B3) en een UPDATE op oude, ongeldige inzichten faalde. Chat en context geven alleen fragmenten aan een model, geen notities of inzichten.
 - **Geen terugvoer via de vault of de export.** De export naar Obsidian (ADR 0018) schrijft afgeleide tekst in notities. Die mag niet als bron terugkomen:
   - een bronkaartregel mag niet wijzen naar een locatie binnen de vault (`D:\# Vault`, of de koppeling daarvan in een container) of binnen de exportmap van de export. De API van de fork weigert zo'n regel (HTTP 422, ADR 0020); de controle vergelijkt het genormaliseerde pad, ook na het oplossen van symbolische koppelingen;
   - het importeindpunt (ADR 0010) weigert een verzoek waarvan de ruwe inhoud of een fragment de markering `<!-- signaalsysteem:begin -->` of `<!-- signaalsysteem:end -->` bevat (HTTP 422), en legt dat vast in het runlogboek.

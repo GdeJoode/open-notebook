@@ -61,11 +61,11 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Let op:* de interface kan tot F2-20 niet inloggen.
 
 **F2-02 Verwijderen: routes en diensten die het filter omzeilen**
-- *Wat:* weg gaan de router `services_proxy`, de drie MCP-servers (Model Context Protocol) in de fork en de extractiedienst. Daarmee vervalt PC.7. Vooraf verhuist `services/extraction/vocabulary_manager.py` naar `packages/shared/src/shared/vocabulary/` (ADR 0012). De querylogica achter de MCP-tools blijft bestaan in de repositories (`SearchRepository`, `GraphRepository`; `ARCHITECTURE.md` §10), voor de herkomsteindpunten in F3-09.
+- *Wat:* weg gaan de router `services_proxy`, de drie MCP-servers (Model Context Protocol) in de fork, de losse API `packages/surrealdb-service/src/surrealdb_service/api/` (luistert op `0.0.0.0:8001`, zonder sleutel en bereik; review F2-05) met de script-ingang `surrealdb-service`, en de extractiedienst. F2-02 gaat vóór F2-10. Daarmee vervalt PC.7. Vooraf verhuist `services/extraction/vocabulary_manager.py` naar `packages/shared/src/shared/vocabulary/` (ADR 0012). De querylogica achter de MCP-tools blijft bestaan in de repositories (`SearchRepository`, `GraphRepository`; `ARCHITECTURE.md` §10), voor de herkomsteindpunten in F3-09.
 - *Hangt af van:* F2-01.
 - *Bestanden:* `apps/app-main/src/app_main/api/routers/services_proxy.py` en de registratie in `app.py`; `frontend/src/lib/api/services.ts` (roept `/api/services` aan); `packages/surrealdb-service/src/surrealdb_service/mcp/` met script-ingang in `packages/surrealdb-service/pyproject.toml` en de tests `test_mcp_*.py`; `packages/llm-manager/src/llm_manager/mcp/` en `pyproject.toml`; `packages/file-manager/src/file_manager/mcp/` en `pyproject.toml`; `services/extraction/` en de dienst `extraction` in `docker-compose.yml`; `ARCHITECTURE.md` §1, §6 en §10.
 - *ADR:* 0002 D, E; 0012.
-- *Stopconditie:* verwijdercontrole V, met `tests/test_geen_verwijzingen_omzeilroutes.py` op `services_proxy`, `surrealdb_service.mcp`, `llm_manager.mcp`, `file_manager.mcp` en `services/extraction`; een test dat `/api/services/...` HTTP 404 geeft; de woordenlijsttests draaien op de nieuwe plek.
+- *Stopconditie:* verwijdercontrole V, met `tests/test_geen_verwijzingen_omzeilroutes.py` op `services_proxy`, `surrealdb_service.mcp`, `surrealdb_service.api`, `llm_manager.mcp`, `file_manager.mcp` en `services/extraction`; een test dat `/api/services/...` HTTP 404 geeft; de woordenlijsttests draaien op de nieuwe plek.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 **F2-03 Classificatie intern/extern, standaard intern, met herclassificatie en afgeleide classificatie**
