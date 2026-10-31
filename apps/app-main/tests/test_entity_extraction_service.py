@@ -2904,3 +2904,43 @@ class TestTheTypingVocabularyReachesPersist:
             o.metadata.name for o in schemas
         }
 
+
+
+class TestRunExtractionClassificatie:
+    """F2-08: ``run_extraction`` leidt de classificatie voor de poort af uit de
+    fragmenten; extern alleen als elk fragment extern is."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("klassen,verwacht", [
+        (["extern", "extern"], "extern"),
+        (["extern", "intern"], "intern"),
+        (["extern", None], "onbekend"),
+    ])
+    async def test_classificatie_uit_de_fragmenten(self, base_source_repo, klassen, verwacht):
+        fragmenten = []
+        for i, klasse in enumerate(klassen):
+            fragment = _make_chunk()
+            fragment.id = f"chunk:{i}"
+            fragment.classification = klasse
+            fragmenten.append(fragment)
+        base_source_repo.get_chunks = AsyncMock(return_value=fragmenten)
+        svc = EntityExtractionService(source_repo=base_source_repo)
+
+        gezien = {}
+
+        async def _spy(*args, **kwargs):
+            gezien["classificatie"] = kwargs.get("classificatie")
+            return AsyncMock(return_value="{}")
+
+        with patch(
+            "app_main.services.entity_extraction_service.make_default_llm_caller", new=_spy
+        ), patch(
+            "app_main.services.entity_extraction_service.ExtractionWorkflow"
+        ) as mock_workflow_cls, patch.object(svc, "_save_result", AsyncMock()):
+            mock_workflow_cls.return_value.extract = AsyncMock(
+                return_value=ExtractionResult(metadata={}))
+            await svc.run_extraction(
+                source_id="source:test", ontology_name="general", run_filtering=False)
+
+        assert svc._classificatie == verwacht
+        assert gezien["classificatie"] == verwacht
