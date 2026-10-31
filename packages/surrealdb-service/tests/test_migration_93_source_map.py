@@ -139,6 +139,21 @@ async def test_bevestiging_samen_en_alleen_extern_op_openbare_route(live_surreal
                 "route": "inname_pdf", "created_by": "Beheerder Test", **batch}})
 
 
+@pytest.mark.parametrize("sql", [
+    "UPDATE $id SET route_type = 'watchfolder', pipeline_start = 'wachtrij'",
+    "UPDATE $id MERGE {route_type: 'watchfolder', pipeline_start: 'wachtrij'}",
+])
+async def test_externe_regel_niet_naar_watchfolder(live_surrealdb, sql) -> None:
+    [rij] = await _q(live_surrealdb, "CREATE source_map_rule CONTENT $d RETURN id", {"d": _regel(
+        classification="extern", classification_confirmed_by="Beheerder Test",
+        classification_confirmed_at=datetime.now(timezone.utc))})
+    rid = ensure_record_id(str(rij["id"]))
+    with pytest.raises(RuntimeError):
+        await _q(live_surrealdb, sql, {"id": rid})
+    [terug] = await _q(live_surrealdb, "SELECT route_type, classification FROM $id", {"id": rid})
+    assert (terug["route_type"], terug["classification"]) == ("api", "extern")
+
+
 async def test_batch_standaard_intern(live_surrealdb) -> None:
     [rij] = await _q(live_surrealdb, "CREATE intake_batch CONTENT $d RETURN AFTER", {"d": {
         "route": "inname_pdf", "created_by": "Beheerder Test", "files": ["/data/batch/a.pdf"]}})

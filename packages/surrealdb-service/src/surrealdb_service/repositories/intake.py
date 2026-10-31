@@ -8,7 +8,7 @@ regel in ``classification_log`` gaat mee in dezelfde transactie.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from shared.models.source_map import IntakeBatch, IntakeItem
 
@@ -30,13 +30,13 @@ async def _wijzig(
     rev: int,
     data: Dict[str, Any],
     door: str,
-    log: Optional[Dict[str, Any]],
+    logs: Sequence[Dict[str, Any]],
     config: Optional[SurrealDBConfig],
 ) -> Dict[str, Any]:
     rid = eigen_record_id(record_id, tabel)
     if rid is None:
         raise RecordNotFoundError([str(record_id)])
-    aanmaken = [("classification_log", {**log, tabel: rid})] if log else []
+    aanmaken = [("classification_log", {**log, tabel: rid}) for log in logs]
     [rij] = await wijzig_met_rev(
         [RevWijziging(rid, rev, data)], door=door, aanmaken=aanmaken, config=config
     )
@@ -74,10 +74,10 @@ class IntakeBatchRepository:
 
     async def update(
         self, batch_id: str, *, rev: int, data: Dict[str, Any], door: str,
-        log: Optional[Dict[str, Any]] = None,
+        logs: Sequence[Dict[str, Any]] = (),
     ) -> IntakeBatch:
         return IntakeBatch(**await _wijzig(
-            self.TABEL, batch_id, rev=rev, data=data, door=door, log=log, config=self.config
+            self.TABEL, batch_id, rev=rev, data=data, door=door, logs=logs, config=self.config
         ))
 
 
@@ -133,8 +133,8 @@ class IntakeItemRepository:
 
     async def update(
         self, item_id: str, *, rev: int, data: Dict[str, Any], door: str,
-        log: Optional[Dict[str, Any]] = None,
+        logs: Sequence[Dict[str, Any]] = (),
     ) -> IntakeItem:
         return IntakeItem(**await _wijzig(
-            self.TABEL, item_id, rev=rev, data=data, door=door, log=log, config=self.config
+            self.TABEL, item_id, rev=rev, data=data, door=door, logs=logs, config=self.config
         ))

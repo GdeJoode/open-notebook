@@ -88,9 +88,11 @@ class SourceMapRuleRepository:
         rev: int,
         data: Dict[str, Any],
         door: str,
-        log: Optional[Dict[str, Any]] = None,
+        logs: Sequence[Dict[str, Any]] = (),
     ) -> SourceMapRule:
         """Wijzig met ``rev``; een verouderde ``rev`` geeft ``RevConflictError``.
+
+        ``logs``: regels voor ``classification_log``, in dezelfde transactie.
 
         Een waarde ``None`` in ``data`` wist het veld (NONE).
         """
@@ -98,7 +100,7 @@ class SourceMapRuleRepository:
         if rid is None:
             raise RecordNotFoundError([str(rule_id)])
         aanmaken: Sequence[Tuple[str, Dict[str, Any]]] = (
-            [("classification_log", {**log, "source_map_rule": rid})] if log else []
+            [("classification_log", {**log, "source_map_rule": rid}) for log in logs]
         )
         [rij] = await wijzig_met_rev(
             [RevWijziging(rid, rev, data)], door=door, aanmaken=aanmaken, config=self.config
