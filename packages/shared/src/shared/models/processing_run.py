@@ -62,6 +62,8 @@ class ProcessingRun(ObjectModel):
     notified_at: Optional[datetime] = None
     source_map_rule_id: Optional[str] = None
     source_map_rule_rev: Optional[int] = None
+    #: Wie de run startte; verplicht bij ``handmatig`` (migratie 92, ADR 0005).
+    actor: Optional[str] = None
 
     @property
     def afgesloten(self) -> bool:

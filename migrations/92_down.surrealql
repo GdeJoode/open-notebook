@@ -1,0 +1,36 @@
+-- ============================================================================
+-- Migratie 92 terug: optimistische vergrendeling en handmatige runs (F2-06).
+--
+-- `rev`, `modified_by` en `modified_at` en de tabel `beheer_melding` gaan weg.
+-- `current_run` op `source_version` krijgt de vorm van migratie 90 terug.
+-- `processing_run.actor` en `resolution_log.author` blijven als optioneel veld
+-- zonder ASSERT bestaan: een terugdraaiactie wist geen herkomst (harde eis 2),
+-- zoals `90_down` de herkomstvelden laat staan.
+-- Idempotent: IF EXISTS en OVERWRITE.
+-- ============================================================================
+
+REMOVE TABLE IF EXISTS beheer_melding;
+
+DEFINE FIELD OVERWRITE current_run ON source_version TYPE record<processing_run>
+    DEFAULT created_by_run
+    ASSERT record::exists($value) AND ($before = $value OR fn::run_mag_schrijven($value, $this.source));
+
+DEFINE FIELD OVERWRITE actor ON processing_run TYPE option<string> READONLY;
+DEFINE FIELD OVERWRITE trigger ON processing_run TYPE string READONLY
+    ASSERT $value IN ['schema', 'mapcontrole', 'feed', 'inname', 'handmatig', 'herverwerking'];
+DEFINE FIELD OVERWRITE author ON resolution_log TYPE option<string>;
+
+REMOVE FIELD IF EXISTS modified_at ON triage_queue;
+REMOVE FIELD IF EXISTS modified_by ON triage_queue;
+REMOVE FIELD IF EXISTS rev ON triage_queue;
+REMOVE FIELD IF EXISTS modified_at ON relation;
+REMOVE FIELD IF EXISTS modified_by ON relation;
+REMOVE FIELD IF EXISTS rev ON relation;
+REMOVE FIELD IF EXISTS modified_at ON entity_alias;
+REMOVE FIELD IF EXISTS modified_by ON entity_alias;
+REMOVE FIELD IF EXISTS rev ON entity_alias;
+REMOVE FIELD IF EXISTS modified_at ON entity;
+REMOVE FIELD IF EXISTS modified_by ON entity;
+REMOVE FIELD IF EXISTS rev ON entity;
+
+RETURN NONE;

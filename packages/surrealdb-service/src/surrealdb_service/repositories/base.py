@@ -3,8 +3,9 @@ Base repository with generic CRUD operations.
 """
 
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
+from typing import Any, Dict, Generic, List, Optional, Sequence, Type, TypeVar, Union
 
 from loguru import logger
 from surrealdb import RecordID
@@ -16,6 +17,7 @@ from surrealdb_service.connection import (
     db_connection,
     ensure_record_id,
     execute_query,
+    execute_transaction,
     parse_record_ids,
 )
 
@@ -87,6 +89,165 @@ async def lees_met_bereik(
         config,
     )
     return rows[0] if rows else None
+
+
+class RevConflictError(RuntimeError):
+    """De meegestuurde ``rev`` is verouderd (HTTP 409, F2-06, ADR 0003)."""
+
+    def __init__(self, record_ids: Sequence[str]) -> None:
+        super().__init__("Het record is intussen gewijzigd")
+        self.record_ids = list(record_ids)
+
+
+class RecordNotFoundError(LookupError):
+    """Een record voor ``wijzig_met_rev`` bestaat niet (HTTP 404)."""
+
+    def __init__(self, record_ids: Sequence[str]) -> None:
+        super().__init__("Record niet gevonden")
+        self.record_ids = list(record_ids)
+
+
+@dataclass(frozen=True)
+class RevWijziging:
+    """Eén wijziging voor :func:`wijzig_met_rev`.
+
+    ``rev`` is de versie die de aanroeper las. ``None`` betekent: niet
+    controleren; alleen voor een record dat meegaat met een gecontroleerd
+    record in dezelfde aanroep (bijvoorbeeld de entiteit bij een besluit over
+    haar rij in ``triage_queue``), of bij een run.
+    """
+
+    record_id: Any
+    rev: Optional[int] = None
+    data: Dict[str, Any] = field(default_factory=dict)
+
+
+#: Velden die alleen de database of deze functie zet.
+_VERGRENDELVELDEN = ("id", "rev", "modified_by", "modified_at")
+
+
+async def wijzig_met_rev(
+    wijzigingen: Sequence[RevWijziging],
+    *,
+    door: str,
+    run_id: Optional[str] = None,
+    config: Optional[SurrealDBConfig] = None,
+) -> List[Optional[Dict[str, Any]]]:
+    """Wijzig records met optimistische vergrendeling (F2-06, ADR 0003).
+
+    De ene hulpfunctie voor ``entity``, ``entity_alias``, ``relation`` en
+    ``triage_queue`` (migratie 92); de database telt ``rev`` bij elke
+    schrijfactie op. Elke wijziging zet ``modified_by`` en ``modified_at``.
+
+    * **Handmatig** (zonder ``run_id``; ``door`` is de persoon): alle
+      wijzigingen in één transactie. Een verouderde ``rev`` geeft
+      :class:`RevConflictError` en er verandert niets; een onbekend record
+      :class:`RecordNotFoundError`.
+    * **Run** (met ``run_id``): een record met ``manual_override = true`` wijzigt
+      niet; de run krijgt daarvoor een regel ``conflict`` in zijn logboek, en
+      het resultaat voor dat record is ``None``. ``modified_by`` is de run.
+
+    Geeft per wijziging het record na de wijziging, of ``None``.
+    """
+    if not str(door or "").strip():
+        raise ValueError("wijzig_met_rev vraagt wie de wijziging doet")
+    ids = [ensure_record_id(str(w.record_id)) for w in wijzigingen]
+    datas: List[Dict[str, Any]] = []
+    nu = datetime.now(timezone.utc)
+    for w in wijzigingen:
+        data = {k: v for k, v in w.data.items() if k not in _VERGRENDELVELDEN}
+        _zonder_lege_classificatie(data)
+        data["modified_by"] = str(run_id) if run_id else door
+        data["modified_at"] = nu
+        datas.append(data)
+
+    if run_id:
+        return await _wijzig_door_run(ids, wijzigingen, datas, run_id, config)
+
+    params: Dict[str, Any] = {}
+    regels = ["BEGIN TRANSACTION;"]
+    for i, (rid, w, data) in enumerate(zip(ids, wijzigingen, datas)):
+        params[f"id{i}"] = rid
+        params[f"d{i}"] = data
+        voorwaarde = ""
+        if w.rev is not None:
+            params[f"rev{i}"] = int(w.rev)
+            voorwaarde = f" WHERE rev = $rev{i}"
+        regels.append(f"LET $r{i} = (UPDATE $id{i} MERGE $d{i}{voorwaarde} RETURN id);")
+        regels.append(f"IF array::len($r{i}) = 0 {{ THROW 'wijzig_met_rev:{i}' }};")
+    regels.append("COMMIT TRANSACTION;")
+    try:
+        await execute_transaction("\n".join(regels), params, config)
+    except RuntimeError as e:
+        if "wijzig_met_rev:" not in str(e):
+            if (fout := as_classification_error(e)) is not None:
+                raise fout from e
+            raise
+        bestaand = {
+            str(r["id"]): r
+            for r in await execute_query("SELECT id, rev FROM $ids", {"ids": ids}, config) or []
+        }
+        ontbrekend = [str(rid) for rid in ids if str(rid) not in bestaand]
+        if ontbrekend:
+            raise RecordNotFoundError(ontbrekend) from None
+        raise RevConflictError(
+            [str(rid) for rid, w in zip(ids, wijzigingen)
+             if w.rev is not None and bestaand[str(rid)].get("rev") != w.rev]
+        ) from None
+    rijen = {str(r["id"]): r for r in await execute_query("SELECT * FROM $ids", {"ids": ids}, config) or []}
+    return [rijen.get(str(rid)) for rid in ids]
+
+
+async def _wijzig_door_run(
+    ids: List[RecordID],
+    wijzigingen: Sequence[RevWijziging],
+    datas: List[Dict[str, Any]],
+    run_id: str,
+    config: Optional[SurrealDBConfig],
+) -> List[Optional[Dict[str, Any]]]:
+    """Schrijven door een run: ``manual_override`` wint; het conflict gaat in het logboek."""
+    uitkomst: List[Optional[Dict[str, Any]]] = []
+    conflicten: List[Dict[str, Any]] = []
+    for rid, w, data in zip(ids, wijzigingen, datas):
+        params: Dict[str, Any] = {"id": rid, "d": data}
+        voorwaarde = "(manual_override = NONE OR manual_override = false)"
+        if w.rev is not None:
+            params["rev"] = int(w.rev)
+            voorwaarde += " AND rev = $rev"
+        try:
+            rijen = await execute_query(
+                f"UPDATE $id MERGE $d WHERE {voorwaarde} RETURN AFTER", params, config
+            )
+        except Exception as e:
+            if (fout := as_classification_error(e)) is not None:
+                raise fout from e
+            raise
+        if rijen:
+            uitkomst.append(rijen[0])
+            continue
+        uitkomst.append(None)
+        staten = await execute_query(
+            "SELECT rev, manual_override FROM $id", {"id": rid}, config
+        )
+        if not staten:
+            raise RecordNotFoundError([str(rid)])
+        staat = staten[0]
+        if staat.get("manual_override") is True:
+            conflicten.append({
+                "at": datetime.now(timezone.utc),
+                "step": "vergrendeling",
+                "status": "conflict",
+                "message": f"{rid} heeft manual_override; niet gewijzigd",
+            })
+        else:
+            raise RevConflictError([str(rid)])
+    if conflicten:
+        # Late import: processing_run importeert deze module niet, maar zo
+        # blijft de basisrepository los van de runrepository.
+        from surrealdb_service.repositories.processing_run import ProcessingRunRepository
+
+        await ProcessingRunRepository(config).append_log(str(run_id), conflicten)
+    return uitkomst
 
 
 T = TypeVar("T", bound=ObjectModel)

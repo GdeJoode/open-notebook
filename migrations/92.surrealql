@@ -1,0 +1,77 @@
+-- ============================================================================
+-- Migratie 92: optimistische vergrendeling en handmatige runs (F2-06, ADR 0003
+-- "Handmatige correcties en optimistische vergrendeling", ADR 0005).
+--
+-- 1. `rev`, `modified_by` en `modified_at` op `entity`, `entity_alias`,
+--    `relation` en `triage_queue`. De database telt `rev` bij elke schrijfactie
+--    op (0 bij aanmaken), ook bij een schrijfactie buiten de hulpfunctie
+--    `wijzig_met_rev` om; zo merkt een wijziging met een verouderde `rev` elke
+--    tussenliggende wijziging op. `modified_by` en `modified_at` zet de
+--    hulpfunctie.
+-- 2. `resolution_log.author`: verplicht, niet leeg.
+-- 3. `processing_run.actor`: wie de run startte. Verplicht bij trigger
+--    `handmatig` (de persoon van de sleutel `beheerder`, ADR 0005).
+-- 4. Een handmatige run is beschermd: `source_version.current_run` gaat niet
+--    van een handmatige run naar een run met een andere trigger. De fork logt
+--    dat in de run en zet een melding in `beheer_melding` (ADR 0003).
+-- 5. `beheer_melding`: de wachtrij van de beheerder voor meldingen van runs.
+--
+-- Lege database (B3): geen omzetting van bestaande records. Idempotent via
+-- OVERWRITE. Alleen hele regels commentaar: de migratieloader plakt de regels
+-- aan elkaar.
+-- ============================================================================
+
+-- 1. Optimistische vergrendeling.
+DEFINE FIELD OVERWRITE rev ON entity TYPE int DEFAULT 0
+    VALUE IF $before = NONE { 0 } ELSE { $before + 1 };
+DEFINE FIELD OVERWRITE modified_by ON entity TYPE option<string>;
+DEFINE FIELD OVERWRITE modified_at ON entity TYPE option<datetime>;
+DEFINE FIELD OVERWRITE rev ON entity_alias TYPE int DEFAULT 0
+    VALUE IF $before = NONE { 0 } ELSE { $before + 1 };
+DEFINE FIELD OVERWRITE modified_by ON entity_alias TYPE option<string>;
+DEFINE FIELD OVERWRITE modified_at ON entity_alias TYPE option<datetime>;
+DEFINE FIELD OVERWRITE rev ON relation TYPE int DEFAULT 0
+    VALUE IF $before = NONE { 0 } ELSE { $before + 1 };
+DEFINE FIELD OVERWRITE modified_by ON relation TYPE option<string>;
+DEFINE FIELD OVERWRITE modified_at ON relation TYPE option<datetime>;
+DEFINE FIELD OVERWRITE rev ON triage_queue TYPE int DEFAULT 0
+    VALUE IF $before = NONE { 0 } ELSE { $before + 1 };
+DEFINE FIELD OVERWRITE modified_by ON triage_queue TYPE option<string>;
+DEFINE FIELD OVERWRITE modified_at ON triage_queue TYPE option<datetime>;
+
+-- 2. De auteur van een besluit over een samenvoeging.
+DEFINE FIELD OVERWRITE author ON resolution_log TYPE string
+    ASSERT string::len(string::trim($value)) > 0;
+
+-- 3. De actor van een run; verplicht bij een handmatige run. Een ASSERT op
+-- een leeg optioneel veld draait niet; daarom staat de eis bij `trigger`.
+DEFINE FIELD OVERWRITE actor ON processing_run TYPE option<string> READONLY
+    ASSERT $value = NONE OR string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE trigger ON processing_run TYPE string READONLY
+    ASSERT $value IN ['schema', 'mapcontrole', 'feed', 'inname', 'handmatig', 'herverwerking']
+        AND ($value != 'handmatig'
+            OR (type::is::string($this.actor) AND string::len(string::trim($this.actor)) > 0));
+
+-- 4. De run van migratie 90, en: een handmatige run blijft de huidige tot een
+-- andere handmatige run haar vervangt.
+DEFINE FIELD OVERWRITE current_run ON source_version TYPE record<processing_run>
+    DEFAULT created_by_run
+    ASSERT record::exists($value) AND ($before = $value OR (fn::run_mag_schrijven($value, $this.source)
+        AND ($before = NONE OR $before.trigger != 'handmatig' OR $value.trigger = 'handmatig')));
+
+-- 5. De wachtrij van de beheerder voor meldingen van runs. Geen tekst uit een
+-- bron, alleen verwijzingen en een vaste melding.
+DEFINE TABLE OVERWRITE beheer_melding SCHEMAFULL;
+DEFINE FIELD OVERWRITE soort ON beheer_melding TYPE string READONLY
+    ASSERT $value IN ['handmatige_run_beschermd'];
+DEFINE FIELD OVERWRITE melding ON beheer_melding TYPE string READONLY;
+DEFINE FIELD OVERWRITE source ON beheer_melding TYPE option<record<source>> READONLY;
+DEFINE FIELD OVERWRITE source_version ON beheer_melding TYPE option<record<source_version>> READONLY;
+DEFINE FIELD OVERWRITE run ON beheer_melding TYPE option<record<processing_run>> READONLY;
+DEFINE FIELD OVERWRITE current_run ON beheer_melding TYPE option<record<processing_run>> READONLY;
+DEFINE FIELD OVERWRITE status ON beheer_melding TYPE string DEFAULT 'open'
+    ASSERT $value IN ['open', 'afgehandeld'];
+DEFINE FIELD OVERWRITE created_at ON beheer_melding TYPE datetime DEFAULT time::now() READONLY;
+DEFINE INDEX OVERWRITE idx_beheer_melding_status ON beheer_melding FIELDS status;
+
+RETURN NONE;

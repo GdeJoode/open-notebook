@@ -45,9 +45,11 @@ class ProcessingRunRepository:
         status: str = "bezig",
         error: Optional[str] = None,
         log: Optional[List[Dict[str, Any]]] = None,
+        actor: Optional[str] = None,
     ) -> ProcessingRun:
         data: Dict[str, Any] = {
             "trigger": trigger,
+            "actor": actor,
             "pipeline_id": pipeline_id,
             "pipeline_version": pipeline_version,
             "input_classification": input_classification,
