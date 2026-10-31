@@ -23,11 +23,17 @@ changes (:meth:`TriageQueueRepository.upsert_tooi`). This is a thin
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
+from surrealdb_service.repositories.base import (
+    RecordNotFoundError,
+    RevWijziging,
+    wijzig_met_rev,
+)
 
 # Decision states. 'open' is the default (awaiting an operator); the operator
 # router writes one of the others. Kept here so the service and router agree.
@@ -88,6 +94,8 @@ class QueueItem:
     #: For a TOOI row: the authority records a curator chooses between.
     candidates: List[Dict[str, Any]] = field(default_factory=list)
     candidate_key: str = ""
+    #: F2-06 (migratie 92): de versie van de rij voor optimistische vergrendeling.
+    rev: int = 0
 
     @classmethod
     def from_row(cls, row: Dict[str, Any]) -> "QueueItem":
@@ -105,6 +113,7 @@ class QueueItem:
             kind=str(row.get("kind") or KIND_STATUS),
             candidates=list(row.get("candidates") or []),
             candidate_key=str(row.get("candidate_key") or ""),
+            rev=int(row.get("rev") or 0),
         )
 
 
@@ -343,26 +352,46 @@ class TriageQueueRepository:
             return None
         return QueueItem.from_row(rows[0])
 
-    async def set_decision(self, queue_id: str, decision: str) -> Optional[QueueItem]:
+    async def set_decision(
+        self,
+        queue_id: str,
+        decision: str,
+        *,
+        rev: Optional[int],
+        door: str,
+        pin: Optional[Tuple[str, str]] = None,
+    ) -> Optional[QueueItem]:
         """Record an operator decision on a queue row (moves it off 'open').
+
+        F2-06 (ADR 0003): written with :func:`wijzig_met_rev`. A stale ``rev``
+        raises :class:`RevConflictError` (HTTP 409) and nothing changes.
 
         Args:
             queue_id: The queue row's record id.
             decision: The operator's decision string (anything other than
                 'open' closes the row so automation no longer refreshes it).
+            rev: The row version the operator read; ``None`` only for a row
+                closed as a consequence of another checked write.
+            door: The person of the key.
+            pin: ``(entity_id, status)`` to pin that entity (status +
+                ``manual_override``) in the same transaction.
 
         Returns:
-            The updated :class:`QueueItem`, or ``None`` if the row is absent.
+            The updated :class:`QueueItem`, or ``None`` if the row (or the
+            entity to pin) is absent.
         """
-        rows = await execute_query(
-            "UPDATE $id SET decision = $decision, updated_at = time::now() "
-            "RETURN AFTER;",
-            {"id": ensure_record_id(queue_id), "decision": decision},
-            self.config,
-        )
-        if not rows:
+        nu = datetime.now(timezone.utc)
+        wijzigingen = [RevWijziging(queue_id, rev, {"decision": decision, "updated_at": nu})]
+        if pin is not None:
+            entity_id, status = pin
+            wijzigingen.append(RevWijziging(
+                entity_id, None, {"status": status, "manual_override": True, "updated_at": nu}
+            ))
+        try:
+            rows = await wijzig_met_rev(wijzigingen, door=door, config=self.config)
+        except RecordNotFoundError:
             return None
-        return QueueItem.from_row(rows[0])
+        return QueueItem.from_row(rows[0]) if rows[0] else None
 
 
 def candidate_key(candidates: List[Dict[str, Any]]) -> str:

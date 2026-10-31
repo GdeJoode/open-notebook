@@ -21,6 +21,12 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from surrealdb_service.connection import ensure_record_id, execute_query
+from surrealdb_service.repositories.base import (
+    RecordNotFoundError,
+    RevConflictError,
+    RevWijziging,
+    wijzig_met_rev,
+)
 
 from app_main.services.entity_resolution import (
     CandidateDedupService,
@@ -96,6 +102,9 @@ class ApplyClusterIn(BaseModel):
     evidence: Optional[str] = None
     #: A merge across entity types must say so, and only a curator may make one.
     cross_type: bool = False
+    #: F2-06 (ADR 0003): the ``rev`` of the winner and of every loser, as read.
+    #: A stale one is HTTP 409 and nothing is merged.
+    revs: Dict[str, int]
 
 
 class ApplyRequest(BaseModel):
@@ -246,6 +255,7 @@ async def apply_merges(
         )
     known = await _validate_clusters(body.clusters)
     persoon = (await current_key(request)).person or ""
+    await _claim_revs(body.clusters, persoon)
 
     results: List[ApplyResultOut] = []
     applied = 0
@@ -285,6 +295,39 @@ async def apply_merges(
         )
 
     return ApplyResponse(applied=applied, skipped=skipped, results=results)
+
+
+async def _claim_revs(clusters: List[ApplyClusterIn], persoon: str) -> None:
+    """Check every member's ``rev`` and mark it as modified, in one transaction.
+
+    F2-06 (ADR 0003): optimistic locking before any cluster is applied. A
+    member without a ``rev`` is 422; a stale ``rev`` is 409 and nothing is
+    merged. A later writer holding the old ``rev`` gets 409 in turn.
+    """
+    claims: List[RevWijziging] = []
+    for c in clusters:
+        revs: Dict[str, int] = {}
+        for k, v in c.revs.items():
+            try:
+                revs[str(ensure_record_id(k))] = v
+            except ValueError:
+                continue  # an unknown key names no member: caught below
+        for eid in [c.winner_id, *c.loser_ids]:
+            key = str(ensure_record_id(eid))
+            if key not in revs:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"cluster {c.winner_id}: revs must name every member",
+                )
+            claims.append(RevWijziging(key, revs[key], {}))
+    try:
+        await wijzig_met_rev(claims, door=persoon)
+    except RevConflictError:
+        raise HTTPException(
+            status_code=409, detail="Een entiteit is intussen gewijzigd; laad opnieuw"
+        ) from None
+    except RecordNotFoundError:
+        raise HTTPException(status_code=404, detail="Entity not found") from None
 
 
 # --- K.5: candidate dedup review queue -----------------------------------------

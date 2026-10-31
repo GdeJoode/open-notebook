@@ -25,7 +25,7 @@ from app_main.services.triage.triage_queue import (
     TriageQueueRepository,
 )
 from surrealdb_service.config import SurrealDBConfig
-from surrealdb_service.connection import execute_query
+from surrealdb_service.connection import ensure_record_id, execute_query
 
 pytestmark = pytest.mark.asyncio
 
@@ -143,7 +143,9 @@ async def test_decided_row_does_not_dedup_new_open_row(
         eid, name="A", type="Organisatie", structural_degree=0,
         doc_count=1, reason="r", batch_id="b1",
     )
-    decided = await q.set_decision(first, "active")
+    decided = await q.set_decision(
+        first, "active", rev=(await q.get(first)).rev, door="Testpersoon"
+    )
     assert decided is not None and decided.decision == "active"
     # The decided row is no longer open.
     assert first not in {i.id for i in await q.list_open()}
@@ -163,7 +165,45 @@ async def test_set_decision_missing_row_returns_none(
     live_surrealdb: SurrealDBConfig,
 ) -> None:
     q = _bind_queue(None, live_surrealdb)  # type: ignore[arg-type]
-    assert await q.set_decision("triage_queue:does_not_exist", "active") is None
+    assert await q.set_decision(
+        "triage_queue:does_not_exist", "active", rev=0, door="Testpersoon"
+    ) is None
+
+
+@pytest.mark.requires_docker
+async def test_set_decision_with_a_stale_rev_changes_nothing(
+    live_surrealdb: SurrealDBConfig,
+) -> None:
+    """F2-06: a decision on an outdated rev is refused; the pin is not written."""
+    from surrealdb_service.repositories.base import RevConflictError
+
+    q = _bind_queue(None, live_surrealdb)  # type: ignore[arg-type]
+    eid = await _seed_entity(live_surrealdb, _u("Org"))
+    rid = await q.upsert(
+        eid, name="A", type="Organisatie", structural_degree=0,
+        doc_count=1, reason="r", batch_id="b1",
+    )
+    gelezen = (await q.get(rid)).rev
+    # A pipeline refresh in between bumps the rev.
+    await q.upsert(
+        eid, name="A", type="Organisatie", structural_degree=3,
+        doc_count=2, reason="r2", batch_id="b2",
+    )
+    with pytest.raises(RevConflictError):
+        await q.set_decision(rid, "active", rev=gelezen, door="Testpersoon",
+                             pin=(eid, "active"))
+    rows = await execute_query("SELECT manual_override FROM $id", {"id": ensure_record_id(eid)},
+                               live_surrealdb)
+    assert not rows[0].get("manual_override")
+    assert (await q.get(rid)).decision == "open"
+
+    beslist = await q.set_decision(rid, "active", rev=(await q.get(rid)).rev,
+                                   door="Testpersoon", pin=(eid, "active"))
+    assert beslist.decision == "active"
+    rows = await execute_query("SELECT manual_override, status, modified_by FROM $id",
+                               {"id": ensure_record_id(eid)}, live_surrealdb)
+    assert (rows[0]["manual_override"], rows[0]["status"], rows[0]["modified_by"]) == (
+        True, "active", "Testpersoon")
 
 
 @pytest.mark.requires_docker

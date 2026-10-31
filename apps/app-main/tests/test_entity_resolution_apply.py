@@ -20,6 +20,7 @@ from app_main.services.entity_resolution import merge_audit
 from app_main.services.entity_resolution.recanonicalization_service import MergeResult
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from surrealdb_service.repositories.base import RevConflictError
 
 ENTITIES: Dict[str, Dict[str, Any]] = {
     "entity:ez": {"canonical_name": "Economische Zaken", "entity_type": "government_organization", "status": "active"},
@@ -43,7 +44,20 @@ class _Recanon:
 
 
 @pytest.fixture
-def env(monkeypatch):
+def claims(monkeypatch):
+    """F2-06: the rev check is `wijzig_met_rev`; its own test is in surrealdb-service."""
+    seen: List[Any] = []
+
+    async def _claim(wijzigingen, *, door, **_kw):
+        seen.append((list(wijzigingen), door))
+        return [{} for _ in wijzigingen]
+
+    monkeypatch.setattr(entity_resolution, "wijzig_met_rev", _claim)
+    return seen
+
+
+@pytest.fixture
+def env(monkeypatch, claims):
     recanon = _Recanon()
     logged: List[Dict[str, Any]] = []
 
@@ -66,7 +80,8 @@ def env(monkeypatch):
 def _cluster(winner="entity:ez", losers=("entity:ez2",), **over):
     body = {"new_canonical": "Economische Zaken", "entity_type": "government_organization",
             "winner_id": winner, "loser_ids": list(losers), "origin": "curator_approved",
-            "method": "fold_equal", "score": 1.0}
+            "method": "fold_equal", "score": 1.0,
+            "revs": {i: 0 for i in (winner, *losers)}}
     body.update(over)
     return body
 
@@ -139,6 +154,37 @@ def test_a_curator_may_merge_across_types_when_it_says_so(env):
                                method="fold_equal_cross_type"))
     assert r.status_code == 200 and r.json()["applied"] == 1
     assert logged[0]["types"]["entity:topic"] == "topic"
+
+
+def test_every_member_is_claimed_against_its_rev(env, claims):
+    client, recanon, _ = env
+    body = _cluster()
+    body["revs"] = {"entity:ez": 4, "entity:ez2": 7}
+    assert _post(client, body).status_code == 200
+    [(wijzigingen, door)] = claims
+    assert door == "Testpersoon"
+    assert [(str(w.record_id), w.rev) for w in wijzigingen] == [("entity:ez", 4), ("entity:ez2", 7)]
+
+
+def test_a_member_without_a_rev_is_refused(env):
+    client, recanon, _ = env
+    body = _cluster()
+    del body["revs"]["entity:ez2"]
+    r = _post(client, body)
+    assert r.status_code == 422 and "revs" in r.json()["detail"]
+    assert recanon.applied == []
+
+
+def test_a_stale_rev_is_409_and_merges_nothing(env, monkeypatch):
+    client, recanon, logged = env
+
+    async def _stale(wijzigingen, *, door, **_kw):
+        raise RevConflictError(["entity:ez2"])
+
+    monkeypatch.setattr(entity_resolution, "wijzig_met_rev", _stale)
+    r = _post(client, _cluster())
+    assert r.status_code == 409
+    assert recanon.applied == [] and logged == []
 
 
 def test_a_repeat_apply_is_skipped_not_refused_and_not_logged(env):

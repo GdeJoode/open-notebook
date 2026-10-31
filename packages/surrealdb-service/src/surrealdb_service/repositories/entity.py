@@ -6,6 +6,7 @@ supporting the KG entity resolution pipeline.
 """
 
 import hashlib
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -19,6 +20,11 @@ from surrealdb_service.connection import (
     ensure_record_id,
     execute_query,
     get_pool,
+)
+from surrealdb_service.repositories.base import (
+    RecordNotFoundError,
+    RevWijziging,
+    wijzig_met_rev,
 )
 
 
@@ -532,8 +538,13 @@ class EntityRepository:
         status: str,
         *,
         respect_override: bool = True,
+        run_id: Optional[str] = None,
     ) -> bool:
         """Set an entity's ``status``, honouring the operator override pin.
+
+        With ``run_id`` (F2-06, ADR 0003) the write goes through
+        :func:`wijzig_met_rev` as a run: a pinned entity is left alone and the
+        run records the conflict in its log.
 
         This is the single DB-side writer of the triage-derived ``status``. The
         ``manual_override`` guard (migration 59) is the load-bearing contract of
@@ -567,6 +578,17 @@ class EntityRepository:
             logger.error(f"set_status: bad id {entity_id!r}: {e}")
             return False
 
+        if run_id and respect_override:
+            try:
+                [na] = await wijzig_met_rev(
+                    [RevWijziging(rid, None, {"status": status,
+                                              "updated_at": datetime.now(timezone.utc)})],
+                    door=str(run_id), run_id=str(run_id), config=self.config,
+                )
+            except RecordNotFoundError:
+                return False
+            return na is not None
+
         # Condition the UPDATE on the override flag in the query itself so the
         # check and the write are one atomic statement. ``UPDATE`` returns the
         # affected rows, so an empty result means the WHERE excluded the row
@@ -592,8 +614,14 @@ class EntityRepository:
         *,
         status: Optional[str] = None,
         manual_override: bool = True,
+        rev: Optional[int],
+        door: str,
     ) -> bool:
         """Pin an entity by hand (Q.4 operator decision): set status + override.
+
+        F2-06 (ADR 0003): the write goes through :func:`wijzig_met_rev`. ``rev``
+        is the version the operator read; a stale one raises
+        :class:`RevConflictError` (HTTP 409). ``door`` is the person of the key.
 
         This is the ONLY writer of ``manual_override = true`` — the operator's
         decision path (the triage-queue decision endpoint), NEVER automation. It
@@ -620,24 +648,23 @@ class EntityRepository:
             logger.error(f"set_manual_override: bad id {entity_id!r}: {e}")
             return False
 
-        sets = ["manual_override = $override", "updated_at = time::now()"]
-        params: Dict[str, Any] = {"id": rid, "override": bool(manual_override)}
+        data: Dict[str, Any] = {
+            "manual_override": bool(manual_override),
+            "updated_at": datetime.now(timezone.utc),
+        }
         if status is not None:
-            sets.insert(0, "status = $status")
-            params["status"] = status
+            data["status"] = status
         try:
-            rows = await execute_query(
-                f"UPDATE entity SET {', '.join(sets)} WHERE id = $id RETURN AFTER;",
-                params,
-                self.config,
-            )
+            await wijzig_met_rev([RevWijziging(rid, rev, data)], door=door, config=self.config)
+        except RecordNotFoundError:
+            return False
         except Exception as e:
             logger.exception(
                 f"set_manual_override failed for {entity_id} "
                 f"(status={status}, override={manual_override}): {e}"
             )
             raise
-        return bool(rows)
+        return True
 
     # ------------------------------------------------------------------
     # Track K Phase K.3 — retroactive merge primitives

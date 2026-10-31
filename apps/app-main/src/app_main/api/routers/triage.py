@@ -14,16 +14,21 @@ shape and dependency-injection. Three endpoints:
 
 These are thin HTTP shells over the Q.3/Q.4 services; no business logic lives in
 the router.
+
+F2-06 (ADR 0003): every decision carries the ``rev`` the operator read — of the
+queue row for ``/decision`` and ``/tooi-decision``, of the entity for
+``/override``. A stale ``rev`` is HTTP 409 and nothing is written.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 from surrealdb_service.repositories import EntityRepository
+from surrealdb_service.repositories.base import RevConflictError
 
 from app_main.dependencies import get_entity_repo, get_triage_queue_repo
 from app_main.services.triage import queue_sources
@@ -42,9 +47,18 @@ from app_main.services.triage.triage_queue import (
     QueueItem,
     TriageQueueRepository,
 )
-from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.agent_auth import RECHT_BEHEERDER, current_key
 
 router = APIRouter(prefix="/triage", tags=["triage"], dependencies=[RECHT_BEHEERDER])
+
+
+def _verouderd() -> HTTPException:
+    """HTTP 409 for a stale ``rev`` (F2-06): reload and decide again."""
+    return HTTPException(status_code=409, detail="Het record is intussen gewijzigd; laad opnieuw")
+
+
+async def _persoon(request: Request) -> str:
+    return (await current_key(request)).person or ""
 
 
 # --- Response / request schemas -----------------------------------------------
@@ -74,6 +88,8 @@ class QueueItemOut(BaseModel):
     #: WB.3: the entity's canonical type, read now. ``type`` is the display
     #: label the triage run stored; the triage table shows it second.
     entity_type: str = ""
+    #: F2-06: the row version to send back with a decision.
+    rev: int = 0
 
     @classmethod
     def from_item(cls, item: QueueItem) -> "QueueItemOut":
@@ -89,6 +105,7 @@ class QueueItemOut(BaseModel):
             batch_id=item.batch_id,
             kind=item.kind,
             candidates=list(item.candidates),
+            rev=item.rev,
         )
 
 
@@ -113,6 +130,7 @@ class DecisionIn(BaseModel):
         default=None,
         description="Decision label for the queue row; defaults to the status.",
     )
+    rev: int = Field(..., ge=0, description="The queue row's rev as read (F2-06).")
 
 
 class TooiDecisionIn(BaseModel):
@@ -126,6 +144,7 @@ class TooiDecisionIn(BaseModel):
     uri: Optional[str] = Field(
         default=None, description="For `link`: one of the row's candidate URIs."
     )
+    rev: int = Field(..., ge=0, description="The queue row's rev as read (F2-06).")
 
 
 class TooiDecisionResponse(BaseModel):
@@ -162,6 +181,7 @@ class EntityPinIn(BaseModel):
             "omit to leave the current status untouched."
         ),
     )
+    rev: int = Field(..., ge=0, description="The entity's rev as read (F2-06).")
 
 
 class EntityPinResponse(BaseModel):
@@ -226,8 +246,8 @@ async def get_queue(
 async def decide(
     queue_id: str,
     body: DecisionIn,
+    request: Request,
     queue: TriageQueueRepository = Depends(get_triage_queue_repo),
-    entity_repo: EntityRepository = Depends(get_entity_repo),
 ) -> DecisionResponse:
     """Apply an operator decision: pin the entity status + close the queue row.
 
@@ -253,21 +273,21 @@ async def decide(
             detail=f"queue row is kind '{item.kind}'; decide it with /tooi-decision",
         )
 
-    # Pin the entity by hand: status + override in one write. Unconditional —
-    # the operator may always (re)pin (set_manual_override has no override guard).
-    wrote = await entity_repo.set_manual_override(
-        item.entity, status=body.status, manual_override=True
-    )
-    if not wrote:
+    # Close the row (checked against `rev`) and pin the entity (status +
+    # override) in one transaction (F2-06). The operator may always (re)pin.
+    decision_label = body.decision or body.status
+    try:
+        updated = await queue.set_decision(
+            queue_id, decision_label, rev=body.rev, door=await _persoon(request),
+            pin=(item.entity, body.status),
+        )
+    except RevConflictError:
+        raise _verouderd() from None
+    if updated is None:
         raise HTTPException(
             status_code=404,
             detail=f"entity {item.entity} not found for pin",
         )
-
-    decision_label = body.decision or body.status
-    updated = await queue.set_decision(queue_id, decision_label)
-    if updated is None:  # pragma: no cover - get() already proved it exists
-        raise HTTPException(status_code=404, detail="queue row not found")
 
     return DecisionResponse(
         queue_id=updated.id,
@@ -282,6 +302,7 @@ async def decide(
 async def decide_tooi(
     queue_id: str,
     body: TooiDecisionIn,
+    request: Request,
     queue: TriageQueueRepository = Depends(get_triage_queue_repo),
     entity_repo: EntityRepository = Depends(get_entity_repo),
 ) -> TooiDecisionResponse:
@@ -303,9 +324,15 @@ async def decide_tooi(
         )
     if item.decision != DECISION_OPEN:
         raise HTTPException(status_code=409, detail=f"already decided: {item.decision}")
+    if item.rev != body.rev:
+        raise _verouderd()
+    persoon = await _persoon(request)
 
     if body.action == "dismiss":
-        await queue.set_decision(queue_id, DECISION_DISMISSED)
+        try:
+            await queue.set_decision(queue_id, DECISION_DISMISSED, rev=body.rev, door=persoon)
+        except RevConflictError:
+            raise _verouderd() from None
         return TooiDecisionResponse(queue_id=item.id, entity=item.entity,
                                     decision=DECISION_DISMISSED)
 
@@ -319,7 +346,10 @@ async def decide_tooi(
             status_code=502,
             detail=f"the link was not written for {item.entity}; the row stays open",
         )
-    await queue.set_decision(queue_id, DECISION_LINKED)
+    try:
+        await queue.set_decision(queue_id, DECISION_LINKED, rev=body.rev, door=persoon)
+    except RevConflictError:
+        raise _verouderd() from None
     return TooiDecisionResponse(queue_id=item.id, entity=item.entity,
                                 decision=DECISION_LINKED, uri=chosen["uri"])
 
@@ -328,6 +358,7 @@ async def decide_tooi(
 async def set_entity_override(
     entity_id: str,
     body: EntityPinIn,
+    request: Request,
     queue: TriageQueueRepository = Depends(get_triage_queue_repo),
     entity_repo: EntityRepository = Depends(get_entity_repo),
 ) -> EntityPinResponse:
@@ -349,9 +380,14 @@ async def set_entity_override(
             detail=f"status must be '{STATUS_ACTIVE}' or '{STATUS_REFERENCE}'",
         )
 
-    wrote = await entity_repo.set_manual_override(
-        entity_id, status=body.status, manual_override=body.manual_override
-    )
+    persoon = await _persoon(request)
+    try:
+        wrote = await entity_repo.set_manual_override(
+            entity_id, status=body.status, manual_override=body.manual_override,
+            rev=body.rev, door=persoon,
+        )
+    except RevConflictError:
+        raise _verouderd() from None
     if not wrote:
         raise HTTPException(status_code=404, detail="entity not found")
 
@@ -363,7 +399,10 @@ async def set_entity_override(
             # Status rows only: a pin answers the status question, not whether
             # the entity is a TOOI organisation (migration 83).
             if item.entity == entity_id and item.kind == KIND_STATUS:
-                await queue.set_decision(item.id, body.status or "pinned")
+                # Closed as a consequence of the checked pin above.
+                await queue.set_decision(
+                    item.id, body.status or "pinned", rev=None, door=persoon
+                )
                 closed += 1
 
     return EntityPinResponse(

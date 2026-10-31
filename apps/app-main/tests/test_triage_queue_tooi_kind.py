@@ -74,7 +74,7 @@ async def test_a_decided_tooi_row_sticks_for_the_same_candidates(
     eid = await _entity(live_surrealdb)
     rid = await q.upsert_tooi(eid, name="G", type="administrative_area", reason="tooi: x",
                               candidates=_CANDS, batch_id="r1")
-    await q.set_decision(rid, "dismissed")
+    await q.set_decision(rid, "dismissed", rev=None, door="Testpersoon")
     # The next reconcile run, same question: nothing is queued.
     assert await q.upsert_tooi(eid, name="G", type="administrative_area", reason="tooi: x",
                                candidates=list(reversed(_CANDS)), batch_id="r2") is None

@@ -22,6 +22,7 @@ from app_main.services.triage import queue_sources
 from app_main.services.triage.triage_queue import QueueItem
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from surrealdb_service.repositories.base import RevConflictError
 
 
 @pytest.fixture(autouse=True)
@@ -99,24 +100,38 @@ def test_decision_pins_entity_and_closes_row():
         return_value=_queue_item(decision="active")
     )
     repo = AsyncMock()
-    repo.set_manual_override = AsyncMock(return_value=True)
     client = _make_app(queue=queue, entity_repo=repo)
 
     resp = client.post(
         "/api/triage/queue/triage_queue:1/decision",
-        json={"status": "active"},
+        json={"status": "active", "rev": 3},
     )
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "active"
     assert data["manual_override"] is True
-    # The entity was pinned by hand (override-wins write).
-    repo.set_manual_override.assert_awaited_once()
-    _, kwargs = repo.set_manual_override.call_args
-    assert kwargs["status"] == "active"
-    assert kwargs["manual_override"] is True
-    # The queue row was closed.
-    queue.set_decision.assert_awaited_once()
+    # F2-06: row closed against its rev, entity pinned in the same transaction.
+    queue.set_decision.assert_awaited_once_with(
+        "triage_queue:1", "active", rev=3, door="Testpersoon", pin=("entity:a", "active")
+    )
+
+
+def test_decision_without_rev_is_422():
+    queue = AsyncMock()
+    queue.get = AsyncMock(return_value=_queue_item())
+    resp = _make_app(queue=queue, entity_repo=AsyncMock()).post(
+        "/api/triage/queue/triage_queue:1/decision", json={"status": "active"})
+    assert resp.status_code == 422
+    queue.set_decision.assert_not_awaited()
+
+
+def test_decision_with_a_stale_rev_is_409():
+    queue = AsyncMock()
+    queue.get = AsyncMock(return_value=_queue_item())
+    queue.set_decision = AsyncMock(side_effect=RevConflictError(["triage_queue:1"]))
+    resp = _make_app(queue=queue, entity_repo=AsyncMock()).post(
+        "/api/triage/queue/triage_queue:1/decision", json={"status": "active", "rev": 0})
+    assert resp.status_code == 409
 
 
 def test_decision_rejects_bad_status():
@@ -126,7 +141,7 @@ def test_decision_rejects_bad_status():
 
     resp = client.post(
         "/api/triage/queue/triage_queue:1/decision",
-        json={"status": "archived"},
+        json={"status": "archived", "rev": 0},
     )
     assert resp.status_code == 422
 
@@ -139,7 +154,7 @@ def test_decision_missing_row_is_404():
 
     resp = client.post(
         "/api/triage/queue/triage_queue:nope/decision",
-        json={"status": "active"},
+        json={"status": "active", "rev": 0},
     )
     assert resp.status_code == 404
 
@@ -168,7 +183,7 @@ def test_entity_override_pins_and_closes_open_queue_rows():
 
     resp = client.post(
         "/api/triage/entities/entity:a/override",
-        json={"manual_override": True, "status": "active"},
+        json={"manual_override": True, "status": "active", "rev": 2},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -179,7 +194,19 @@ def test_entity_override_pins_and_closes_open_queue_rows():
     _, kwargs = repo.set_manual_override.call_args
     assert kwargs["status"] == "active"
     assert kwargs["manual_override"] is True
+    assert (kwargs["rev"], kwargs["door"]) == (2, "Testpersoon")
     queue.set_decision.assert_awaited_once()
+
+
+def test_entity_override_with_a_stale_rev_is_409_and_closes_nothing():
+    queue = AsyncMock()
+    repo = AsyncMock()
+    repo.set_manual_override = AsyncMock(side_effect=RevConflictError(["entity:a"]))
+    resp = _make_app(queue=queue, entity_repo=repo).post(
+        "/api/triage/entities/entity:a/override",
+        json={"manual_override": True, "status": "active", "rev": 0})
+    assert resp.status_code == 409
+    queue.set_decision.assert_not_called()
 
 
 def test_entity_override_release_does_not_touch_queue():
@@ -191,7 +218,7 @@ def test_entity_override_release_does_not_touch_queue():
 
     resp = client.post(
         "/api/triage/entities/entity:a/override",
-        json={"manual_override": False},
+        json={"manual_override": False, "rev": 0},
     )
     assert resp.status_code == 200
     assert resp.json()["closed_queue_rows"] == 0
@@ -206,7 +233,7 @@ def test_entity_override_rejects_bad_status():
 
     resp = client.post(
         "/api/triage/entities/entity:a/override",
-        json={"manual_override": True, "status": "archived"},
+        json={"manual_override": True, "status": "archived", "rev": 0},
     )
     assert resp.status_code == 422
 
@@ -218,7 +245,7 @@ def test_entity_override_missing_entity_is_404():
 
     resp = client.post(
         "/api/triage/entities/entity:nope/override",
-        json={"manual_override": True},
+        json={"manual_override": True, "rev": 0},
     )
     assert resp.status_code == 404
 
@@ -242,7 +269,7 @@ def test_a_status_decision_on_a_tooi_row_is_refused_and_pins_nothing():
     queue.get = AsyncMock(return_value=_tooi_item())
     entity_repo = AsyncMock()
     resp = _make_app(queue=queue, entity_repo=entity_repo).post(
-        "/api/triage/queue/triage_queue:1/decision", json={"status": "active"})
+        "/api/triage/queue/triage_queue:1/decision", json={"status": "active", "rev": 0})
     assert resp.status_code == 409
     entity_repo.set_manual_override.assert_not_awaited()
     queue.set_decision.assert_not_awaited()
@@ -255,11 +282,12 @@ def test_linking_writes_the_chosen_uri_and_its_current_names_and_closes():
     entity_repo.update_external_ids = AsyncMock(return_value=True)
     resp = _make_app(queue=queue, entity_repo=entity_repo).post(
         "/api/triage/queue/triage_queue:1/tooi-decision",
-        json={"action": "link", "uri": _TOOI_CANDS[1]["uri"]})
+        json={"action": "link", "uri": _TOOI_CANDS[1]["uri"], "rev": 0})
     assert resp.status_code == 200
     entity_repo.update_external_ids.assert_awaited_once_with(
         "entity:a", [_TOOI_CANDS[1]["uri"]], ["Groningen", "GR", "provincie Groningen"])
-    queue.set_decision.assert_awaited_once_with("triage_queue:1", "linked")
+    queue.set_decision.assert_awaited_once_with(
+        "triage_queue:1", "linked", rev=0, door="Testpersoon")
     entity_repo.set_manual_override.assert_not_awaited()  # status untouched
 
 
@@ -269,7 +297,7 @@ def test_linking_a_uri_that_is_not_a_candidate_is_refused():
     entity_repo = AsyncMock()
     resp = _make_app(queue=queue, entity_repo=entity_repo).post(
         "/api/triage/queue/triage_queue:1/tooi-decision",
-        json={"action": "link", "uri": "https://example.org/other"})
+        json={"action": "link", "uri": "https://example.org/other", "rev": 0})
     assert resp.status_code == 422
     entity_repo.update_external_ids.assert_not_awaited()
 
@@ -281,7 +309,7 @@ def test_a_refused_write_keeps_the_row_open():
     entity_repo.update_external_ids = AsyncMock(return_value=False)
     resp = _make_app(queue=queue, entity_repo=entity_repo).post(
         "/api/triage/queue/triage_queue:1/tooi-decision",
-        json={"action": "link", "uri": _TOOI_CANDS[0]["uri"]})
+        json={"action": "link", "uri": _TOOI_CANDS[0]["uri"], "rev": 0})
     assert resp.status_code == 502
     queue.set_decision.assert_not_awaited()
 
@@ -291,9 +319,10 @@ def test_dismiss_closes_without_writing_anything_else():
     queue.get = AsyncMock(return_value=_tooi_item())
     entity_repo = AsyncMock()
     resp = _make_app(queue=queue, entity_repo=entity_repo).post(
-        "/api/triage/queue/triage_queue:1/tooi-decision", json={"action": "dismiss"})
+        "/api/triage/queue/triage_queue:1/tooi-decision", json={"action": "dismiss", "rev": 0})
     assert resp.status_code == 200
-    queue.set_decision.assert_awaited_once_with("triage_queue:1", "dismissed")
+    queue.set_decision.assert_awaited_once_with(
+        "triage_queue:1", "dismissed", rev=0, door="Testpersoon")
     entity_repo.update_external_ids.assert_not_awaited()
     entity_repo.set_manual_override.assert_not_awaited()
 
@@ -302,8 +331,20 @@ def test_the_tooi_door_refuses_a_status_row():
     queue = AsyncMock()
     queue.get = AsyncMock(return_value=_queue_item())
     resp = _make_app(queue=queue, entity_repo=AsyncMock()).post(
-        "/api/triage/queue/triage_queue:1/tooi-decision", json={"action": "dismiss"})
+        "/api/triage/queue/triage_queue:1/tooi-decision", json={"action": "dismiss", "rev": 0})
     assert resp.status_code == 409
+
+
+def test_a_tooi_link_with_a_stale_rev_writes_nothing():
+    queue = AsyncMock()
+    queue.get = AsyncMock(return_value=_tooi_item(rev=4))
+    entity_repo = AsyncMock()
+    resp = _make_app(queue=queue, entity_repo=entity_repo).post(
+        "/api/triage/queue/triage_queue:1/tooi-decision",
+        json={"action": "link", "uri": _TOOI_CANDS[0]["uri"], "rev": 3})
+    assert resp.status_code == 409
+    entity_repo.update_external_ids.assert_not_awaited()
+    queue.set_decision.assert_not_awaited()
 
 
 def test_pinning_an_entity_closes_its_status_rows_only():
@@ -314,10 +355,11 @@ def test_pinning_an_entity_closes_its_status_rows_only():
     entity_repo.set_manual_override = AsyncMock(return_value=True)
     resp = _make_app(queue=queue, entity_repo=entity_repo).post(
         "/api/triage/entities/entity:a/override",
-        json={"manual_override": True, "status": "active"})
+        json={"manual_override": True, "status": "active", "rev": 0})
     assert resp.status_code == 200
     assert resp.json()["closed_queue_rows"] == 1
-    queue.set_decision.assert_awaited_once_with("triage_queue:s", "active")
+    queue.set_decision.assert_awaited_once_with(
+        "triage_queue:s", "active", rev=None, door="Testpersoon")
 
 
 def test_the_queue_read_model_carries_kind_and_candidates():

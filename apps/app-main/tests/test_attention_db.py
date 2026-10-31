@@ -194,7 +194,7 @@ async def _seed() -> Dict[str, str]:
     row = await queue.upsert(decided, name="Gemeente Delft", type="organization",
                              structural_degree=1, doc_count=1, reason="unsure",
                              batch_id="b1")
-    await queue.set_decision(row, "active")
+    await queue.set_decision(row, "active", rev=None, door="Testpersoon")
 
     # An OCR-mangled pair: a merge candidate.
     await _entity("Koninkrijksrelaties", "organization", "Organization")

@@ -148,3 +148,20 @@ async def test_hulpfunctie_vraagt_wie_wijzigt(live_surrealdb) -> None:
     eid = await _entiteit(live_surrealdb)
     with pytest.raises(ValueError):
         await wijzig_met_rev([RevWijziging(eid, 0, {})], door=" ", config=live_surrealdb)
+
+
+async def test_set_status_door_een_run_respecteert_de_vastgezette_status(live_surrealdb) -> None:
+    from surrealdb_service.repositories.entity import EntityRepository
+
+    vast = await _entiteit(live_surrealdb, manual_override=True)
+    vrij = await _entiteit(live_surrealdb)
+    run = await ProcessingRunRepository(live_surrealdb).create(
+        trigger="schema", pipeline_id="test", flow_vastgelegd=True
+    )
+    repo = EntityRepository(config=live_surrealdb)
+    assert await repo.set_status(vast, "reference", run_id=str(run.id)) is False
+    assert await repo.set_status(vrij, "reference", run_id=str(run.id)) is True
+    [rij] = await _q(live_surrealdb, "SELECT status FROM $id", {"id": ensure_record_id(vast)})
+    assert rij["status"] == "active"
+    log = (await ProcessingRunRepository(live_surrealdb).get(str(run.id))).log
+    assert [(r["step"], r["status"]) for r in log] == [("vergrendeling", "conflict")]
