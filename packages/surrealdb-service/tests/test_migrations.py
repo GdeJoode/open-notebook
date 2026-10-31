@@ -97,7 +97,7 @@ class TestAsyncMigrationRunner:
 
         executed: list[str] = []
 
-        async def mock_execute(sql, params=None, config=None):
+        async def mock_execute(sql, params=None, config=None, **_):
             executed.append(sql)
             return []
 
@@ -136,7 +136,7 @@ class TestAsyncMigrationRunner:
 
         bumped_versions: list[int] = []
 
-        async def mock_execute(sql, params=None, config=None):
+        async def mock_execute(sql, params=None, config=None, **_):
             if "chunk" in sql:
                 raise RuntimeError("The table 'chunk' already exists")
             return []
@@ -214,7 +214,7 @@ class TestAsyncMigrationRunner:
 
         # Should only run the first pending migration, via the per-statement
         # checked transaction seam (O.2a — no silent swallow of later statements).
-        mock_exec.assert_awaited_once_with("UP 1", config=None)
+        mock_exec.assert_awaited_once_with("UP 1", config=None, _herclassificatie=True)
 
     @pytest.mark.asyncio
     async def test_run_one_down(self):

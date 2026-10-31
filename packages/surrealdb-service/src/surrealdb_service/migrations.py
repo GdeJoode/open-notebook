@@ -162,7 +162,11 @@ class AsyncMigrationRunner:
         object is treated as already-applied, not a hard error.
         """
         try:
-            await execute_transaction(self.up[version].sql, config=self.config)
+            # Migratie 89 leest de herclassificatievlag in haar ASSERTs; de
+            # verbindingslaag weigert die vermelding buiten de interne route.
+            await execute_transaction(
+                self.up[version].sql, config=self.config, _herclassificatie=True
+            )
         except RuntimeError as exc:
             if "already exists" in str(exc).lower():
                 logger.warning(

@@ -2,7 +2,8 @@
 
 Migratie 89 staat 'intern' naar 'extern' alleen toe als ``$herclassificatie``
 waar is. ``execute_query`` en ``execute_transaction`` weigeren een query die
-de vlag zet; alleen ``reclassify`` mag dat, via ``_herclassificatie=True``.
+het woord noemt; alleen ``reclassify`` en de migratieloader (die migratie 89
+uitvoert) gebruiken de interne route ``_herclassificatie=True``.
 Deze test faalt zodra de vlag ergens anders in de code opduikt. Tests zelf
 zijn uitgezonderd: die toetsen de vlag juist.
 """
@@ -20,6 +21,7 @@ VLAG = re.compile(r"\$herclassificatie\b|\b_herclassificatie\b|[\"']herclassific
 CONNECTION = "packages/surrealdb-service/src/surrealdb_service/connection.py"
 SOURCE_REPO = "packages/surrealdb-service/src/surrealdb_service/repositories/source.py"
 MIGRATIE = "migrations/89.surrealql"
+MIGRATIELOADER = "packages/surrealdb-service/src/surrealdb_service/migrations.py"
 
 
 def _bestanden():
@@ -38,7 +40,13 @@ def test_de_vlag_staat_alleen_op_de_toegestane_plekken() -> None:
         rel for rel, pad in _bestanden()
         if VLAG.search(pad.read_text(encoding="utf-8", errors="ignore"))
     }
-    assert gevonden == {CONNECTION, SOURCE_REPO, MIGRATIE}
+    assert gevonden == {CONNECTION, SOURCE_REPO, MIGRATIE, MIGRATIELOADER}
+
+
+def test_de_migratieloader_gebruikt_de_route_alleen_voor_de_up_migratie() -> None:
+    bron = (ROOT / MIGRATIELOADER).read_text(encoding="utf-8")
+    regels = [r for r in bron.splitlines() if VLAG.search(r) and not r.lstrip().startswith("#")]
+    assert regels == ["                self.up[version].sql, config=self.config, _herclassificatie=True"]
 
 
 def test_in_de_repository_alleen_in_reclassify() -> None:

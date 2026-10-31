@@ -83,36 +83,38 @@ class ClassificationValueError(RuntimeError):
     """Een ongeldige waarde voor ``classification``, zoals 'openbaar' (de API geeft 422)."""
 
 
-_CLASSIFICATIE_GEWEIGERD = re.compile(
-    r"Found '([^']*)' for field `classification`.*must conform to"
-)
+_CLASSIFICATIE_GEVONDEN = re.compile(r"Found (.*?) for field `classification`")
 
 
 def as_classification_error(error: BaseException) -> Optional[RuntimeError]:
-    """De fout als de ASSERT op ``classification`` faalde, anders ``None``.
+    """De fout als SurrealDB de waarde van ``classification`` weigerde, anders ``None``.
 
-    Een geldige waarde die de regel schendt (losser dan de bron, of 'intern'
+    'intern' of 'extern' die de regel schendt (losser dan de bron, of 'intern'
     naar 'extern' buiten de herclassificatie) is een
-    :class:`ClassificationConflictError`; elke andere waarde een
-    :class:`ClassificationValueError`.
+    :class:`ClassificationConflictError` (409). Elke andere waarde, ook een
+    tekst met een apostrof of een getal (typefout), is een
+    :class:`ClassificationValueError` (422). ``NONE`` is geen invoer van de
+    aanroeper maar een schemaprobleem: dan ``None``.
     """
-    gevonden = _CLASSIFICATIE_GEWEIGERD.search(str(error))
+    tekst = str(error)
+    gevonden = _CLASSIFICATIE_GEVONDEN.search(tekst)
     if gevonden is None:
         return None
-    if gevonden.group(1) in ("intern", "extern"):
-        return ClassificationConflictError(str(error))
-    return ClassificationValueError(str(error))
+    waarde = gevonden.group(1)
+    if waarde == "NONE":
+        return None
+    if waarde in ("'intern'", "'extern'") and "must conform to" in tekst:
+        return ClassificationConflictError(tekst)
+    return ClassificationValueError(tekst)
 
 
 #: De vlag waarmee alleen ``SourceRepository.reclassify`` intern naar extern
-#: mag zetten (migratie 89). Elke andere query die haar zet (als parameter, met
-#: ``LET`` of met ``DEFINE PARAM``), wordt geweigerd. Lezen mag: de ASSERTs in
-#: migratie 89 lezen haar.
+#: mag zetten (migratie 89). Een query die het woord noemt, in welke vorm ook
+#: (parameter, ``LET``, ``FOR``, functieparameter, ontsnapte naam, met
+#: commentaar ertussen), wordt geweigerd, hoofdletterongevoelig. Alleen
+#: ``reclassify`` en de migratieloader (die migratie 89 uitvoert) gebruiken de
+#: interne route ``_herclassificatie=True``.
 _HERCLASSIFICATIEVLAG = "herclassificatie"
-_VLAG_ZETTEN = re.compile(
-    rf"\b(?:LET|DEFINE\s+PARAM(?:\s+OVERWRITE|\s+IF\s+NOT\s+EXISTS)?)\s+\${_HERCLASSIFICATIEVLAG}\b",
-    re.IGNORECASE,
-)
 
 
 def _weiger_herclassificatievlag(
@@ -120,8 +122,8 @@ def _weiger_herclassificatievlag(
 ) -> None:
     if toegestaan:
         return
-    sleutels = {str(k).lstrip("$").lower() for k in (params or {})}
-    if _HERCLASSIFICATIEVLAG in sleutels or _VLAG_ZETTEN.search(query):
+    sleutels = " ".join(str(k) for k in (params or {})).lower()
+    if _HERCLASSIFICATIEVLAG in sleutels or _HERCLASSIFICATIEVLAG in query.lower():
         raise ValueError(
             "De herclassificatievlag mag alleen SourceRepository.reclassify zetten (F2-03)"
         )
@@ -513,9 +515,9 @@ async def execute_transaction(
     fails mid-transaction propagates as an exception rather than being
     silently swallowed.
 
-    ``_herclassificatie`` is alleen voor ``SourceRepository.reclassify``
-    (F2-03); zonder die vlag weigert deze functie een query die de
-    herclassificatievlag zet.
+    ``_herclassificatie`` is alleen voor ``SourceRepository.reclassify`` en de
+    migratieloader (F2-03); zonder die vlag weigert deze functie een query die
+    de herclassificatievlag noemt.
     """
     _weiger_herclassificatievlag(query, params, toegestaan=_herclassificatie)
     pool = get_pool(config)
