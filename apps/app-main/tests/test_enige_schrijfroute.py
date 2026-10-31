@@ -1,8 +1,8 @@
 """Eén inname: alleen het importeindpunt schrijft bronnen en fragmenten (F2-14, ADR 0010).
 
 Eerste versie, aangescherpt na de review en herreview van F2-14; F2-29 breidt
-de test uit naar wijzigen en verwijderen. Gescand: ``app_main``, ``pipelines/*/src`` en
-``packages/*/src``.
+de test uit naar wijzigen en verwijderen. Gescand: ``app_main``, ``pipelines/*/src``,
+``packages/*/src``, en de functies en events in ``migrations/*.surrealql``.
 
 De test leest de syntaxisboom van alle code in die mappen en zoekt plekken
 die een ``source``, ``source_version``, ``chunk``, ``doc_node`` of
@@ -80,8 +80,9 @@ TIJDELIJK = {
     ("pipelines/embeddings/src/embeddings/service.py", "EmbeddingService._embed_chunks"): "F2-16",
 }
 
-_TABELLEN = (r"(?:source|source_version|chunk|chunk_extern|doc_node|source_embedding"
-             r"|derived_from|parent_of|next_node)\b")
+#: De tabellen, ook ontsnapt als ``⟨chunk⟩`` of ```chunk```.
+_TABELLEN = (r"(?:[\u27e8`])?(?:source|source_version|chunk|chunk_extern|doc_node"
+             r"|source_embedding|derived_from|parent_of|next_node)(?:[\u27e9`]|\b)")
 #: Het doel van een schrijvend werkwoord: een van de tabellen, een record-
 #: variabele, ``type::thing``/``type::table``/``type::record`` met een
 #: tabelparameter of een van de tabellen, of een ingevuld deel van een
@@ -136,17 +137,37 @@ def _is_schrijfaanroep(node: ast.Call) -> bool:
     return False
 
 
+_PLAATSHOUDER = re.compile(r"\{[^{}]*\}|%(?:\([^)]*\))?[sdr]")
+
+
 def _tekst_van(node: ast.AST) -> str | None:
-    """De SQL-tekst van een constante, f-string of aaneengeschakelde tekst; een
-    ingevuld deel wordt ``{}``."""
+    """De SQL-tekst van een constante, f-string, ``%``-opmaak, ``.format``,
+    ``.join`` of aaneengeschakelde tekst; elk in te vullen deel wordt ``{}``."""
+    tekst = _ruwe_tekst(node)
+    return None if tekst is None else _PLAATSHOUDER.sub("{}", tekst)
+
+
+def _ruwe_tekst(node: ast.AST) -> str | None:
     if isinstance(node, ast.Constant):
         return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        return _ruwe_tekst(node.left)
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Constant)
+            and isinstance(node.func.value.value, str)):
+        if node.func.attr == "format":
+            return node.func.value.value
+        if node.func.attr == "join" and node.args and isinstance(
+                node.args[0], (ast.List, ast.Tuple)):
+            return node.func.value.value.join(
+                _ruwe_tekst(e) if _ruwe_tekst(e) is not None else "{}"
+                for e in node.args[0].elts)
     if isinstance(node, ast.JoinedStr):
         return "".join(
             v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else "{}"
             for v in node.values)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        links, rechts = _tekst_van(node.left), _tekst_van(node.right)
+        links, rechts = _ruwe_tekst(node.left), _ruwe_tekst(node.right)
         if links is None and rechts is None:
             return None
         return (links if links is not None else "{}") + (rechts if rechts is not None else "{}")
@@ -184,6 +205,53 @@ def _alle_plekken() -> set[tuple[str, str]]:
             for plek in schrijfplekken(pad.read_text(encoding="utf-8")):
                 uit.add((rel, plek))
     return uit
+
+
+#: Functies en events in de migraties die deze tabellen mogen aanmaken.
+MIGRATIES_TOEGESTAAN = {
+    ("migrations/91.surrealql", "EVENT chunk_extern_bijhouden"):
+        "de zoekkopie van externe fragmenten (F2-05), volgt ``chunk``",
+}
+
+_DEFINITIE = re.compile(
+    r"^DEFINE\s+(FUNCTION|EVENT)\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\S+)",
+    re.IGNORECASE | re.MULTILINE)
+
+
+def migratieplekken(tekst: str) -> set[str]:
+    """``FUNCTION fn::naam`` of ``EVENT naam`` die een bron of fragment maken."""
+    uit = set()
+    treffers = list(_DEFINITIE.finditer(tekst))
+    for i, m in enumerate(treffers):
+        einde = treffers[i + 1].start() if i + 1 < len(treffers) else len(tekst)
+        volgende = re.search(r"^(?:DEFINE|REMOVE|RETURN)\b", tekst[m.end():einde], re.MULTILINE)
+        body = tekst[m.end(): m.end() + volgende.start()] if volgende else tekst[m.end():einde]
+        if _SQL.search(body):
+            uit.add(f"{m.group(1).upper()} {m.group(2).split('(')[0]}")
+    return uit
+
+
+def _alle_migratieplekken() -> set[tuple[str, str]]:
+    uit = set()
+    for pad in sorted((REPO / "migrations").glob("*.surrealql")):
+        for plek in migratieplekken(pad.read_text(encoding="utf-8")):
+            uit.add((pad.relative_to(REPO).as_posix(), plek))
+    return uit
+
+
+def test_migraties_maken_alleen_toegestaan_bronnen_en_fragmenten() -> None:
+    gevonden = _alle_migratieplekken()
+    nieuw = sorted(gevonden - MIGRATIES_TOEGESTAAN.keys())
+    assert not nieuw, "Functie of event die schrijft:\n" + "\n".join(map(str, nieuw))
+    weg = sorted(MIGRATIES_TOEGESTAAN.keys() - gevonden)
+    assert not weg, "Niet meer gevonden; haal van de lijst:\n" + "\n".join(map(str, weg))
+
+
+def test_de_test_vindt_een_schrijvende_functie_in_een_migratie() -> None:
+    tekst = ("DEFINE FUNCTION OVERWRITE fn::stil($x: any) {\n    INSERT INTO chunk $x;\n};\n"
+             "DEFINE EVENT OVERWRITE e ON t WHEN true THEN {\n    CREATE \u27e8chunk\u27e9 SET a = 1;\n};\n"
+             "DEFINE FUNCTION OVERWRITE fn::lezen() {\n    RETURN SELECT * FROM chunk;\n};\n")
+    assert migratieplekken(tekst) == {"FUNCTION fn::stil", "EVENT e"}
 
 
 def test_alleen_toegestane_plekken_schrijven_bronnen_en_fragmenten() -> None:
@@ -238,6 +306,12 @@ def test_importeindpunt_is_de_route_naar_de_importdienst() -> None:
     ("class R:\n    async def bewaar_fragmenten(self, x):\n"
      "        await execute_query('INSERT INTO chunk $x', {'x': x})", {"R.bewaar_fragmenten"}),
     ("Q = \"UPSERT type::thing('ontology_draft', $n) SET x = 1\"", set()),
+    # Derde review: %-opmaak, .format, .join en ontsnapte tabelnamen.
+    ("def v(t):\n    return 'CREATE %s CONTENT $d' % t", {"v"}),
+    ("def w(t):\n    return 'INSERT INTO {tabel} $x'.format(tabel=t)", {"w"}),
+    ("def x(t):\n    return ' '.join(['CREATE', t, 'CONTENT $d'])", {"x"}),
+    ("Q = 'CREATE \u27e8chunk\u27e9 CONTENT $d'", {"<module>"}),
+    ("Q = 'INSERT INTO `chunk` $x'", {"<module>"}),
     ("def u(a, b):\n    return wijzig_met_rev([], door='x', aanmaken=[('classification_log', {})])",
      set()),
 ])
