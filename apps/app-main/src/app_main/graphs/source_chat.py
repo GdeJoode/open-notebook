@@ -122,7 +122,7 @@ async def call_model_with_source_context(
         or state.get("model_override")
     )
     model = await provision_langchain_model(
-        str(payload), model_id, "chat", max_tokens=8192
+        str(payload), model_id, "chat", classificatie="onbekend", max_tokens=8192
     )
 
     ai_message = await asyncio.wait_for(

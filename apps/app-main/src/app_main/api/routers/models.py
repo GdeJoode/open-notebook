@@ -70,89 +70,18 @@ async def update_default_models(
     )
 
 
-EMBEDDING_MODEL_PATTERNS = {"embed", "mxbai-embed", "nomic-embed", "all-minilm", "bge-", "e5-"}
-
-
-def _is_embedding_model(name: str) -> bool:
-    """Heuristic: detect embedding models by name patterns."""
-    lower = name.lower().split(":")[0]
-    return any(pattern in lower for pattern in EMBEDDING_MODEL_PATTERNS)
-
-
 @router.get("/status", response_model=ModelStatusResponse)
 async def get_model_status(
     model_service: ModelService = Depends(get_model_service),
 ):
     """Check model configuration validity.
 
-    Queries Ollama for available models, syncs discovered models into the
-    database, and verifies that all default model slots are properly configured.
+    F2-08: alle modellen draaien achter llama-swap en staan in het register;
+    er is geen Ollama meer om te bevragen of te synchroniseren. Deze route
+    controleert nog de standaardmodellen in de database en vervalt in F2-09.
     """
-    import httpx
-
     issues: list[ModelStatusIssue] = []
-
-    # -- Sync Ollama models into the database --
-    ollama_base = os.environ.get("OLLAMA_API_BASE", "http://localhost:11434")
-    ollama_reachable = False
-    ollama_available_names: set[str] = set()
-
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{ollama_base}/api/tags")
-            resp.raise_for_status()
-            data = resp.json()
-            ollama_reachable = True
-
-            # Collect available Ollama model names (without :latest suffix)
-            ollama_models_raw: list[dict] = data.get("models", [])
-            for m in ollama_models_raw:
-                name = m.get("name", "")
-                ollama_available_names.add(name)
-                if ":" in name:
-                    ollama_available_names.add(name.split(":")[0])
-
-            # Sync: register any Ollama models not already in the DB
-            all_models = await model_service.get_all()
-            existing_ollama = {
-                m.name for m in all_models if m.provider == "ollama"
-            }
-
-            for m in ollama_models_raw:
-                raw_name = m.get("name", "")
-                # Normalise: strip :latest tag for the DB entry
-                model_name = raw_name.split(":")[0] if raw_name.endswith(":latest") else raw_name
-                if model_name in existing_ollama or raw_name in existing_ollama:
-                    continue
-                model_type = "embedding" if _is_embedding_model(model_name) else "language"
-                await model_service.create({
-                    "name": model_name,
-                    "provider": "ollama",
-                    "type": model_type,
-                    "is_local": True,
-                })
-                logger.info("Auto-registered Ollama model: {} ({})", model_name, model_type)
-
-            # Remove DB entries for Ollama models that are no longer pulled
-            for m in all_models:
-                if m.provider != "ollama":
-                    continue
-                base_name = m.name.split(":")[0] if ":" in m.name else m.name
-                if m.name not in ollama_available_names and base_name not in ollama_available_names:
-                    await model_service.delete(m.id)
-                    logger.info("Removed stale Ollama model from DB: {}", m.name)
-
-            # Reload models after sync
-            all_models = await model_service.get_all()
-
-    except Exception as e:
-        logger.warning(f"Cannot reach Ollama at {ollama_base}: {e}")
-        issues.append(ModelStatusIssue(
-            type="ollama_unreachable",
-            message=f"Cannot reach Ollama at {ollama_base}",
-            provider="ollama",
-        ))
-        all_models = await model_service.get_all()
+    all_models = await model_service.get_all()
 
     # -- Check defaults --
     defaults = await model_service.get_defaults()
@@ -188,18 +117,8 @@ async def get_model_status(
         if not model:
             continue
         if model.provider == "ollama":
-            if ollama_reachable:
-                base_name = model.name.split(":")[0] if ":" in model.name else model.name
-                if model.name not in ollama_available_names and base_name not in ollama_available_names:
-                    issues.append(ModelStatusIssue(
-                        type="model_unavailable",
-                        message=f"Ollama model '{model.name}' is not pulled/available",
-                        model_name=model.name,
-                        provider="ollama",
-                        default_slot=slot_name,
-                    ))
-        else:
-            cloud_providers_in_defaults.setdefault(model.provider, []).append(slot_name)
+            continue
+        cloud_providers_in_defaults.setdefault(model.provider, []).append(slot_name)
 
     # -- Check cloud provider API keys --
     provider_env_keys = {
@@ -232,8 +151,11 @@ async def get_model_status(
 async def get_providers(
     model_service: ModelService = Depends(get_model_service),
 ):
-    """Get provider availability based on environment configuration."""
-    import esperanto
+    """Get provider availability based on environment configuration.
+
+    F2-08: de modelsoorten per aanbieder worden niet meer bepaald door een
+    model op te bouwen; ``supported_types`` blijft leeg. Vervalt in F2-09.
+    """
 
     # Provider to environment variable mapping
     provider_env_keys = {
@@ -259,24 +181,6 @@ async def get_providers(
             available.append(provider)
         else:
             unavailable.append(provider)
-
-        # Determine supported model types per provider
-        try:
-            types = []
-            for model_type in ["language", "embedding", "text_to_speech", "speech_to_text"]:
-                try:
-                    esperanto.AIFactory(
-                        model_name="test",
-                        provider=provider,
-                        model_type=model_type,
-                    )
-                    types.append(model_type)
-                except Exception:
-                    pass
-            if types:
-                supported_types[provider] = types
-        except Exception:
-            pass
 
     return ProviderAvailabilityResponse(
         available=available,

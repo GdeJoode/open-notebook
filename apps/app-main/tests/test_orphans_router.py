@@ -215,112 +215,59 @@ class TestManualReconnect:
         kwargs = retry_mock.await_args.kwargs
         assert kwargs.get("entity_id_filter") == entity_id
 
-    def test_private_source_reconnect_builds_only_local_model(self):
-        """PRIVACY (J.4 rev2): a reconnect on a ``source.private`` orphan must
-
-        build a LOCAL-only caller — the orphans router previously called
-        ``make_default_llm_caller`` with no ``privacy_mode`` (-> CLOUD), so a
-        private document could run NIM calls. This asserts:
-
-          1. the factory receives ``privacy_mode=PrivacyMode.PRIVATE`` (the
-             resolved sticky mode for a private source), and
-          2. mirroring the AC6 factory-spy pattern, the resulting route only
-             ever constructs a LOCAL ``LanguageModel`` (no cloud provider is
-             built even though cloud behaviour is registered).
+    def test_intern_source_reconnect_goes_through_the_gate(self):
+        """F2-08: de reconnect roept het model aan via ``ModelGate`` naar
+        llama-swap, met de classificatie van de fragmenten van de bron. Een
+        interne bron komt alleen bij een model dat intern mag; er is precies
+        één auditregel.
         """
-        from datetime import datetime as _dt
-        from unittest.mock import MagicMock
+        import json
 
-        import esperanto
-        from app_main import dependencies
-        from app_main.services.entity_extraction_service import (
-            make_default_llm_caller,
-        )
-        from app_main.services.model_routing.route_resolver import (
-            LLMTask,
-            ModelCandidate,
-            PrivacyMode,
-            ResolvedRoute,
-        )
-        from llm_manager.manager import ModelManager
-        from shared.models import Source
-        from shared.models.llm import Model
+        import httpx
+        from llm_manager import aanroep
+        from llm_manager.providers.factory import LlamaSwapClient
+        from llm_manager.register import ModelRegister, RegisterModel
+        from shared.models import Chunk
 
         notebook_svc = AsyncMock(spec=NotebookService)
         notebook_svc.get.return_value = _make_notebook()
 
         entity_id = "entity:o1"
         entity_repo = self._setup_entity_repo(
-            entity_id=entity_id, source_id="source:priv1"
+            entity_id=entity_id, source_id="source:int1"
         )
 
         source_repo = AsyncMock(spec=SourceRepository)
-        source_repo.get_chunks.return_value = []
-        # The orphan's source is flagged private -> resolver is sticky-PRIVATE.
-        source_repo.get.return_value = Source(
-            id="source:priv1",
-            title="Secret",
-            private=True,
-            created=_dt(2026, 6, 1, 12, 0, 0),
-            updated=_dt(2026, 6, 1, 12, 0, 0),
-        )
+        source_repo.get_chunks.return_value = [
+            Chunk(id="chunk:1", text="Synthetische tekst.", order=0, physical_page=1,
+                  classification="intern"),
+        ]
 
-        # Fresh breaker/limiter registries so the real caller runs cleanly.
-        dependencies.get_circuit_breaker_registry.cache_clear()
-        dependencies.get_rate_limiter_registry.cache_clear()
+        verzoeken: list = []
 
-        # A PRIVATE route is local-only; the factory spy must never see cloud.
-        def _cand(provider, model_id, is_local):
-            return ModelCandidate(
-                provider=provider,
-                model_id=model_id,
-                is_local=is_local,
-                model=Model(
-                    id=model_id,
-                    name=model_id,
-                    provider=provider,
-                    type="language",
-                    is_local=is_local,
-                ),
-            )
+        def llamaswap(verzoek):
+            verzoeken.append(verzoek)
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "{}"}}]})
 
-        route = ResolvedRoute(
-            task=LLMTask.ENTITY_EXTRACTION,
-            mode=PrivacyMode.PRIVATE,
-            ordered_candidates=[_cand("ollama", "model:local", True)],
-        )
-        resolver = MagicMock()
-        resolver.resolve = AsyncMock(return_value=route)
+        regels: list = []
 
-        built_providers: list[str] = []
+        class _Audit:
+            async def schrijf(self, regel):
+                regels.append(regel)
 
-        class _FakeLM:
-            def __init__(self, behavior):
-                self._behavior = behavior
-
-            async def achat_complete(self, messages):
-                resp = MagicMock()
-                resp.choices = [
-                    MagicMock(message=MagicMock(content=self._behavior))
-                ]
-                return resp
-
-        def _fake_get_model_from_config(self, model, **kwargs):
-            built_providers.append(model.provider)
-            return _FakeLM("PRIVATE_RECONNECT")
-
-        captured_kwargs: dict = {}
-
-        async def _spy_make_caller(*args, **kwargs):
-            captured_kwargs.update(kwargs)
-            return await make_default_llm_caller(*args, **kwargs)
+        register = ModelRegister(versie=1, modellen=[
+            RegisterModel(naam="alleen-extern", versie="v1", aanroepwijze="llama-swap",
+                          locatie="lokaal", taken=["entity_extraction"]),
+        ])
 
         async def _fake_retry(*args, **kwargs):
-            # Drive the caller exactly like the real retry would so the
-            # factory-build spy observes which providers get constructed.
             caller = kwargs.get("llm_caller")
             if caller is not None:
-                await caller("sys", "usr", "default")
+                try:
+                    await caller("sys", "usr", "default")
+                except Exception:  # noqa: BLE001 — een weigering telt als poging
+                    pass
 
             class _Outcome:
                 attempted = 1
@@ -329,35 +276,49 @@ class TestManualReconnect:
 
             return _Outcome()
 
-        with patch(
-            "app_main.api.routers.orphans.retry_pending_reconnects",
-            new=_fake_retry,
-        ), patch(
-            "app_main.services.entity_extraction_service."
-            "make_default_llm_caller",
-            new=_spy_make_caller,
-        ), patch.object(
-            dependencies, "get_route_resolver", lambda: resolver
-        ), patch.object(
-            ModelManager, "get_model_from_config", _fake_get_model_from_config
-        ), patch.object(
-            esperanto, "LanguageModel", _FakeLM
-        ):
-            client = _make_app(notebook_svc, entity_repo, source_repo)
-            resp = client.post(
-                f"/api/notebooks/notebook:test1/orphans/{entity_id}/reconnect"
-            )
+        def _met_register(reg):
+            aanroep.configureer(_Audit(), register=reg, client=LlamaSwapClient(
+                transport=httpx.MockTransport(llamaswap)))
 
-        dependencies.get_circuit_breaker_registry.cache_clear()
-        dependencies.get_rate_limiter_registry.cache_clear()
+        try:
+            # Eerst een register waarin geen model intern mag: geweigerd.
+            _met_register(register)
+            with patch(
+                "app_main.api.routers.orphans.retry_pending_reconnects",
+                new=_fake_retry,
+            ):
+                client = _make_app(notebook_svc, entity_repo, source_repo)
+                client.post(f"/api/notebooks/notebook:test1/orphans/{entity_id}/reconnect")
+            assert verzoeken == []
+            assert [(r.status, r.classification) for r in regels] == [("geweigerd", "intern")]
+
+            # Dan een model dat intern mag: één aanroep naar llama-swap.
+            regels.clear()
+            _met_register(ModelRegister(versie=1, modellen=[
+                RegisterModel(naam="werkmodel", versie="v1", aanroepwijze="llama-swap",
+                              locatie="lokaal", toegestaan_intern="ja",
+                              taken=["entity_extraction"]),
+            ]))
+            entity_repo = self._setup_entity_repo(
+                entity_id=entity_id, source_id="source:int1"
+            )
+            with patch(
+                "app_main.api.routers.orphans.retry_pending_reconnects",
+                new=_fake_retry,
+            ):
+                client = _make_app(notebook_svc, entity_repo, source_repo)
+                resp = client.post(
+                    f"/api/notebooks/notebook:test1/orphans/{entity_id}/reconnect"
+                )
+        finally:
+            aanroep.reset()
 
         assert resp.status_code == 200, resp.text
-        # 1. The factory was told to route PRIVATE for the private source.
-        assert captured_kwargs.get("privacy_mode") == PrivacyMode.PRIVATE
-        # 2. Only a local model was ever constructed — no cloud leak.
-        assert built_providers == ["ollama"]
-        assert "nvidia" not in built_providers
-        assert "openai" not in built_providers
+        assert [str(v.url) for v in verzoeken] == [
+            "http://llama-swap:8080/v1/chat/completions"]
+        assert json.loads(verzoeken[0].content)["model"] == "werkmodel"
+        assert [(r.status, r.classification, r.task) for r in regels] == [
+            ("geslaagd", "intern", "entity_extraction")]
 
     def test_409_when_entity_already_archived(self):
         """Archived entities can't be retried via this endpoint."""

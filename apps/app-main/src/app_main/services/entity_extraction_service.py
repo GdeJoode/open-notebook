@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple
 from entity_filtering.config import FilteringConfig
 from entity_filtering.workflow import FilteringWorkflow
 from job_queue import JobPausedForReviewError
+from llm_manager.gate import classificatie_van
 from loguru import logger
 from ontology_extraction.config import ExtractionConfig
 from ontology_extraction.multi_schema_orchestrator import (
@@ -328,194 +329,84 @@ async def resolve_default_model_id(
 
 
 class RoutedLLMCaller:
-    """An async LLM caller that runs through the J.4 failover executor.
+    """Een async LLM-aanroeper die via ``ModelGate`` naar llama-swap gaat (F2-08).
 
-    Preserves the B.8 ``(system, user, model) -> str`` call shape (so every
-    existing extraction caller keeps working) while replacing the single bound
-    ``LanguageModel`` with a privacy-aware ordered route executed via
-    :meth:`FailoverExecutor.execute_with_failover`. The route is resolved per
-    call so circuit-breaker state + key availability are honored fresh.
+    Behoudt de B.8-vorm ``(system, user, model) -> str``, zodat elke aanroeper
+    van de extractie blijft werken. Het model komt uit het register bij de taak;
+    er is geen route, geen failover en geen terugval (ADR 0006). De poort
+    schrijft per aanroep één regel in ``model_call``.
 
-    After each call, :attr:`served_provider` / :attr:`served_model_id` /
-    :attr:`was_failover` / :attr:`fallback_from` reflect the candidate that
-    actually answered — the extraction path reads these to stamp provenance with
-    the SERVED provider (J-Q7), not just the resolved default.
+    Na elke aanroep geven :attr:`served_provider` (altijd ``llama-swap``) en
+    :attr:`served_model_id` (het registermodel) de herkomst voor de KG.
+    ``was_failover`` en ``fallback_from`` blijven leeg; ze vervallen in F2-09.
     """
 
     def __init__(
         self,
         *,
         task: "Any",
-        mode: "Any",
-        model_id: Optional[str],
-        source_id: Optional[str] = None,
-        notebook_id: Optional[str] = None,
+        classificatie: Optional[str],
+        run_id: Optional[str] = None,
         json_mode: bool = False,
     ) -> None:
-        self._task = task
-        self._mode = mode
-        self._model_id = model_id
-        self._source_id = source_id
-        self._notebook_id = notebook_id
-        # FU-J4-4: when True, every candidate call requests structured JSON
-        # output (the EXTRACTION path). Left False for chat/summarization so
-        # their prose output is unaffected.
+        from app_main.services.model_routing.llm_call import taak_van
+
+        self._taak = taak_van(task)
+        self._classificatie = classificatie
+        self._run_id = run_id
         self._json_mode = json_mode
-        # Last-served provenance (populated after each successful call).
         self.served_provider: Optional[str] = None
-        self.served_model_id: Optional[str] = model_id
+        self.served_model_id: Optional[str] = None
         self.was_failover: bool = False
         self.fallback_from: List[str] = []
 
     async def __call__(
         self, system_prompt: str, user_prompt: str, _model: str = "default"
     ) -> str:
-        from functools import partial
+        # ``_model`` is de oude keuze uit de modelrijen; het register beslist.
+        from app_main.services.model_routing.llm_call import roep_taalmodel_aan
 
-        from app_main.dependencies import get_failover_executor, get_route_resolver
-        from app_main.services.model_routing.error_mapping import (
-            is_failover_eligible,
+        antwoord = await roep_taalmodel_aan(
+            system_prompt,
+            user_prompt,
+            taak=self._taak,
+            classificatie=self._classificatie,
+            run_id=self._run_id,
+            json_mode=self._json_mode,
         )
-        from app_main.services.model_routing.telemetry import record_routing_event
-
-        # A per-call model override on the B.8 caller shape becomes the head of
-        # the resolved route (mirrors resolve_default_model_id precedence).
-        override = (
-            _model
-            if _model and _model not in ("default",)
-            else self._model_id
-        )
-
-        resolver = get_route_resolver()
-        route = await resolver.resolve(self._task, self._mode, model_id=override)
-        if not route.ordered_candidates:
-            raise RuntimeError(
-                f"No model candidates resolved for task {self._task} "
-                f"(mode={self._mode}). Configure a provider chain or default model."
-            )
-
-        executor = get_failover_executor()
-        # J.4 injects the concrete error-mapping predicate (J.2 left it
-        # injectable on the executor instance).
-        executor._is_failover_eligible = is_failover_eligible  # noqa: SLF001
-
-        result = await executor.execute_with_failover(
-            route,
-            partial(
-                _call_candidate_text,
-                system_prompt,
-                user_prompt,
-                json_mode=self._json_mode,
-            ),
-        )
-
-        candidate_result = result.value
-        self.served_provider = result.served_provider
-        self.served_model_id = result.served_model_id
-        self.was_failover = result.was_failover
-        self.fallback_from = result.fallback_from
-
-        await record_routing_event(
-            task=self._task,
-            served_provider=result.served_provider,
-            served_model_id=result.served_model_id,
-            was_failover=result.was_failover,
-            fallback_from=result.fallback_from,
-            source_id=self._source_id,
-            notebook_id=self._notebook_id,
-        )
-
-        return candidate_result.text
-
-
-async def _call_candidate_text(
-    system_prompt: str,
-    user_prompt: str,
-    candidate,
-    *,
-    json_mode: bool = False,
-):
-    """Adapter binding (system, user) so the executor's ``call(candidate)``
-    signature reaches :func:`call_candidate` with the prompts.
-
-    ``json_mode`` (FU-J4-4) is forwarded so the EXTRACTION path requests
-    structured JSON output from each candidate; prose paths leave it False.
-    """
-    from app_main.services.model_routing.llm_call import call_candidate
-
-    return await call_candidate(
-        candidate, system_prompt, user_prompt, json_mode=json_mode
-    )
+        self.served_provider = "llama-swap"
+        self.served_model_id = antwoord.model
+        return antwoord.tekst
 
 
 async def make_default_llm_caller(
     model_id: Optional[str] = None,
     *,
+    classificatie: Optional[str],
     default_field: str = "default_chat_model",
-    privacy_mode: "Any" = None,
-    source_id: Optional[str] = None,
-    notebook_id: Optional[str] = None,
+    run_id: Optional[str] = None,
     json_mode: Optional[bool] = None,
+    **_vervallen: Any,
 ):
-    """Build an async ``LLMCaller`` that routes through the J.4 failover executor.
+    """Een async ``LLMCaller`` via de modelpoort (F2-08, ADR 0006).
 
-    ``default_field`` selects which configured default to resolve (e.g.
-    ``default_extraction_model`` for the KG-extraction path), independent of the
-    chat model. That field maps to a routing :class:`LLMTask`; the returned
-    caller resolves an ORDERED privacy-aware route for that task and executes it
-    with per-document failover (cloud provider first, local Ollama last in CLOUD
-    mode; local-only in PRIVATE mode).
+    ``default_field`` bepaalt de taak (extractie, samenvatten of chat); het
+    model komt uit het register bij die taak. ``classificatie`` is die van de
+    invoer (verplicht; ``onbekend`` telt als intern). ``model_id`` en de
+    Track J-argumenten (``privacy_mode``, ``source_id``, ``notebook_id``) tellen
+    niet meer en vervallen in F2-09.
 
-    Behavioral notes (Track J.4):
-
-    * The returned callable matches the B.8 ``LLMCaller`` protocol
-      (``async (system_prompt, user_prompt, model) -> str``) so every existing
-      Pass-1/Pass-2/single-schema caller keeps working unchanged.
-    * ``privacy_mode`` consumes the J.3 resolved :class:`PrivacyMode`. ``None``
-      defaults to CLOUD (the B.8-compatible cloud-head behavior); a ``PRIVATE``
-      mode pins the whole route to local providers — no cloud LanguageModel is
-      ever constructed.
-    * Served-provider provenance is exposed on the returned
-      :class:`RoutedLLMCaller` (``served_provider`` etc.) for J-Q7 stamping.
-
-    Args:
-        model_id: Override the head model id. ``None`` means "use the configured
-            per-task default".
-        default_field: Which ``DefaultModels`` field selects the head model.
-        privacy_mode: Resolved :class:`PrivacyMode`; ``None`` -> CLOUD.
-        source_id / notebook_id: Carried into routing telemetry.
-        json_mode: FU-J4-4 structured-output switch. ``None`` (the default)
-            auto-enables it for the EXTRACTION task only — so KG-extraction
-            requests JSON output while chat/summarization keep emitting prose.
-            Pass an explicit ``True``/``False`` to override the per-task default.
-
-    Returns:
-        A :class:`RoutedLLMCaller` (callable, with served-provenance attributes).
+    ``json_mode``: ``None`` zet JSON-uitvoer aan voor de extractie en uit voor
+    chat en samenvatten.
     """
-    from app_main.services.model_routing.route_resolver import LLMTask, PrivacyMode
-
-    # Unknown/unmapped fields default to CHAT (prose, no forced JSON) — never
-    # ENTITY_EXTRACTION, so a typo'd default_field can't silently force JSON
-    # output onto a prose path.
     task_name = _DEFAULT_FIELD_TO_TASK.get(default_field, "CHAT")
-    task = LLMTask[task_name]
-    mode = privacy_mode if privacy_mode is not None else PrivacyMode.CLOUD
-
-    # Default json_mode ON for extraction only. Chat (provision_langchain_model)
-    # and summarization never reach this with ENTITY_EXTRACTION, so their prose
-    # output is never forced to JSON.
     resolved_json_mode = (
-        json_mode
-        if json_mode is not None
-        else task == LLMTask.ENTITY_EXTRACTION
+        json_mode if json_mode is not None else task_name == "ENTITY_EXTRACTION"
     )
-
     return RoutedLLMCaller(
-        task=task,
-        mode=mode,
-        model_id=model_id,
-        source_id=source_id,
-        notebook_id=notebook_id,
+        task=task_name,
+        classificatie=classificatie,
+        run_id=run_id,
         json_mode=resolved_json_mode,
     )
 
@@ -538,7 +429,8 @@ async def extract_from_text(text: str, ontology_name: Optional[str] = None):
 
     config = ExtractionConfig(ontology_name=ontology_name or "general")
     workflow = ExtractionWorkflow(config=config)
-    llm_caller = await make_default_llm_caller()
+    # Losse tekst van de agent-API: de classificatie is onbekend, dus intern.
+    llm_caller = await make_default_llm_caller(classificatie="onbekend")
     result = await workflow.extract(
         [{"text": text, "id": "agent:0"}], mode="single", llm_caller=llm_caller
     )
@@ -604,6 +496,9 @@ class EntityExtractionService:
         # routing telemetry. Defaults keep the legacy CLOUD behavior for any
         # caller that invokes a builder without going through ``run_extraction``.
         self._privacy_mode: Any = None
+        # F2-08: de classificatie van de fragmenten van deze run, voor de poort.
+        # ``None`` (geen run) telt als intern.
+        self._classificatie: Optional[str] = None
         self._routing_source_id: Optional[str] = None
         self._routing_notebook_id: Optional[str] = None
         # Run-scoped applied schemas (Track L.1). Set in ``_run_multi_schema``
@@ -684,6 +579,21 @@ class EntityExtractionService:
         )
         return mode
 
+    async def _llm_chat(self, messages: List[Dict[str, Any]]):
+        """De chatfunctie voor de LLM-matcher van de filtering (F2-08).
+
+        Via de modelpoort, taak ``entity_dedup``, JSON-uitvoer, met de
+        classificatie van de fragmenten van deze run.
+        """
+        from app_main.services.model_routing.llm_call import get_aanroeper
+
+        return await get_aanroeper().chat(
+            taak="entity_dedup",
+            classificatie=self._classificatie,
+            messages=messages,
+            json_mode=True,
+        )
+
     async def _make_routed_caller(self, *, model_id: Optional[str] = None):
         """Build a J.4-routed LLM caller bound to this run's privacy context.
 
@@ -694,10 +604,8 @@ class EntityExtractionService:
         """
         caller = await make_default_llm_caller(
             model_id=model_id,
+            classificatie=self._classificatie,
             default_field="default_extraction_model",
-            privacy_mode=self._privacy_mode,
-            source_id=self._routing_source_id,
-            notebook_id=self._routing_notebook_id,
         )
         self._last_routed_caller = caller
         return caller
@@ -862,7 +770,9 @@ class EntityExtractionService:
 
             embed_svc = await get_embedding_service()
             # Batch embed all entity texts
-            vectors = await embed_svc.embedding_model.aembed(texts)
+            vectors = await embed_svc.embedding_model.aembed(
+                texts, classificatie=self._classificatie
+            )
 
             # Map vectors back to entities
             text_to_vec = dict(zip(texts, vectors))
@@ -1776,6 +1686,9 @@ class EntityExtractionService:
         )
         self._routing_source_id = source_id
         self._routing_notebook_id = notebook_id
+        self._classificatie = classificatie_van(
+            getattr(c, "classification", None) for c in chunks
+        )
         # L.1: clear any prior run's applied schemas — only a multi-schema run
         # populates this (below). A single-schema run leaves it None so the
         # persist bridge degrades to the alias/enum path.
@@ -1925,6 +1838,7 @@ class EntityExtractionService:
                     alignment_schemas=align_deps["schemas"],
                     gap_recorder=align_deps["gap_recorder"],
                     gap_ontology_name=align_deps["gap_ontology_name"],
+                    llm_chat=self._llm_chat,
                 )
 
                 filtered = await f_workflow.process(
@@ -2243,6 +2157,8 @@ class EntityExtractionService:
         self._applicable_schemas = None
         self._typing_schemas = None
         self._gap_ontology_name = None
+        # F2-08: geen classificatie van een eerdere run meenemen; onbekend telt als intern.
+        self._classificatie = None
 
         # Fetch existing extraction result
         rows = await execute_query(
@@ -2300,6 +2216,7 @@ class EntityExtractionService:
             alignment_schemas=align_deps["schemas"],
             gap_recorder=align_deps["gap_recorder"],
             gap_ontology_name=align_deps["gap_ontology_name"],
+            llm_chat=self._llm_chat,
         )
         filtered = await f_workflow.process(
             extraction,

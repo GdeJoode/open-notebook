@@ -95,7 +95,7 @@ async def _add_chunk(
 class _FakeModel:
     """Local-only fake embedding model (deterministic 8-dim vector per text)."""
 
-    async def aembed(self, texts):
+    async def aembed(self, texts, **_):
         return [[float(len(t) % 7)] * 8 for t in texts]
 
 
@@ -317,7 +317,7 @@ async def test_embed_source_completes_partial_then_clean(
     from embeddings.service import EmbeddingService
 
     class _FakeModel:
-        async def aembed(self, texts):
+        async def aembed(self, texts, **_):
             return [[float(len(t) % 7)] * 8 for t in texts]
 
     orig = conn._pool
@@ -399,7 +399,7 @@ async def test_backfill_chunks_real_run_creates_embeddings_and_idempotent(
         the configured 1024-dim mxbai-embed-large; dimension is model-derived,
         not hardcoded in the script)."""
 
-        async def aembed(self, texts):
+        async def aembed(self, texts, **_):
             return [[float(len(t) % 7)] * 8 for t in texts]
 
     orig = conn._pool

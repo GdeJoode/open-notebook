@@ -6,7 +6,6 @@ Provides repository and service instances via FastAPI's Depends() mechanism.
 
 from functools import lru_cache
 
-from esperanto import EmbeddingModel
 from llm_manager import ModelManager, get_model_manager
 from shared.references.footnote_reference_extractor import (
     FootnoteReferenceExtractor,
@@ -476,8 +475,11 @@ async def get_contradiction_judge_service() -> ContradictionJudgeService:
         make_default_llm_caller,
     )
 
+    # De rechter vergelijkt bronnen; de classificatie per aanroep is niet
+    # bekend bij het opbouwen, dus onbekend (telt als intern, F2-08).
     llm_caller = await make_default_llm_caller(
         default_field="default_chat_model",
+        classificatie="onbekend",
         json_mode=True,
     )
     return ContradictionJudgeService(
@@ -497,10 +499,7 @@ def get_chat_service() -> ChatService:
 
 
 def get_search_service() -> SearchService:
-    return SearchService(
-        search_repo=get_search_repo(),
-        model_manager=get_model_manager(),
-    )
+    return SearchService(search_repo=get_search_repo())
 
 
 def get_model_service() -> ModelService:
@@ -827,56 +826,15 @@ def get_okf_import_service() -> OkfImportService:
 
 
 def get_preprocessing_service() -> PreprocessingService:
-    return PreprocessingService(
-        chunk_repo=get_chunk_repo(),
-        language_model=None,  # resolved at call-time; see run endpoint
-    )
+    return PreprocessingService(chunk_repo=get_chunk_repo())
 
 
 async def get_preprocessing_service_with_llm() -> PreprocessingService:
-    """Create a PreprocessingService with the default transformation model.
+    """Een PreprocessingService met model, via de modelpoort (F2-08).
 
-    Similar to ``get_embedding_service`` — resolves the configured language
-    model from the database via ModelManager.
+    Het model komt uit het register (taak ``summarization``); de modelrijen en
+    standaardmodellen in de database tellen niet meer.
     """
-    from esperanto import LanguageModel as _LM
-    from fastapi import HTTPException
-
-    mm = get_model_manager()
-
-    defaults = mm.get_defaults()
-    if not defaults or not defaults.default_transformation_model:
-        defaults_repo = get_default_models_repo()
-        defaults = await defaults_repo.get()
-        mm.set_defaults(defaults)
-
-    model_id = getattr(defaults, "default_transformation_model", None)
-    if not model_id:
-        # Fallback: try the chat model
-        model_id = getattr(defaults, "default_chat_model", None)
-    if not model_id:
-        raise HTTPException(
-            status_code=422,
-            detail="No transformation or chat model configured. "
-            "Please set a default model in Settings → Models.",
-        )
-
-    model_repo = get_model_repo()
-    model = await model_repo.get(model_id)
-    if not model:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Model '{model_id}' not found in database.",
-        )
-
-    language_model = mm.get_model_from_config(model)
-    if not isinstance(language_model, _LM):
-        raise HTTPException(
-            status_code=500,
-            detail=f"Model '{model_id}' is not a LanguageModel.",
-        )
-
-    # Read classification_max_chars from settings
     from app_main.services.preprocessing_service import DEFAULT_MAX_INPUT_CHARS
 
     settings_repo = get_settings_repo()
@@ -885,49 +843,27 @@ async def get_preprocessing_service_with_llm() -> PreprocessingService:
 
     return PreprocessingService(
         chunk_repo=get_chunk_repo(),
-        language_model=language_model,
         max_input_chars=max_chars,
+        met_model=True,
     )
 
 
 # --- Embedding service factory (for handler / non-DI use) ---
 
 async def get_embedding_service():
-    """Create an EmbeddingService instance for handler use.
+    """Een EmbeddingService die via de modelpoort embedt (F2-08, ADR 0006, 0008).
 
-    Resolves the default embedding model from the DB via ModelManager,
-    then creates the service with a SourceRepository.
+    Het embeddingmodel komt uit het register (taak ``embedding``); elke aanroep
+    gaat via ``ModelGate`` naar ``/v1/embeddings`` van llama-swap.
     """
+    from embeddings.providers import PoortEmbedder
     from embeddings.service import EmbeddingService
 
-    mm = get_model_manager()
+    from app_main.services.model_routing.llm_call import get_aanroeper
 
-    # Ensure defaults are loaded
-    defaults = mm.get_defaults()
-    if not defaults or not defaults.default_embedding_model:
-        defaults_repo = get_default_models_repo()
-        defaults = await defaults_repo.get()
-        mm.set_defaults(defaults)
-
-    model_id = defaults.default_embedding_model
-    if not model_id:
-        raise ValueError("No embedding model configured.")
-
-    model_repo = get_model_repo()
-    model = await model_repo.get(model_id)
-    if not model:
-        raise ValueError(f"Embedding model '{model_id}' not found in database.")
-
-    embedding_model = mm.get_model_from_config(model)
-    if not isinstance(embedding_model, EmbeddingModel):
-        raise TypeError(
-            f"Model '{model_id}' is not an EmbeddingModel, got {type(embedding_model)}"
-        )
-
-    source_repo = get_source_repo()
     return EmbeddingService(
-        source_repo=source_repo,
-        embedding_model=embedding_model,
+        source_repo=get_source_repo(),
+        embedding_model=PoortEmbedder(get_aanroeper()),
     )
 
 

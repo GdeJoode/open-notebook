@@ -6,9 +6,8 @@ Two layers of the interim guard (Decision M-D3 (b)):
     window exceeds that candidate's input budget — the same document packed for
     a 256K primary makes few big windows, re-packed for an 8K fallback makes
     many bounded ones.
-  * ``call_candidate`` requests ``num_ctx`` = the local candidate's
-    (conservative) context_window so an Ollama fallback allocates the window the
-    packer sized against instead of its ~2-4K default.
+  * (F2-08) the ``num_ctx`` request for an Ollama fallback went with Ollama:
+    every call goes via the model gate to llama-swap.
 """
 
 from app_main.services.extraction_chunking.context_packer import (
@@ -16,9 +15,6 @@ from app_main.services.extraction_chunking.context_packer import (
     input_budget_tokens,
     pack_chunks_for_model,
 )
-from app_main.services.model_routing.llm_call import _ollama_num_ctx_for
-from app_main.services.model_routing.route_resolver import ModelCandidate
-from shared.models.llm import Model
 
 
 def _doc(n: int, chars: int = 2000) -> list:
@@ -56,34 +52,3 @@ class TestPackerResplitsForSmallFallback:
         )
         fb_budget = input_budget_tokens(context_window=8192, max_output_tokens=512)
         assert estimate_tokens(primary[0]["text"]) > fb_budget
-
-
-class TestOllamaNumCtxGuard:
-    def test_local_candidate_requests_its_context_window(self):
-        model = Model(
-            name="llama3.1:8b",
-            provider="ollama",
-            type="language",
-            is_local=True,
-            context_window=8192,
-        )
-        cand = ModelCandidate(
-            provider="ollama", model_id="llama3.1:8b", is_local=True, model=model
-        )
-        assert _ollama_num_ctx_for(cand) == 8192
-
-    def test_cloud_candidate_returns_none(self):
-        model = Model(
-            name="mistral", provider="nvidia", type="language", context_window=128000
-        )
-        cand = ModelCandidate(
-            provider="nvidia", model_id="mistral", is_local=False, model=model
-        )
-        assert _ollama_num_ctx_for(cand) is None
-
-    def test_local_without_context_window_returns_none(self):
-        model = Model(name="llama", provider="ollama", type="language", is_local=True)
-        cand = ModelCandidate(
-            provider="ollama", model_id="llama", is_local=True, model=model
-        )
-        assert _ollama_num_ctx_for(cand) is None

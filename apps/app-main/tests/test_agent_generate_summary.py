@@ -34,7 +34,6 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.echte_sleutels]
 async def test_summarize_text_no_db_write(monkeypatch):
     repo = AsyncMock()
     svc = SummarizationService(summary_repo=repo)
-    monkeypatch.setattr(svc, "_build_routed_model", AsyncMock(return_value=None))
 
     class _FakeWF:
         def __init__(self, config):

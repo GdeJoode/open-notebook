@@ -464,7 +464,7 @@ async def test_toegestane_locaties(locatie) -> None:
     "http://0.0.0.0/api", "http://[0:0:0:0:0:0:0:1]/api", "http://[::1]/api",
     "http://[::ffff:127.0.0.1]/api", "http://10.1.2.3/api", "http://172.16.0.1/api",
     "http://192.168.1.1/api", "http://169.254.169.254/latest", "http://[fe80::1]/api",
-    "http://[fc00::1]/api", "http://ollama:11434/api", "http://open-notebook/api",
+    "http://[fc00::1]/api", "http://ollama:8080/api", "http://open-notebook/api",
     "http://api.localhost/x", "smb://server/share/x.pdf", "ftp://example.org/x.pdf",
     "ws://example.org/x", "http:///geen-host",
     "http://１２７.０.０.１/", "http://①②⑦.0.0.1/", "http://a.localhost。/",
@@ -482,7 +482,7 @@ async def test_url_allowlist(tmp_path) -> None:
     controle = Locatiecontrole([str(vault)], [], [], ["localhost", "ollama"])
     controle.controleer("http://localhost:8080/api")
     controle.controleer("http://localhost./api")
-    controle.controleer("http://ollama:11434/api")
+    controle.controleer("http://ollama:8080/api")
     with pytest.raises(VerbodenLocatieError):
         controle.controleer(f"http://localhost{vault}/x.md")
     with pytest.raises(VerbodenLocatieError):

@@ -65,7 +65,7 @@ class FakeModel:
         self.dim = dim
         self.batches: List[int] = []
 
-    async def aembed(self, texts: List[str]) -> List[List[float]]:
+    async def aembed(self, texts: List[str], **_) -> List[List[float]]:
         self.batches.append(len(texts))
         return [[float(len(t))] * self.dim for t in texts]
 

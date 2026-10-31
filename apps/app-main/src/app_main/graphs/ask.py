@@ -76,7 +76,7 @@ async def call_model_with_messages(state: ThreadState, config: RunnableConfig) -
     model = await provision_langchain_model(
         system_prompt,
         config.get("configurable", {}).get("strategy_model"),
-        "tools",
+        "tools", classificatie="onbekend",
         max_tokens=2000,
         structured=dict(type="json"),
     )
@@ -157,7 +157,7 @@ async def provide_answer(state: SubGraphState, config: RunnableConfig) -> dict:
     model = await provision_langchain_model(
         system_prompt,
         config.get("configurable", {}).get("answer_model"),
-        "tools",
+        "tools", classificatie="onbekend",
         max_tokens=2000,
     )
     ai_message = await asyncio.wait_for(
@@ -182,7 +182,7 @@ async def write_final_answer(state: ThreadState, config: RunnableConfig) -> dict
     model = await provision_langchain_model(
         system_prompt,
         config.get("configurable", {}).get("final_answer_model"),
-        "tools",
+        "tools", classificatie="onbekend",
         max_tokens=2000,
     )
     ai_message = await asyncio.wait_for(

@@ -1,79 +1,15 @@
-"""Track M.1 — per-model context params: factory threading + seed backfill.
+"""Track M.1 — per-model context params: seed backfill.
 
-Two surfaces:
-
-  * ``ModelFactory.create_model`` threads ``model.max_output_tokens`` into the
-    esperanto ``config["max_tokens"]`` for EVERY chain provider (google /
-    nvidia / ollama) — regression-pinning the existing factory behaviour so the
-    NIM-truncation class of bug cannot recur, and a caller-supplied max_tokens
-    still wins.
   * ``backfill_chain_model_params`` fills ``context_window`` /
     ``max_output_tokens`` only when null (idempotent, operator-safe).
+
+(F2-08: the factory-threading tests went with ``ModelFactory``; every model
+call goes via the model gate to llama-swap.)
 """
 
 from typing import Any, Dict, List, Optional
 
-import pytest
 from surrealdb import RecordID
-from llm_manager.providers.factory import ModelFactory
-from shared.models.llm import Model
-
-
-def _capture_max_tokens(monkeypatch) -> Dict[str, Any]:
-    """Patch ``create_language_model`` to capture the config it receives.
-
-    Returns a mutable dict the test reads after ``create_model``; avoids any
-    real esperanto / network construction.
-    """
-    captured: Dict[str, Any] = {}
-
-    def _fake_create_language_model(model_name, provider, config=None):
-        captured["model_name"] = model_name
-        captured["provider"] = provider
-        captured["config"] = dict(config or {})
-        return object()  # stand-in LanguageModel; the test never calls it
-
-    monkeypatch.setattr(
-        ModelFactory, "create_language_model", staticmethod(_fake_create_language_model)
-    )
-    return captured
-
-
-class TestFactoryThreading:
-    @pytest.mark.parametrize(
-        "provider,max_output",
-        [("google", 8192), ("nvidia", 16384), ("ollama", 4096)],
-    )
-    def test_max_output_tokens_threaded_per_provider(
-        self, monkeypatch, provider, max_output
-    ):
-        captured = _capture_max_tokens(monkeypatch)
-        model = Model(
-            name="m",
-            provider=provider,
-            type="language",
-            context_window=128_000,
-            max_output_tokens=max_output,
-        )
-        ModelFactory.create_model(model)
-        assert captured["config"]["max_tokens"] == max_output
-
-    def test_caller_supplied_max_tokens_wins(self, monkeypatch):
-        captured = _capture_max_tokens(monkeypatch)
-        model = Model(
-            name="m", provider="nvidia", type="language", max_output_tokens=16384
-        )
-        ModelFactory.create_model(model, config={"max_tokens": 999})
-        # The existing ``"max_tokens" not in config`` guard preserves the
-        # caller's value over the model's ceiling.
-        assert captured["config"]["max_tokens"] == 999
-
-    def test_null_max_output_injects_no_key(self, monkeypatch):
-        captured = _capture_max_tokens(monkeypatch)
-        model = Model(name="m", provider="ollama", type="language")
-        ModelFactory.create_model(model)
-        # Null ceiling -> no max_tokens key -> esperanto's own default applies.
-        assert "max_tokens" not in captured["config"]
 
 
 class _FakeDB:

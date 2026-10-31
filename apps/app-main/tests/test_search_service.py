@@ -6,7 +6,6 @@ import pytest
 
 from app_main.services.search_service import SearchService
 from shared.models.classification import ClassificationScope
-from tests.conftest import make_default_models
 
 S = ClassificationScope.EXTERN
 
@@ -14,11 +13,11 @@ S = ClassificationScope.EXTERN
 class TestSearchServiceTextSearch:
 
     @pytest.mark.asyncio
-    async def test_text_search_delegates(self, search_repo, model_manager):
+    async def test_text_search_delegates(self, search_repo):
         search_repo.text_search = AsyncMock(return_value=[
             {"id": "source:1", "title": "Result", "score": 0.9},
         ])
-        service = SearchService(search_repo, model_manager)
+        service = SearchService(search_repo)
 
         result = await service.text_search("python", results=5, scope=S)
 
@@ -28,9 +27,9 @@ class TestSearchServiceTextSearch:
         assert len(result) == 1
 
     @pytest.mark.asyncio
-    async def test_text_search_with_filters(self, search_repo, model_manager):
+    async def test_text_search_with_filters(self, search_repo):
         search_repo.text_search = AsyncMock(return_value=[])
-        service = SearchService(search_repo, model_manager)
+        service = SearchService(search_repo)
 
         await service.text_search(
             "test", history=True, scope=S,
@@ -43,19 +42,9 @@ class TestSearchServiceTextSearch:
 
 class TestSearchServiceVectorSearch:
 
-    @pytest.mark.asyncio
-    async def test_vector_search_falls_back_without_model(self, search_repo, model_manager):
-        """Without embedding model, vector search falls back to text search."""
-        model_manager.get_defaults.return_value = make_default_models()
-        search_repo.text_search = AsyncMock(return_value=[{"id": "1"}])
-
-        service = SearchService(search_repo, model_manager)
-        # Should fall back to text search, not raise
-        result = await service.vector_search("test", scope=S)
-        assert len(result) == 1
 
     @pytest.mark.asyncio
-    async def test_vector_search_embeds_and_delegates(self, search_repo, model_manager):
+    async def test_vector_search_embeds_and_delegates(self, search_repo):
         """Vector search embeds the query and delegates to the repository."""
         mock_embedding_model = AsyncMock()
         mock_embedding_model.aembed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
@@ -65,12 +54,12 @@ class TestSearchServiceVectorSearch:
         ])
 
         service = SearchService(
-            search_repo, model_manager, embedding_model=mock_embedding_model,
+            search_repo, embedding_model=mock_embedding_model,
         )
 
         result = await service.vector_search("test query", results=5, scope=S)
 
-        mock_embedding_model.aembed.assert_called_once_with(["test query"])
+        mock_embedding_model.aembed.assert_called_once_with(["test query"], classificatie="onbekend")
         search_repo.vector_search.assert_called_once_with(
             [0.1, 0.2, 0.3], 5, 0.2, scope=S, history=False, hydrate=False,
         )
@@ -80,7 +69,7 @@ class TestSearchServiceVectorSearch:
 class TestSearchServiceHybridSearch:
 
     @pytest.mark.asyncio
-    async def test_hybrid_search_embeds_and_delegates(self, search_repo, model_manager):
+    async def test_hybrid_search_embeds_and_delegates(self, search_repo):
         """Hybrid search embeds the query and delegates to the repository."""
         mock_embedding_model = AsyncMock()
         mock_embedding_model.aembed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
@@ -88,12 +77,12 @@ class TestSearchServiceHybridSearch:
         search_repo.hybrid_search = AsyncMock(return_value=[{"id": "source:1"}])
 
         service = SearchService(
-            search_repo, model_manager, embedding_model=mock_embedding_model,
+            search_repo, embedding_model=mock_embedding_model,
         )
 
         result = await service.hybrid_search("test", results=5, scope=S)
 
-        mock_embedding_model.aembed.assert_called_once_with(["test"])
+        mock_embedding_model.aembed.assert_called_once_with(["test"], classificatie="onbekend")
         search_repo.hybrid_search.assert_called_once_with(
             "test", [0.1, 0.2, 0.3], 5, 0.2, 0.5, scope=S, history=False, hydrate=False,
         )
@@ -101,7 +90,7 @@ class TestSearchServiceHybridSearch:
 
     @pytest.mark.asyncio
     async def test_hybrid_search_threads_custom_text_weight(
-        self, search_repo, model_manager
+        self, search_repo
     ):
         """A non-default text_weight is forwarded to the repository (W.1)."""
         mock_embedding_model = AsyncMock()
@@ -110,7 +99,7 @@ class TestSearchServiceHybridSearch:
         search_repo.hybrid_search = AsyncMock(return_value=[{"id": "source:1"}])
 
         service = SearchService(
-            search_repo, model_manager, embedding_model=mock_embedding_model,
+            search_repo, embedding_model=mock_embedding_model,
         )
 
         await service.hybrid_search("test", results=5, text_weight=0.7, scope=S)
@@ -121,7 +110,7 @@ class TestSearchServiceHybridSearch:
 
     @pytest.mark.asyncio
     async def test_hybrid_search_fuses_text_and_vector(
-        self, model_manager
+        self,
     ):
         """End-to-end RRF fusion through the real SearchRepository (W.1 AC4).
 
@@ -148,7 +137,7 @@ class TestSearchServiceHybridSearch:
         mock_embedding_model.aembed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
 
         service = SearchService(
-            repo, model_manager, embedding_model=mock_embedding_model,
+            repo, embedding_model=mock_embedding_model,
         )
 
         results = await service.hybrid_search("test", results=10, scope=S)
@@ -168,12 +157,3 @@ class TestSearchServiceHybridSearch:
         assert by_id["source:both"]["_vector_rank"] == 1
         assert by_id["source:text"]["_vector_rank"] is None
 
-    @pytest.mark.asyncio
-    async def test_hybrid_falls_back_without_model(self, search_repo, model_manager):
-        """Without embedding model, hybrid falls back to text search."""
-        model_manager.get_defaults.return_value = make_default_models()
-        search_repo.text_search = AsyncMock(return_value=[])
-
-        service = SearchService(search_repo, model_manager)
-        result = await service.hybrid_search("test", scope=S)
-        assert result == []

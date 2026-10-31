@@ -47,7 +47,7 @@ async def run_transformation(state: dict, config: RunnableConfig) -> dict:
     chain = await provision_langchain_model(
         str(payload),
         config.get("configurable", {}).get("model_id"),
-        "transformation",
+        "transformation", classificatie="onbekend",
         max_tokens=5055,
     )
 

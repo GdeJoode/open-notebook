@@ -9,10 +9,9 @@ that informs strategy selection and ontology choice.
 import json
 from typing import Any, Dict, List, Optional
 
-from esperanto import LanguageModel
+from llm_manager.gate import classificatie_van
 from loguru import logger
 from pydantic import BaseModel, Field
-from shared.model_routing import ProviderUnavailableError
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories import ChunkRepository
 
@@ -184,28 +183,21 @@ class PreprocessingService:
     def __init__(
         self,
         chunk_repo: ChunkRepository,
-        language_model: Optional[LanguageModel] = None,
         max_input_chars: int = DEFAULT_MAX_INPUT_CHARS,
-        privacy: Optional[str] = None,
+        met_model: bool = False,
     ):
+        """``met_model``: samenvatting en classificatie door een model, via de
+        modelpoort (F2-08). Zonder model alleen de structuur en het filter."""
         self.chunk_repo = chunk_repo
-        self.language_model = language_model
         self.max_input_chars = max_input_chars
-        self.privacy = privacy
+        self.met_model = met_model
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    async def run(
-        self, source_id: str, privacy: Optional[str] = None
-    ) -> PreprocessingResult:
-        """Run full preprocessing for a source document.
-
-        privacy overrides the instance default for this run only.
-        """
-        if privacy is not None:
-            self.privacy = privacy
+    async def run(self, source_id: str) -> PreprocessingResult:
+        """Run full preprocessing for a source document."""
         # 1. Load all chunks
         # 0. Clear any cached result so a fresh LLM call is always made
         await execute_query(
@@ -233,10 +225,15 @@ class PreprocessingService:
         if len(full_text) > self.max_input_chars:
             full_text = full_text[:self.max_input_chars]
 
-        # 5. LLM analysis — prefer model_routing (Mistral Medium on public,
-        # Ollama on internal/confidential), fall back to DB-configured LLM.
-        if self.privacy or self.language_model:
-            summary, classification = await self._analyze_document(full_text)
+        # 5. LLM analysis via de modelpoort, met de classificatie van de
+        # fragmenten (F2-08); onbekend telt als intern.
+        if self.met_model:
+            summary, classification = await self._analyze_document(
+                full_text,
+                classificatie_van(
+                    getattr(c, "classification", None) for c in chunks_sorted
+                ),
+            )
         else:
             summary = full_text[:500] + "..."
             classification = DocumentClassification(
@@ -418,30 +415,19 @@ class PreprocessingService:
         return filtered_ids, removed_ids, noise_stats
 
     async def _analyze_document(
-        self, text: str
+        self, text: str, classificatie: Optional[str]
     ) -> tuple[str, DocumentClassification]:
-        """Call LLM for summary + classification."""
-        messages = [
-            {"role": "system", "content": _ANALYSIS_SYSTEM_PROMPT},
-            {"role": "user", "content": _ANALYSIS_USER_TEMPLATE.format(text=text)},
-        ]
+        """Call LLM for summary + classification, via de modelpoort (F2-08)."""
+        from app_main.services.model_routing.llm_call import roep_taalmodel_aan
 
         try:
-            if self.privacy:
-                # Route via shared/model_routing — Mistral Medium 3 on public,
-                # llama3.1:8b on internal/confidential.
-                from shared.model_routing import call_llm
-
-                raw = await call_llm(
-                    messages=messages,
-                    step="classification",
-                    privacy=self.privacy,
-                )
-            else:
-                response = await self.language_model.achat_complete(
-                    messages, stream=False
-                )
-                raw = response.content
+            antwoord = await roep_taalmodel_aan(
+                _ANALYSIS_SYSTEM_PROMPT,
+                _ANALYSIS_USER_TEMPLATE.format(text=text),
+                taak="summarization",
+                classificatie=classificatie,
+            )
+            raw = antwoord.tekst
             logger.debug(
                 f"LLM response length: {len(raw) if raw else 0}, "
                 f"first 200 chars: {repr(raw[:200]) if raw else '(empty)'}"
@@ -507,15 +493,8 @@ class PreprocessingService:
             return raw[:2000], DocumentClassification(
                 document_type="other", domain="other"
             )
-        except ProviderUnavailableError:
-            # PC.6: a deliberately retired route is not a transient fault, and the
-            # handler below would have relabelled it as one — it subclasses
-            # RuntimeError, so "Ollama API errors (e.g. out of memory)" would have
-            # swallowed a configuration decision and re-raised it as a ValueError.
-            # Propagate with the reason intact.
-            raise
         except RuntimeError as e:
-            # Ollama API errors (e.g. out of memory)
+            # Fout van llama-swap (zonder antwoordtekst in de melding).
             logger.error(f"LLM runtime error: {e}")
             raise ValueError(str(e)) from e
 

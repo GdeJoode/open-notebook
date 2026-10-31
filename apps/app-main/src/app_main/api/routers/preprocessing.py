@@ -18,7 +18,6 @@ router = APIRouter(prefix="/preprocessing", tags=["preprocessing"], dependencies
 
 class RunPreprocessingRequest(BaseModel):
     source_id: str
-    privacy: Optional[str] = None  # "public" | "internal" | "confidential"
 
 
 class UpdatePreprocessingRequest(BaseModel):
@@ -34,7 +33,7 @@ async def run_preprocessing(
 ):
     """Run preprocessing (summary + classification + chunk filtering) for a source."""
     try:
-        result = await svc.run(source_id=body.source_id, privacy=body.privacy)
+        result = await svc.run(source_id=body.source_id)
         return result.model_dump()
     except ValueError as e:
         raise fout_zonder_inhoud(e, "Ongeldig verzoek", status_code=400)

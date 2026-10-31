@@ -382,189 +382,8 @@ class TestSchemaReviewPendingError:
         assert isinstance(err, JobPausedForReviewError)
 
 
-class TestMakeDefaultLLMCaller:
-    """B.1f: the LLM caller factory routes through ModelManager.
-
-    Pin via spy that ``ModelManager.get_model_from_config`` is invoked
-    and the returned async callable dispatches via ``achat_complete``.
-    """
-
-    @pytest.mark.asyncio
-    async def test_caller_routes_through_model_manager_and_achat_complete(self):
-        from app_main.services.entity_extraction_service import make_default_llm_caller
-        from shared.models import DefaultModels, Model
-
-        # Mock the LanguageModel returned by the factory.
-        mock_lm = MagicMock()
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=MagicMock(content="OK"))]
-        mock_lm.achat_complete = AsyncMock(return_value=mock_response)
-
-        defaults = DefaultModels(default_chat_model="model:default")
-        model_record = Model(
-            id="model:default",
-            name="gpt-test",
-            provider="openai",
-            type="language",
-        )
-
-        mock_mm = MagicMock()
-        mock_mm.get_defaults = MagicMock(return_value=defaults)
-        mock_mm.get_model_from_config = MagicMock(return_value=mock_lm)
-
-        mock_model_repo = MagicMock()
-        mock_model_repo.get = AsyncMock(return_value=model_record)
-
-        # Patch esperanto.LanguageModel so isinstance() check inside
-        # make_default_llm_caller passes against our MagicMock.
-        with patch(
-            "app_main.services.entity_extraction_service.get_model_manager",
-            create=True,
-        ) as mock_get_mm, patch(
-            "app_main.dependencies.get_model_repo"
-        ) as mock_get_model_repo, patch(
-            "app_main.services.entity_extraction_service.get_model_manager",
-            return_value=mock_mm,
-            create=True,
-        ):
-            # Override the lazy import inside the factory.
-            import llm_manager
-            with patch.object(llm_manager, "get_model_manager", return_value=mock_mm):
-                mock_get_model_repo.return_value = mock_model_repo
-                with patch("esperanto.LanguageModel", new=type(mock_lm)):
-                    caller = await make_default_llm_caller()
-                    result = await caller("sys", "usr", "default")
-
-        # The factory's caller routed our prompts through achat_complete.
-        mock_lm.achat_complete.assert_awaited_once()
-        sent_messages = mock_lm.achat_complete.await_args.kwargs.get("messages")
-        assert sent_messages is not None
-        assert sent_messages[0]["role"] == "system"
-        assert sent_messages[0]["content"] == "sys"
-        assert sent_messages[1]["content"] == "usr"
-        # The caller unwraps the esperanto ChatCompletion shape.
-        assert result == "OK"
-
-    async def _resolve_model_id(self, defaults, default_field, monkeypatch):
-        """Invoke a J.4-routed caller with mocked deps and return the head model
-        id it resolved (the id the local route candidate loaded from model_repo).
-
-        With no cloud keys set the CLOUD route is single-entry [ollama]; its head
-        model id is the per-task default. B.8's extraction-model independence is
-        preserved: the head id still comes from ``default_extraction_model`` (or
-        ``default_chat_model`` when the former is unset)."""
-        from app_main.services.entity_extraction_service import make_default_llm_caller
-        from shared.models import Model
-
-        # No cloud keys -> CLOUD resolves to the local-only single-entry route.
-        monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
-
-        mock_lm = MagicMock()
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=MagicMock(content="OK"))]
-        mock_lm.achat_complete = AsyncMock(return_value=mock_response)
-
-        captured = {}
-
-        async def _get(model_id):
-            captured["id"] = model_id
-            return Model(id=model_id, name="n", provider="ollama", type="language")
-
-        mock_mm = MagicMock()
-        mock_mm.get_defaults = MagicMock(return_value=defaults)
-        mock_mm.get_model_from_config = MagicMock(return_value=mock_lm)
-        mock_model_repo = MagicMock()
-        mock_model_repo.get = AsyncMock(side_effect=_get)
-
-        with patch(
-            "app_main.dependencies.get_model_repo", return_value=mock_model_repo
-        ):
-            import llm_manager
-            with patch.object(llm_manager, "get_model_manager", return_value=mock_mm):
-                with patch("esperanto.LanguageModel", new=type(mock_lm)):
-                    caller = await make_default_llm_caller(default_field=default_field)
-                    await caller("sys", "usr", "default")
-        return captured.get("id")
-
-    @pytest.mark.asyncio
-    async def test_default_field_resolves_extraction_model(self, monkeypatch):
-        """B.8a: default_field='default_extraction_model' selects the extraction
-        model independently of the chat model (now the route head)."""
-        from shared.models import DefaultModels
-
-        defaults = DefaultModels(
-            default_chat_model="model:chat",
-            default_extraction_model="model:extract",
-        )
-        resolved = await self._resolve_model_id(
-            defaults, "default_extraction_model", monkeypatch
-        )
-        assert resolved == "model:extract"
-
-    @pytest.mark.asyncio
-    async def test_extraction_model_falls_back_to_chat_when_unset(self, monkeypatch):
-        """B.8a: when default_extraction_model is unset, extraction falls back to
-        the chat model (back-compat)."""
-        from shared.models import DefaultModels
-
-        defaults = DefaultModels(
-            default_chat_model="model:chat",
-            default_extraction_model=None,
-        )
-        resolved = await self._resolve_model_id(
-            defaults, "default_extraction_model", monkeypatch
-        )
-        assert resolved == "model:chat"
-
-    @pytest.mark.asyncio
-    async def test_per_call_model_override_becomes_route_head(self, monkeypatch):
-        """J.4: a per-call model id on the B.8 caller shape now flows into the
-        resolved route as the HEAD model id (B.8 override precedence), rather
-        than being logged-and-ignored as in B.1f.
-
-        Replaces B.1f's warning-branch test: the override is no longer inert —
-        it overrides the per-task default for that call."""
-        from app_main.services.entity_extraction_service import make_default_llm_caller
-        from shared.models import DefaultModels, Model
-
-        monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
-
-        mock_lm = MagicMock()
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=MagicMock(content="OK"))]
-        mock_lm.achat_complete = AsyncMock(return_value=mock_response)
-
-        defaults = DefaultModels(default_chat_model="model:bound")
-
-        captured = {}
-
-        async def _get(model_id):
-            captured["id"] = model_id
-            return Model(
-                id=model_id, name="n", provider="ollama", type="language"
-            )
-
-        mock_mm = MagicMock()
-        mock_mm.get_defaults = MagicMock(return_value=defaults)
-        mock_mm.get_model_from_config = MagicMock(return_value=mock_lm)
-
-        mock_model_repo = MagicMock()
-        mock_model_repo.get = AsyncMock(side_effect=_get)
-
-        import llm_manager
-        with patch.object(
-            llm_manager, "get_model_manager", return_value=mock_mm
-        ), patch(
-            "app_main.dependencies.get_model_repo",
-            return_value=mock_model_repo,
-        ), patch("esperanto.LanguageModel", new=type(mock_lm)):
-            caller = await make_default_llm_caller()
-            # A per-call override id wins over the configured default.
-            result = await caller("sys", "usr", "model:other-id")
-
-        assert result == "OK"
-        assert captured.get("id") == "model:other-id"
-        assert caller.served_model_id == "model:other-id"
+# TestMakeDefaultLLMCaller (B.1f/J.4: route en ModelManager) vervalt met F2-08;
+# de aanroeper via de modelpoort staat in test_modelpoort_aanroepen.py.
 
 
 # ---------------------------------------------------------------------------
@@ -1416,6 +1235,7 @@ class TestConceptAlignmentIsReachable:
         svc = EntityExtractionService.__new__(EntityExtractionService)
         svc._applicable_schemas = ["source-A-ontology"]
         svc._gap_ontology_name = "source-A-vocabulary"
+        svc._classificatie = "extern"  # van een eerdere run (F2-08)
         captured = {}
 
         class _Workflow:
@@ -1457,7 +1277,9 @@ class TestConceptAlignmentIsReachable:
             "alignment_schemas",
             "gap_recorder",
             "gap_ontology_name",
+            "llm_chat",  # F2-08: de LLM-matcher via de modelpoort
         }
+        assert svc._classificatie is None  # F2-08: geen classificatie van een eerdere run
         assert captured["process"]["source_id"] == "source:B"
 
     @pytest.mark.asyncio

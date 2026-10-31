@@ -44,7 +44,7 @@ async def test_startup_accepts_the_shipped_configuration() -> None:
     """The counterweight, and the one that would have caught an over-eager check.
 
     The configuration this repository actually ships — alignment off, KG
-    resolution off, NVIDIA retired but only on unreachable `public` routes — must
+    resolution off — must
     start. A check that refuses the default configuration is worse than no check:
     the first thing anyone does is disable it.
     """
@@ -52,15 +52,14 @@ async def test_startup_accepts_the_shipped_configuration() -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_unreadable_defaults_row_does_not_manufacture_a_refusal(
-    monkeypatch,
-) -> None:
-    """A database error is not a verdict about the configuration.
+async def test_the_judge_model_comes_from_the_register(monkeypatch) -> None:
+    """F2-08: the judge is a model from the register, not a `default_models` row.
 
-    If reading `default_models` fails, the judge is assumed configured. Treating
-    the error as "no model" would turn a transient DB blip into a startup refusal
-    — inventing a BLOCK from an absence of information.
+    Alignment and its judge on, KG resolution on: with a chat model in the
+    register startup proceeds; without one it refuses.
     """
+    from llm_manager.register import ModelRegister, RegisterModel
+
     monkeypatch.setattr(
         "app_main.config.get_concept_alignment_enabled", lambda: True
     )
@@ -68,13 +67,22 @@ async def test_an_unreadable_defaults_row_does_not_manufacture_a_refusal(
         "entity_filtering.config.KGResolutionConfig",
         lambda *a, **k: type("C", (), {"enabled": True})(),
     )
+    monkeypatch.setattr(
+        "entity_filtering.config.ConceptAlignmentConfig",
+        lambda *a, **k: type("C", (), {"judge_enabled": True})(),
+    )
 
-    def _boom():
-        raise RuntimeError("connection refused")
+    def _register(taak: str) -> ModelRegister:
+        return ModelRegister(versie=1, modellen=[RegisterModel(
+            naam="m", versie="v1", aanroepwijze="llama-swap", locatie="lokaal",
+            toegestaan_intern="ja", taken=[taak])])
 
-    monkeypatch.setattr("app_main.dependencies.get_default_models_repo", _boom)
-
+    monkeypatch.setattr("llm_manager.register.get_register", lambda: _register("chat"))
     await _check_configuration_coherence()
+
+    monkeypatch.setattr("llm_manager.register.get_register", lambda: _register("embedding"))
+    with pytest.raises(ConfigurationError):
+        await _check_configuration_coherence()
 
 
 @pytest.mark.asyncio
@@ -119,41 +127,3 @@ async def test_the_lifespan_actually_calls_the_check_and_lets_it_refuse(
             pass
 
     assert calls == [1], "the lifespan did not call the coherence check"
-
-
-@pytest.mark.asyncio
-async def test_the_context_check_is_actually_called(monkeypatch) -> None:
-    """The wiring for `check_ollama_context`, not the function — M7.
-
-    Review found this reachable but unasserted: deleting the whole `try:` block
-    that calls it would have left every suite green, and on this deployment it
-    checks zero rows (the `model` table holds one NVIDIA row), so nothing observed
-    it in production either. That is the same hole M6 had, in the check built
-    BECAUSE the M.4 guard was inert.
-
-    Asserts it is called with what the model rows actually provide — a name/window
-    mapping — rather than merely that something ran.
-    """
-    seen: list = []
-
-    def _spy(declared, **_kwargs):
-        seen.append(declared)
-        return []
-
-    class _Row:
-        name = "llama3.1:8b-instruct-q4_0"
-        context_window = 32768
-
-    class _Repo:
-        async def get_by_provider(self, provider):
-            assert provider == "ollama"
-            return [_Row()]
-
-    monkeypatch.setattr("shared.config_coherence.check_ollama_context", _spy)
-    monkeypatch.setattr("app_main.dependencies.get_model_repo", lambda: _Repo())
-
-    await _check_configuration_coherence()
-
-    assert seen == [{"llama3.1:8b-instruct-q4_0": 32768}], (
-        "the startup path did not call check_ollama_context with the model rows"
-    )
