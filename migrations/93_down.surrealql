@@ -1,0 +1,24 @@
+-- ============================================================================
+-- Migratie 93 terug: bronkaart, innamebatch en innamewachtrij (F2-13).
+--
+-- De tabellen `source_map_rule`, `intake_batch` en `intake_item` gaan weg.
+-- `classification_log` wordt niet gewist (alleen aanvulbaar, zoals `89_down`):
+-- `person` en `source` krijgen de vorm van migratie 89 terug; de velden
+-- `source_map_rule`, `intake_batch` en `intake_item` blijven als optioneel
+-- veld bestaan, zodat bestaande logregels hun onderwerp houden.
+-- Idempotent: IF EXISTS en OVERWRITE.
+-- ============================================================================
+
+REMOVE TABLE IF EXISTS intake_item;
+REMOVE TABLE IF EXISTS intake_batch;
+REMOVE TABLE IF EXISTS source_map_rule;
+
+REMOVE INDEX IF EXISTS classification_log_source_map_rule ON classification_log;
+DEFINE FIELD OVERWRITE person ON classification_log TYPE string READONLY
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE source ON classification_log TYPE record<source> READONLY;
+DEFINE FIELD OVERWRITE source_map_rule ON classification_log TYPE option<record<source_map_rule>> READONLY;
+DEFINE FIELD OVERWRITE intake_batch ON classification_log TYPE option<record<intake_batch>> READONLY;
+DEFINE FIELD OVERWRITE intake_item ON classification_log TYPE option<record<intake_item>> READONLY;
+
+RETURN NONE;

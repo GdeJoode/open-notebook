@@ -1,0 +1,145 @@
+-- ============================================================================
+-- Migratie 93: bronkaart, innamebatch en innamewachtrij (F2-13, ADR 0020,
+-- ADR 0019, plan van aanpak §5.2).
+--
+-- 1. `source_map_rule`: de bronkaartregels. `extern` geldt alleen met een
+--    bevestiging (`classification_confirmed_by`, `_at`); zonder bevestiging
+--    is de regel intern (ADR 0019). `pipeline_start` volgt uit `route_type`.
+--    `rev`, `modified_by` en `modified_at` zoals migratie 92.
+-- 2. `intake_batch`: een batch van een bulkupload, met één classificatie
+--    (standaard intern) en één route.
+-- 3. `intake_item`: de innamewachtrij (watchfolder, losse upload, bron zonder
+--    regel). Status `wacht` -> `besloten` -> `verwerkt`; `besloten` vraagt een
+--    besluit (route, classificatie, persoon, tijd).
+-- 4. `classification_log` krijgt naast `source` ook `source_map_rule`,
+--    `intake_batch` en `intake_item` als onderwerp; precies één is gezet.
+--
+-- De locatiecontrole (geen pad in de vault of de exportmap, ADR 0004) doet de
+-- fork in `SourceMapService`: de paden zijn een instelling van de fork.
+-- Lege database (B3): geen omzetting van bestaande records. Idempotent via
+-- OVERWRITE. Alleen hele regels commentaar: de migratieloader plakt de regels
+-- aan elkaar.
+-- ============================================================================
+
+-- 1. Bronkaartregel.
+DEFINE TABLE OVERWRITE source_map_rule SCHEMAFULL;
+DEFINE FIELD OVERWRITE name ON source_map_rule TYPE string
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE route_type ON source_map_rule TYPE string
+    ASSERT $value IN ['api', 'mcp', 'feed', 'website', 'bulkupload', 'watchfolder', 'upload'];
+DEFINE FIELD OVERWRITE source_type ON source_map_rule TYPE string
+    ASSERT $value IN ['pdf', 'map', 'website', 'api', 'video', 'podcast', 'mcp'];
+DEFINE FIELD OVERWRITE location ON source_map_rule TYPE string
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE schedule ON source_map_rule TYPE option<object>;
+DEFINE FIELD OVERWRITE schedule.cron ON source_map_rule TYPE string
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE schedule.timezone ON source_map_rule TYPE string DEFAULT 'Europe/Amsterdam';
+DEFINE FIELD OVERWRITE schedule.catch_up ON source_map_rule TYPE string DEFAULT 'coalesce'
+    ASSERT $value IN ['coalesce', 'skip'];
+DEFINE FIELD OVERWRITE classification ON source_map_rule TYPE string DEFAULT 'intern'
+    ASSERT $value IN ['intern', 'extern'];
+DEFINE FIELD OVERWRITE classification_confirmed_by ON source_map_rule TYPE option<string>
+    ASSERT $value = NONE OR string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE classification_confirmed_at ON source_map_rule TYPE option<datetime>;
+DEFINE FIELD OVERWRITE pipeline_start ON source_map_rule TYPE string
+    ASSERT $value = (IF $this.route_type IN ['api', 'mcp', 'feed', 'website'] { 'automatisch' }
+        ELSE IF $this.route_type = 'watchfolder' { 'wachtrij' }
+        ELSE { 'na_bevestiging' });
+DEFINE FIELD OVERWRITE document_type ON source_map_rule TYPE option<array<string>>;
+DEFINE FIELD OVERWRITE route ON source_map_rule TYPE string
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE selection ON source_map_rule TYPE option<array<string>>;
+DEFINE FIELD OVERWRITE label_schema ON source_map_rule TYPE option<object>;
+DEFINE FIELD OVERWRITE label_schema.schema ON source_map_rule TYPE string;
+DEFINE FIELD OVERWRITE label_schema.version ON source_map_rule TYPE string;
+DEFINE FIELD OVERWRITE owner ON source_map_rule TYPE string DEFAULT 'beheerder'
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE fetch_content ON source_map_rule TYPE string
+    ASSERT $value IN ['metadata', 'transcript', 'volledige_media', 'volledig_document'];
+DEFINE FIELD OVERWRITE active ON source_map_rule TYPE bool DEFAULT true;
+DEFINE FIELD OVERWRITE rev ON source_map_rule TYPE int DEFAULT 0
+    VALUE IF $before = NONE { 0 } ELSE { $before + 1 };
+DEFINE FIELD OVERWRITE modified_by ON source_map_rule TYPE option<string>;
+DEFINE FIELD OVERWRITE modified_at ON source_map_rule TYPE option<datetime>;
+DEFINE FIELD OVERWRITE created_at ON source_map_rule TYPE datetime DEFAULT time::now() READONLY;
+DEFINE INDEX OVERWRITE idx_source_map_rule_route_type ON source_map_rule FIELDS route_type;
+
+-- 2. Innamebatch van een bulkupload.
+DEFINE TABLE OVERWRITE intake_batch SCHEMAFULL;
+DEFINE FIELD OVERWRITE classification ON intake_batch TYPE string DEFAULT 'intern'
+    ASSERT $value IN ['intern', 'extern'];
+DEFINE FIELD OVERWRITE classification_confirmed_by ON intake_batch TYPE option<string>
+    ASSERT $value = NONE OR string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE classification_confirmed_at ON intake_batch TYPE option<datetime>;
+DEFINE FIELD OVERWRITE route ON intake_batch TYPE string
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE source_map_rule ON intake_batch TYPE option<record<source_map_rule>>;
+DEFINE FIELD OVERWRITE files ON intake_batch TYPE array<string> DEFAULT [];
+DEFINE FIELD OVERWRITE created_by ON intake_batch TYPE string READONLY
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE rev ON intake_batch TYPE int DEFAULT 0
+    VALUE IF $before = NONE { 0 } ELSE { $before + 1 };
+DEFINE FIELD OVERWRITE modified_by ON intake_batch TYPE option<string>;
+DEFINE FIELD OVERWRITE modified_at ON intake_batch TYPE option<datetime>;
+DEFINE FIELD OVERWRITE created_at ON intake_batch TYPE datetime DEFAULT time::now() READONLY;
+
+-- 3. Innamewachtrij. Geen tekst uit het document: pad, hash en het voorstel
+-- van de poortwachter (kenmerken, geen inhoud).
+DEFINE TABLE OVERWRITE intake_item SCHEMAFULL;
+DEFINE FIELD OVERWRITE origin ON intake_item TYPE string READONLY
+    ASSERT $value IN ['watchfolder', 'upload', 'zonder_regel'];
+DEFINE FIELD OVERWRITE path ON intake_item TYPE string READONLY
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE content_hash ON intake_item TYPE string READONLY
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE proposed_classification ON intake_item TYPE option<string> READONLY
+    ASSERT $value = NONE OR $value IN ['intern', 'extern'];
+-- Geen DEFAULT op een veld onder `gatekeeper`: onder v2.7.0 maakt die bij een
+-- UPDATE een leeg object van een ontbrekend voorstel.
+DEFINE FIELD OVERWRITE gatekeeper ON intake_item TYPE option<object> READONLY
+    ASSERT $value = NONE OR $value.decision IN ['intern', 'extern'];
+DEFINE FIELD OVERWRITE gatekeeper.decision ON intake_item TYPE option<string>;
+DEFINE FIELD OVERWRITE gatekeeper.internal_markers ON intake_item TYPE option<array<string>>;
+DEFINE FIELD OVERWRITE gatekeeper.method ON intake_item TYPE option<string>;
+DEFINE FIELD OVERWRITE gatekeeper.text_source ON intake_item TYPE option<string>;
+DEFINE FIELD OVERWRITE gatekeeper.probability ON intake_item TYPE option<float>;
+DEFINE FIELD OVERWRITE gatekeeper.model ON intake_item TYPE option<string>;
+DEFINE FIELD OVERWRITE decision ON intake_item TYPE option<object>;
+DEFINE FIELD OVERWRITE decision.route ON intake_item TYPE string
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE decision.classification ON intake_item TYPE string
+    ASSERT $value IN ['intern', 'extern'];
+DEFINE FIELD OVERWRITE decision.decided_by ON intake_item TYPE string
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE decision.decided_at ON intake_item TYPE datetime;
+DEFINE FIELD OVERWRITE status ON intake_item TYPE string DEFAULT 'wacht'
+    ASSERT (($before = NONE AND $value = 'wacht') OR $before = $value
+        OR ($before = 'wacht' AND $value = 'besloten')
+        OR ($before = 'besloten' AND $value = 'verwerkt'))
+        AND ($value = 'wacht' OR $this.decision != NONE);
+DEFINE FIELD OVERWRITE run ON intake_item TYPE option<record<processing_run>>;
+DEFINE FIELD OVERWRITE registered_by ON intake_item TYPE string READONLY
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE rev ON intake_item TYPE int DEFAULT 0
+    VALUE IF $before = NONE { 0 } ELSE { $before + 1 };
+DEFINE FIELD OVERWRITE modified_by ON intake_item TYPE option<string>;
+DEFINE FIELD OVERWRITE modified_at ON intake_item TYPE option<datetime>;
+DEFINE FIELD OVERWRITE created_at ON intake_item TYPE datetime DEFAULT time::now() READONLY;
+DEFINE INDEX OVERWRITE idx_intake_item_uniek ON intake_item FIELDS origin, path, content_hash UNIQUE;
+DEFINE INDEX OVERWRITE idx_intake_item_status ON intake_item FIELDS status;
+
+-- 4. Het classificatielogboek: ook voor regels, batches en wachtrij-items.
+-- Een ASSERT op een leeg optioneel veld draait niet; daarom staat de eis
+-- "precies één onderwerp" bij het verplichte veld `person`.
+DEFINE FIELD OVERWRITE source ON classification_log TYPE option<record<source>> READONLY;
+DEFINE FIELD OVERWRITE source_map_rule ON classification_log TYPE option<record<source_map_rule>> READONLY;
+DEFINE FIELD OVERWRITE intake_batch ON classification_log TYPE option<record<intake_batch>> READONLY;
+DEFINE FIELD OVERWRITE intake_item ON classification_log TYPE option<record<intake_item>> READONLY;
+DEFINE FIELD OVERWRITE person ON classification_log TYPE string READONLY
+    ASSERT string::len(string::trim($value)) > 0
+        AND array::len(array::filter([$this.source, $this.source_map_rule, $this.intake_batch,
+            $this.intake_item], |$v| $v != NONE)) = 1;
+DEFINE INDEX OVERWRITE classification_log_source_map_rule ON classification_log FIELDS source_map_rule;
+
+RETURN NONE;

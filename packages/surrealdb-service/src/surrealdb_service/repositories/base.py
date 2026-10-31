@@ -5,7 +5,7 @@ Base repository with generic CRUD operations.
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Generic, List, Optional, Sequence, Type, TypeVar, Union
+from typing import Any, Dict, Generic, List, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from loguru import logger
 from surrealdb import RecordID
@@ -204,6 +204,7 @@ async def wijzig_met_rev(
     *,
     door: str,
     run_id: Optional[str] = None,
+    aanmaken: Sequence[Tuple[str, Dict[str, Any]]] = (),
     config: Optional[SurrealDBConfig] = None,
 ) -> List[Optional[Dict[str, Any]]]:
     """Wijzig records met optimistische vergrendeling (F2-06, ADR 0003).
@@ -220,10 +221,16 @@ async def wijzig_met_rev(
       niet; de run krijgt daarvoor een regel ``conflict`` in zijn logboek, en
       het resultaat voor dat record is ``None``. ``modified_by`` is de run.
 
+    ``aanmaken``: records (tabel, inhoud) die in dezelfde transactie worden
+    aangemaakt, bijvoorbeeld een regel in ``classification_log`` (F2-13); alleen
+    handmatig, niet bij een run.
+
     Geeft per wijziging het record na de wijziging, of ``None``.
     """
     if not str(door or "").strip():
         raise ValueError("wijzig_met_rev vraagt wie de wijziging doet")
+    if aanmaken and run_id:
+        raise ValueError("wijzig_met_rev maakt bij een run geen records aan")
     ids = [ensure_record_id(str(w.record_id)) for w in wijzigingen]
     datas: List[Dict[str, Any]] = []
     nu = datetime.now(timezone.utc)
@@ -248,6 +255,10 @@ async def wijzig_met_rev(
             voorwaarde = f" WHERE rev = $rev{i}"
         regels.append(f"LET $r{i} = (UPDATE $id{i} MERGE $d{i}{voorwaarde} RETURN id);")
         regels.append(f"IF array::len($r{i}) = 0 {{ THROW 'wijzig_met_rev:{i}' }};")
+    for j, (tabel, inhoud) in enumerate(aanmaken):
+        params[f"t{j}"] = tabel
+        params[f"c{j}"] = inhoud
+        regels.append(f"CREATE type::table($t{j}) CONTENT $c{j} RETURN NONE;")
     regels.append("COMMIT TRANSACTION;")
     try:
         await execute_transaction("\n".join(regels), params, config)

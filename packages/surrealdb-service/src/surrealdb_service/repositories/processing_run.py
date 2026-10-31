@@ -173,8 +173,8 @@ async def source_map_rule_snapshot(
 ) -> Optional[Dict[str, Any]]:
     """Classificatie, bevestiging, status en ``rev`` van een bronkaartregel.
 
-    De tabel ``source_map_rule`` komt met F2-13 (ADR 0020, plan §5.2); tot dan
-    vindt deze functie niets en is de invoer van een run onbekend.
+    De tabel ``source_map_rule`` staat in migratie 93 (F2-13, ADR 0020). Geen
+    regel gevonden: ``None``, en de invoer van een run is onbekend.
     """
     try:
         rid = ensure_record_id(rule_id if ":" in rule_id else f"source_map_rule:{rule_id}")
