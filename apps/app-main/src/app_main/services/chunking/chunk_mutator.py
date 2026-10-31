@@ -15,6 +15,9 @@ beschermd tegen een automatische run (migratie 92).
 * De nieuwe fragmenten en de nieuwe ``current_run`` staan in één transactie.
   Mislukt die, dan wordt de run ``mislukt`` en verandert er niets aan de
   fragmenten of de versie.
+* Optimistische vergrendeling: ``current_run`` wordt alleen verzet als die nog
+  de run is waarop de bewerking is gebaseerd. Heeft een gelijktijdige
+  bewerking hem al verzet, dan :class:`ChunkConflictError` (HTTP 409).
 * Alleen fragmenten van de huidige versie en run kunnen worden bewerkt.
 
 Audit: naast de run schrijft de dienst, als die is meegegeven, een
@@ -57,13 +60,23 @@ _OVERNEMEN = (
     "is_content",
 )
 
-# De nieuwe fragmenten en de nieuwe huidige run in één transactie.
+# De nieuwe huidige run en de nieuwe fragmenten in één transactie, alleen als
+# de huidige run nog die is waarop de bewerking is gebaseerd.
 _SCHRIJF_SET = (
     "BEGIN TRANSACTION;\n"
+    "LET $gezet = (UPDATE $versie SET current_run = $run"
+    " WHERE current_run = $verwacht RETURN id);\n"
+    "IF array::len($gezet) = 0 { THROW 'chunk_mutator:verouderd' };\n"
     "INSERT INTO chunk $fragmenten RETURN NONE;\n"
-    "UPDATE $versie SET current_run = $run RETURN NONE;\n"
     "COMMIT TRANSACTION;"
 )
+
+#: Een schrijfconflict in de opslag (RocksDB onder SurrealDB v2).
+_SCHRIJFCONFLICT = ("chunk_mutator:verouderd", "read or write conflict", "can be retried")
+
+
+class ChunkConflictError(Exception):
+    """De huidige run is intussen verzet door een andere bewerking (HTTP 409)."""
 
 
 class ChunkMutationError(Exception):
@@ -143,8 +156,8 @@ class ChunkMutator:
         except Exception:
             raise ChunkMutationError("Chunk not found for this source") from None
         rows = await execute_query(
-            "SELECT current_version AS versie, current_version.classification AS classification"
-            " FROM $bron",
+            "SELECT current_version AS versie, current_version.classification AS classification,"
+            " current_version.current_run AS run FROM $bron",
             {"bron": bron},
             self.config,
         )
@@ -333,11 +346,18 @@ class ChunkMutator:
         try:
             await execute_transaction(
                 _SCHRIJF_SET,
-                {"fragmenten": fragmenten, "versie": versie_id, "run": run_id},
+                {"fragmenten": fragmenten, "versie": versie_id, "run": run_id,
+                 "verwacht": ensure_record_id(str(versie["run"]))},
                 self.config,
             )
         except Exception as e:
-            await self.run_repo.close(str(run.id), status="mislukt", error=type(e).__name__)
+            conflict = any(t in str(e) for t in _SCHRIJFCONFLICT)
+            await self.run_repo.close(
+                str(run.id), status="mislukt",
+                error="verouderd" if conflict else type(e).__name__,
+            )
+            if conflict:
+                raise ChunkConflictError("The current run changed meanwhile") from None
             raise
         await self.run_repo.close(str(run.id), status="geslaagd")
         rows = await execute_query(

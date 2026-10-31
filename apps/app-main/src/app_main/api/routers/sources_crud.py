@@ -51,6 +51,7 @@ from app_main.dependencies import (
 from app_main.exceptions import InvalidInputError
 from app_main.services.audit.chunk_audit import ChunkAuditService
 from app_main.services.chunking.chunk_mutator import (
+    ChunkConflictError,
     ChunkMutationError,
     ChunkMutator,
 )
@@ -1000,6 +1001,9 @@ async def merge_chunk(
         )
         return merged.model_dump()
 
+    except ChunkConflictError as e:
+        raise fout_zonder_inhoud(e, "De fragmenten zijn intussen gewijzigd; laad opnieuw",
+                                 status_code=409)
     except ChunkMutationError as e:
         raise fout_zonder_inhoud(e, "Ongeldig verzoek", status_code=400)
     except HTTPException:
@@ -1035,6 +1039,9 @@ async def split_chunk(
         )
         return {"chunks": [c.model_dump() for c in result]}
 
+    except ChunkConflictError as e:
+        raise fout_zonder_inhoud(e, "De fragmenten zijn intussen gewijzigd; laad opnieuw",
+                                 status_code=409)
     except ChunkMutationError as e:
         raise fout_zonder_inhoud(e, "Ongeldig verzoek", status_code=400)
     except HTTPException:

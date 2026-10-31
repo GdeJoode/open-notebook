@@ -266,3 +266,102 @@ async def test_resolution_log_heeft_een_auteur(env) -> None:
     assert n == 1
     [rij] = await _q("SELECT author FROM resolution_log WHERE winner_id = $w", {"w": str(a["id"])})
     assert rij["author"] == "Testpersoon"
+
+
+# --------------------------------------------------------------------------
+# Randgevallen van samenvoegen en splitsen (terug uit test_chunk_mutator.py)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("basis, doel", [(1, 0), (1, 2)])
+async def test_samenvoegen_met_een_aangrenzend_doel(env, app, basis, doel) -> None:
+    bron = await _verwerkte_bron()
+    oude = await _fragmenten((await _stand(bron))["run"])
+    async with _client(app) as client:
+        resp = await client.post(f"/api/sources/{bron}/chunks/{oude[basis]['id']}/merge",
+                                 json={"target_chunk_id": str(oude[doel]["id"])})
+    assert resp.status_code == 200, resp.text
+    eerste, tweede = sorted((basis, doel))
+    assert resp.json()["text"] == f"{TEKSTEN[eerste]}\n\n{TEKSTEN[tweede]}"
+    assert len(await _fragmenten((await _stand(bron))["run"])) == 2
+
+
+async def _geweigerd(app, bron: str, pad: str, body: dict) -> None:
+    voor = await _stand(bron)
+    async with _client(app) as client:
+        resp = await client.post(f"/api/sources/{bron}/chunks/{pad}", json=body)
+    assert resp.status_code == 400, resp.text
+    assert await _stand(bron) == voor
+    # Een mislukte bewerking schrijft geen auditregel.
+    assert not await _q("SELECT id FROM chunk_edit WHERE source = $b", {"b": _rid(bron)})
+
+
+async def test_niet_aangrenzend_doel_wordt_geweigerd(env, app) -> None:
+    bron = await _verwerkte_bron()
+    oude = await _fragmenten((await _stand(bron))["run"])
+    await _geweigerd(app, bron, f"{oude[0]['id']}/merge", {"target_chunk_id": str(oude[2]["id"])})
+
+
+async def test_het_laatste_fragment_heeft_geen_opvolger(env, app) -> None:
+    bron = await _verwerkte_bron()
+    oude = await _fragmenten((await _stand(bron))["run"])
+    await _geweigerd(app, bron, f"{oude[2]['id']}/merge", {})
+
+
+@pytest.mark.parametrize("positie", [0, len(TEKSTEN[0]), len(TEKSTEN[0]) + 5])
+async def test_cursoroffset_buiten_bereik(env, app, positie) -> None:
+    bron = await _verwerkte_bron()
+    oude = await _fragmenten((await _stand(bron))["run"])
+    await _geweigerd(app, bron, f"{oude[0]['id']}/split", {"cursorOffset": positie})
+
+
+async def test_mislukte_transactie_schrijft_geen_auditregel(env, monkeypatch) -> None:
+    import app_main.services.chunking.chunk_mutator as mutator_mod
+    from app_main.services.audit.chunk_audit import ChunkAuditService
+    from app_main.services.chunking.chunk_mutator import ChunkMutator
+
+    bron = await _verwerkte_bron()
+    oude = await _fragmenten((await _stand(bron))["run"])
+
+    async def _faalt(*_a, **_k):
+        raise RuntimeError("geforceerde fout")
+
+    monkeypatch.setattr(mutator_mod, "execute_transaction", _faalt)
+    with pytest.raises(RuntimeError):
+        await ChunkMutator(audit=ChunkAuditService()).merge(
+            bron, str(oude[0]["id"]), actor="Testpersoon")
+    assert not await _q("SELECT id FROM chunk_edit WHERE source = $b", {"b": _rid(bron)})
+
+
+# --------------------------------------------------------------------------
+# Twee bewerkingen op dezelfde run (optimistische vergrendeling)
+# --------------------------------------------------------------------------
+
+
+async def test_tweede_bewerking_op_dezelfde_run_geeft_409(env, app, monkeypatch) -> None:
+    from app_main.services.chunking.chunk_mutator import ChunkMutator
+
+    bron = await _verwerkte_bron()
+    voor = await _stand(bron)
+    oude = await _fragmenten(voor["run"])
+    # Beide bewerkingen lezen dezelfde stand; de eerste verzet de run.
+    gelezen = await ChunkMutator()._huidige_set(bron)
+
+    async with _client(app) as client:
+        assert (await client.post(f"/api/sources/{bron}/chunks/{oude[0]['id']}/merge",
+                                  json={})).status_code == 200
+        na_eerste = await _stand(bron)
+
+        async def _oude_stand(self, source_id):
+            return gelezen
+
+        monkeypatch.setattr(ChunkMutator, "_huidige_set", _oude_stand)
+        resp = await client.post(f"/api/sources/{bron}/chunks/{oude[1]['id']}/split",
+                                 json={"cursorOffset": 4})
+    assert resp.status_code == 409, resp.text
+    # De tweede bewerking wijzigt niets: de huidige run blijft die van de eerste.
+    assert await _stand(bron) == na_eerste
+    [mislukt] = await _q(
+        "SELECT * FROM processing_run WHERE trigger = 'handmatig' AND status = 'mislukt'"
+        " AND error = 'verouderd' ORDER BY started_at DESC LIMIT 1")
+    assert not await _fragmenten(mislukt["id"])
