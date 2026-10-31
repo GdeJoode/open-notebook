@@ -398,7 +398,7 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 **F3-09 Herkomst-, versie- en fragmenteindpunten**
-- *Wat:* `GET /api/v1/chunks/{id}/provenance` (bron, bronversie, run, pipelineversie, modellen), `GET /api/v1/sources/{id}/versions` en de leesroute voor fragmenten `GET /api/v1/chunks/{id}` (tekst, classificatie, bronversie en run), met classificatiebereik. Deze komen op de lijst voor `lezen_extern`. De fragmentroute is de route waarmee `cloud-gateway` elk fragment ophaalt (ADR 0022 C, F5-07). Entiteiten blijven voor `lezen_extern` afgesloten tot het besluit in §8, B10.
+- *Wat:* `GET /api/v1/chunks/{id}/provenance` (bron, bronversie, run, pipelineversie, modellen), `GET /api/v1/sources/{id}/versions` en de leesroute voor fragmenten `GET /api/v1/chunks/{id}` (tekst, classificatie, bronversie en run), met classificatiebereik. Deze komen op de lijst voor `lezen_extern`. De fragmentroute is de route waarmee `cloud-gateway` elk fragment ophaalt (ADR 0022 C, F5-07). Entiteiten blijven voor `lezen_extern` afgesloten tot het besluit in §8, B10. Uit de herreview van F2-05: vóór nieuwe routes voor `lezen_extern` wordt `apps/app-main/tests/test_leesroutes_met_bereik.py` omgedraaid: elke aanroep van een repository of dienst binnen zo'n route krijgt `scope=` mee of staat op een expliciete lijst, en de test volgt aanroepen tot alle gezien zijn (ook lokale variabelen).
 - *Hangt af van:* F2-05, F2-04.
 - *Bestanden:* nieuw `apps/app-main/src/app_main/api/routers/provenance.py`, `chunks.py`; `packages/surrealdb-service/src/surrealdb_service/repositories/graph.py`, `source_version.py`, `search.py`.
 - *ADR:* 0002 B, D; 0003; 0022 C; FO 10.
