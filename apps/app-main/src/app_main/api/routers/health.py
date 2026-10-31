@@ -1,11 +1,7 @@
 """Health-check router for downstream services.
 
 Currently exposes ``GET /api/health/mineru`` to back the Settings page
-health chip. We keep this as a dedicated router rather than extending
-``services_proxy`` because the UI wants a named, single-service
-endpoint with a frozen response shape; the aggregate
-``/services/health`` can grow to include mineru as an additional
-follow-up if useful.
+health chip: a named, single-service endpoint with a frozen response shape.
 
 Critical contract: this endpoint **never** returns 5xx. All errors —
 including transport failures and unexpected exceptions — are caught

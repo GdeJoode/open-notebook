@@ -332,7 +332,6 @@ def create_app() -> FastAPI:
         runs,
         schemas,
         search,
-        services_proxy,
         settings,
         source_chat,
         sources,
@@ -418,9 +417,6 @@ def create_app() -> FastAPI:
         vocabulary.router, prefix="/api", tags=["vocabulary"]
     )
     application.include_router(zotero.router, prefix="/api", tags=["zotero"])
-    application.include_router(
-        services_proxy.router, prefix="/api", tags=["services"]
-    )
     application.include_router(health.router, prefix="/api", tags=["health"])
     application.include_router(attention.router, prefix="/api", tags=["attention"])
 
