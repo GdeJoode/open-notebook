@@ -1,0 +1,49 @@
+-- ============================================================================
+-- Migratie 100 terug (F2-14): de vorm van migratie 99. De soort
+-- `batch_inhoud_extern` blijft toegestaan, zodat bestaande meldingen geldig
+-- blijven. Idempotent.
+-- ============================================================================
+
+DEFINE FUNCTION OVERWRITE fn::inhoud_groep($hash: string, $grens: int) {
+    LET $g = type::thing('inhoud_groep', rand::uuid());
+    CREATE $g SET hashes = [$hash], bronnen = [], nieuw_h = [$hash] RETURN NONE;
+    FOR $i IN array::repeat(0, $grens) {
+        LET $st = (SELECT nieuw_h FROM ONLY $g);
+        IF array::len($st.nieuw_h) = 0 {
+            BREAK;
+        };
+        FOR $h IN $st.nieuw_h {
+            LET $bs = (SELECT VALUE source FROM source_version WHERE content_hash = $h);
+            UPDATE $g SET kandidaat_b = array::union(kandidaat_b, $bs) RETURN NONE;
+        };
+        LET $st = (SELECT bronnen, kandidaat_b FROM ONLY $g);
+        LET $nb = array::complement($st.kandidaat_b, $st.bronnen);
+        FOR $s IN $nb {
+            LET $hs = (SELECT VALUE content_hash FROM source_version WHERE source = $s);
+            UPDATE $g SET kandidaat_h = array::union(kandidaat_h, $hs) RETURN NONE;
+        };
+        LET $st = (SELECT hashes, kandidaat_h FROM ONLY $g);
+        LET $nh = array::complement($st.kandidaat_h, $st.hashes);
+        UPDATE $g SET bronnen = array::union(bronnen, $nb), hashes = array::union(hashes, $nh),
+            nieuw_h = $nh, kandidaat_b = [], kandidaat_h = [] RETURN NONE;
+    };
+    LET $groep = (SELECT hashes, bronnen, nieuw_h FROM ONLY $g);
+    DELETE $g RETURN NONE;
+    IF array::len($groep.nieuw_h) > 0 {
+        THROW 'inhoud:groep_te_groot';
+    };
+    RETURN { hashes: $groep.hashes, bronnen: $groep.bronnen };
+};
+
+DEFINE EVENT OVERWRITE inhoud_intern_batch ON intake_batch
+    WHEN $event IN ['CREATE', 'UPDATE'] AND !fn::batch_effectief_extern($after)
+        AND ($event = 'CREATE' OR fn::batch_effectief_extern($before)
+            OR $before.classification != $after.classification
+            OR $before.file_hashes != $after.file_hashes)
+    THEN {
+        FOR $f IN $after.file_hashes ?? [] {
+            UPSERT type::thing('inhoud', string::replace($f.content_hash, 'sha256:', ''))
+                SET classification = classification ?? 'extern' RETURN NONE;
+        };
+    };
+RETURN NONE;

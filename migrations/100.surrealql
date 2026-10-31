@@ -1,0 +1,85 @@
+-- ============================================================================
+-- Migratie 100: restpunten van de zesde review van F2-14 (ADR 0001).
+--
+-- 1. `fn::inhoud_groep`: na de rondes nog één controle of de frontier leeg
+--    wordt (zijn er voor de laatste nieuwe hashes nog bronnen buiten de
+--    groep?). Zo laat een grens van N ook echt een diepte van N toe; pas als
+--    er daarna nog bronnen bij zouden komen, volgt de THROW.
+-- 2. Een interne batch met een hash die al als externe bron bestaat: een
+--    `beheer_melding` (soort `batch_inhoud_extern`) per geraakte bron, bij
+--    aanmaken en bij een wijziging van classificatie of bestanden. De bron
+--    zelf blijft ongemoeid (ADR 0001, besluit Geert).
+--
+-- Idempotent via OVERWRITE. Alleen hele regels commentaar: de migratieloader
+-- plakt de regels aan elkaar.
+-- ============================================================================
+
+DEFINE FIELD OVERWRITE soort ON beheer_melding TYPE string READONLY
+    ASSERT $value IN ['handmatige_run_beschermd', 'vastgezet_overgeslagen', 'inhoud_intern',
+        'batchhash_ontbreekt', 'batch_inhoud_extern'];
+
+-- 1. De groep, met een controleronde na de grens.
+DEFINE FUNCTION OVERWRITE fn::inhoud_groep($hash: string, $grens: int) {
+    LET $g = type::thing('inhoud_groep', rand::uuid());
+    CREATE $g SET hashes = [$hash], bronnen = [], nieuw_h = [$hash] RETURN NONE;
+    FOR $i IN array::repeat(0, $grens) {
+        LET $st = (SELECT nieuw_h FROM ONLY $g);
+        IF array::len($st.nieuw_h) = 0 {
+            BREAK;
+        };
+        FOR $h IN $st.nieuw_h {
+            LET $bs = (SELECT VALUE source FROM source_version WHERE content_hash = $h);
+            UPDATE $g SET kandidaat_b = array::union(kandidaat_b, $bs) RETURN NONE;
+        };
+        LET $st = (SELECT bronnen, kandidaat_b FROM ONLY $g);
+        LET $nb = array::complement($st.kandidaat_b, $st.bronnen);
+        FOR $s IN $nb {
+            LET $hs = (SELECT VALUE content_hash FROM source_version WHERE source = $s);
+            UPDATE $g SET kandidaat_h = array::union(kandidaat_h, $hs) RETURN NONE;
+        };
+        LET $st = (SELECT hashes, kandidaat_h FROM ONLY $g);
+        LET $nh = array::complement($st.kandidaat_h, $st.hashes);
+        UPDATE $g SET bronnen = array::union(bronnen, $nb), hashes = array::union(hashes, $nh),
+            nieuw_h = $nh, kandidaat_b = [], kandidaat_h = [] RETURN NONE;
+    };
+    -- Controleronde: komen er via de laatste nieuwe hashes nog bronnen bij?
+    LET $st = (SELECT nieuw_h FROM ONLY $g);
+    FOR $h IN $st.nieuw_h {
+        LET $bs = (SELECT VALUE source FROM source_version WHERE content_hash = $h);
+        UPDATE $g SET kandidaat_b = array::union(kandidaat_b, $bs) RETURN NONE;
+    };
+    LET $groep = (SELECT hashes, bronnen, kandidaat_b FROM ONLY $g);
+    DELETE $g RETURN NONE;
+    IF array::len(array::complement($groep.kandidaat_b, $groep.bronnen)) > 0 {
+        THROW 'inhoud:groep_te_groot';
+    };
+    RETURN { hashes: $groep.hashes, bronnen: $groep.bronnen };
+};
+
+-- 2. Een batch die niet effectief extern is: het record aanschrijven, en bij
+-- een interne batch een melding per bestaande externe bron met die inhoud.
+DEFINE EVENT OVERWRITE inhoud_intern_batch ON intake_batch
+    WHEN $event IN ['CREATE', 'UPDATE'] AND !fn::batch_effectief_extern($after)
+        AND ($event = 'CREATE' OR fn::batch_effectief_extern($before)
+            OR $before.classification != $after.classification
+            OR $before.file_hashes != $after.file_hashes)
+    THEN {
+        FOR $f IN $after.file_hashes ?? [] {
+            LET $h = string::replace($f.content_hash, 'sha256:', '');
+            UPSERT type::thing('inhoud', $h) SET classification = classification ?? 'extern' RETURN NONE;
+            IF $after.classification = 'intern' {
+                LET $bronnen = array::distinct((SELECT VALUE source FROM source_version
+                    WHERE content_hash = $h AND source.classification = 'extern'));
+                FOR $b IN $bronnen {
+                    CREATE beheer_melding CONTENT {
+                        soort: 'batch_inhoud_extern',
+                        melding: 'Een interne batch bevat inhoud van een externe bron',
+                        source: $b,
+                        intake_batch: $after.id
+                    } RETURN NONE;
+                };
+            };
+        };
+    };
+
+RETURN NONE;

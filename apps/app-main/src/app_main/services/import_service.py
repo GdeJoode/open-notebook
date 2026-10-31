@@ -69,7 +69,11 @@ from surrealdb_service.connection import (
 from surrealdb_service.repositories.base import is_schrijfconflict
 from surrealdb_service.repositories.intake import IntakeBatchRepository
 from surrealdb_service.repositories.processing_run import ProcessingRunRepository
-from surrealdb_service.repositories.source import INHOUD_INTERN_BEKEND, SourceRepository
+from surrealdb_service.repositories.source import (
+    INHOUD_GROEP_TE_GROOT,
+    INHOUD_INTERN_BEKEND,
+    SourceRepository,
+)
 from surrealdb_service.repositories.source_version import (
     GELIJKTIJDIG,
     SourceVersionRepository,
@@ -458,6 +462,11 @@ class ImportService:
         logregel in de run, geen kale 500 (F2-14). Alleen het soort fout gaat
         naar het lokale log, geen inhoud."""
         logger.warning("Import geweigerd door de opslag: {soort}", soort=type(fout).__name__)
+        if INHOUD_GROEP_TE_GROOT in str(fout):
+            await self._log(run_id, "inhoud_groep_te_groot",
+                            "Te veel bronnen met verbonden inhoud")
+            raise ImportWeigering(409, "inhoud_groep_te_groot",
+                                  "Te veel bronnen met verbonden inhoud") from None
         await self._log(run_id, "opslag_geweigerd", "De opslag weigerde de import")
         raise ImportWeigering(409, "opslag_geweigerd", "De opslag weigerde de import") from None
 

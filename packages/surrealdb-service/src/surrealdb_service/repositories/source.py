@@ -20,6 +20,7 @@ from surrealdb_service.repositories.base import (
     BaseRepository,
     _validate_record_id,
     eigen_record_id,
+    is_schrijfconflict,
     lees_met_bereik,
 )
 from surrealdb_service.repositories.source_version import NIEUWE_VERSIE
@@ -29,6 +30,19 @@ INHOUD_INTERN_BEKEND = "inhoud:intern_bekend"
 #: De ``THROW`` van een herclassificatie naar extern terwijl elders dezelfde
 #: inhoud intern is (F2-14, migratie 98).
 INHOUD_ELDERS_INTERN = "inhoud:elders_intern"
+#: De ``THROW`` van ``fn::inhoud_groep`` als de grens bereikt is (migratie 99).
+INHOUD_GROEP_TE_GROOT = "inhoud:groep_te_groot"
+
+
+class InhoudGroepTeGrootError(RuntimeError):
+    """De groep van bronnen met dezelfde inhoud is groter dan de grens (HTTP 409
+    ``inhoud_groep_te_groot``)."""
+
+    detail = {"code": "inhoud_groep_te_groot",
+              "melding": "Te veel bronnen met verbonden inhoud; de beheerder kijkt het na"}
+
+    def __init__(self) -> None:
+        super().__init__(INHOUD_GROEP_TE_GROOT)
 
 
 class InhoudEldersInternError(RuntimeError):
@@ -237,29 +251,39 @@ class SourceRepository(BaseRepository[Source]):
         Alleen voor de ``ClassificationService`` (F2-03). Het logboek kent geen
         methode om een regel te wijzigen of te verwijderen.
         """
-        try:
-            results = await execute_transaction(
-                _HERCLASSIFICATIE,
-                {
-                    "bron": ensure_record_id(source_id),
-                    "van": from_classification,
-                    "naar": to_classification,
-                    "reden": reason,
-                    "sleutel": agent_key,
-                    "persoon": person,
-                },
-                self.config,
-                _herclassificatie=True,
-            )
-        except ClassificationConflictError:
-            raise
-        except RuntimeError as e:
-            if INHOUD_ELDERS_INTERN in str(e):
-                raise InhoudEldersInternError(
-                    await self.inhoud_elders_intern(source_id)) from e
-            if "intussen gewijzigd" in str(e):
-                raise ClassificationConflictError(str(e)) from e
-            raise
+        for poging in range(2):
+            try:
+                results = await execute_transaction(
+                    _HERCLASSIFICATIE,
+                    {
+                        "bron": ensure_record_id(source_id),
+                        "van": from_classification,
+                        "naar": to_classification,
+                        "reden": reason,
+                        "sleutel": agent_key,
+                        "persoon": person,
+                    },
+                    self.config,
+                    _herclassificatie=True,
+                )
+                break
+            except ClassificationConflictError:
+                raise
+            except RuntimeError as e:
+                if INHOUD_ELDERS_INTERN in str(e):
+                    raise InhoudEldersInternError(
+                        await self.inhoud_elders_intern(source_id)) from e
+                if INHOUD_GROEP_TE_GROOT in str(e):
+                    raise InhoudGroepTeGrootError() from e
+                if "intussen gewijzigd" in str(e):
+                    raise ClassificationConflictError(str(e)) from e
+                if is_schrijfconflict(e):
+                    # Een gelijktijdige schrijver (F2-14): één keer opnieuw,
+                    # daarna een conflict (409).
+                    if poging == 0:
+                        continue
+                    raise ClassificationConflictError("schrijfconflict") from e
+                raise
         regel = next(r for r in reversed(results) if r)
         return str(regel[0]["id"] if isinstance(regel, list) else regel["id"])
 

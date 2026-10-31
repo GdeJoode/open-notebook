@@ -8,7 +8,10 @@ verwijderen.
 
 from fastapi import APIRouter, Depends, HTTPException
 from shared.models.agents import Right
-from surrealdb_service.repositories.source import InhoudEldersInternError
+from surrealdb_service.repositories.source import (
+    InhoudEldersInternError,
+    InhoudGroepTeGrootError,
+)
 
 from app_main.api.agent_auth import AgentKeyContext, require_right
 from app_main.api.fouten import fout_zonder_inhoud
@@ -37,6 +40,8 @@ async def reclassify_source(
         )
     except PermissionError as e:
         raise fout_zonder_inhoud(e, "Geen toegang", status_code=403)
+    except InhoudGroepTeGrootError as e:
+        raise HTTPException(status_code=409, detail=e.detail) from None
     except InhoudEldersInternError as e:
         # De id's van de records, geen inhoud (F2-14).
         raise HTTPException(status_code=409, detail=e.detail) from None

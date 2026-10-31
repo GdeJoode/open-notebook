@@ -1257,7 +1257,8 @@ async def test_batch_die_later_intern_wordt(env, app) -> None:
     # van dezelfde inhoud wordt geweigerd.
     await _q("UPDATE type::thing($b) SET classification = 'intern'", {"b": batch})
     assert (await _een("SELECT VALUE classification FROM type::thing($b)", {"b": bron})) == "extern"
-    assert await _meldingen(bron) == []
+    # Wel een melding voor de beheerder (zesde review).
+    assert [m["soort"] for m in await _meldingen(bron)] == ["batch_inhoud_extern"]
     extern = await _regel()
     async with _client(app) as client:
         resp = await _importeer(client, env, extern, original, h)
@@ -1509,3 +1510,38 @@ async def test_databasestoring_is_503(env, app, monkeypatch) -> None:
         resp = await client.post("/api/v1/import", json=_verzoek(
             run, original=original, content_hash=h, regel=regel))
     assert resp.status_code == 503
+
+
+# --------------------------------------------------------------------------
+# Zesde review F2-14: herclassificatie bij een conflict
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("fouten, verwacht", [
+    (["Failed to commit transaction due to a read or write conflict"], 200),
+    (["read or write conflict", "read or write conflict"], 409),
+    (["An error occurred: inhoud:groep_te_groot"], 409),
+])
+async def test_herclassificatie_bij_een_conflict(env, app, monkeypatch, fouten, verwacht) -> None:
+    from surrealdb_service.repositories import source as bronmodule
+
+    extern = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 conflict " + uuid.uuid4().hex.encode())
+    echt = bronmodule.execute_transaction
+    over = list(fouten)
+
+    async def met_fout(query, *args, **kwargs):
+        if query is bronmodule._HERCLASSIFICATIE and over:
+            raise RuntimeError(f"SurrealQL transaction failed: ['{over.pop(0)}']")
+        return await echt(query, *args, **kwargs)
+
+    async with _client(app) as client:
+        bron = (await _importeer(client, env, extern, original, h)).json()["source_id"]
+        monkeypatch.setattr(bronmodule, "execute_transaction", met_fout)
+        env.als(BEHEERDER)
+        resp = await _herclassificeer(client, bron, "intern")
+    assert resp.status_code == verwacht, resp.text
+    if "groep_te_groot" in fouten[0]:
+        assert resp.json()["detail"]["code"] == "inhoud_groep_te_groot"
+    klasse = await _een("SELECT VALUE classification FROM type::thing($b)", {"b": bron})
+    assert klasse == ("intern" if verwacht == 200 else "extern")

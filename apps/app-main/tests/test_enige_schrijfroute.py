@@ -245,6 +245,10 @@ MIGRATIES_TOEGESTAAN = {
         "``CREATE $g``: het tijdelijke record ``inhoud_groep`` (F2-14)",
     ("migrations/99_down.surrealql", "FUNCTION fn::inhoud_intern"):
         "``CREATE $g``: de vorm van 98 terug (F2-14)",
+    ("migrations/100.surrealql", "FUNCTION fn::inhoud_groep"):
+        "``CREATE $g``: het tijdelijke record ``inhoud_groep`` (F2-14)",
+    ("migrations/100_down.surrealql", "FUNCTION fn::inhoud_groep"):
+        "``CREATE $g``: de vorm van 99 terug (F2-14)",
 }
 
 #: Begin van een deel van een migratie: elke ``DEFINE`` (ook ingesprongen), en
