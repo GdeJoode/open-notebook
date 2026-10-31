@@ -329,16 +329,13 @@ export function RebuildEmbeddings() {
               <ul className="list-disc list-inside space-y-1 ml-2">
                 <li>Number of items to process</li>
                 <li>Embedding model speed</li>
-                <li>API rate limits (for cloud providers)</li>
                 <li>System resources</li>
               </ul>
               <p className="mt-2"><strong>Typical rates:</strong></p>
               <ul className="list-disc list-inside space-y-1 ml-2">
-                <li><strong>Local models</strong> (Ollama): Very fast, limited only by hardware</li>
-                <li><strong>Cloud APIs</strong> (OpenAI, Google): Moderate speed, may hit rate limits with large datasets</li>
+                <li><strong>Local embedding model</strong> (llama-swap): limited only by hardware</li>
                 <li><strong>Sources:</strong> Slower than notes/insights (creates multiple chunks per source)</li>
               </ul>
-              <p className="mt-2"><em>Example: Rebuilding 200 items might take 2-5 minutes with cloud APIs, or under 1 minute with local models.</em></p>
             </AccordionContent>
           </AccordionItem>
 

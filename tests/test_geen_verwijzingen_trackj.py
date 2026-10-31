@@ -12,7 +12,9 @@ ADR 0006, 0007 en 0001. Weg zijn:
   ``/api/models/defaults``, ``/status`` en ``/providers`` met ``ModelResponse``;
 - Esperanto;
 - de velden ``private``, ``privacy_mode`` en ``default_privacy_mode`` en het
-  formulierveld ``private`` (migratie 103).
+  formulierveld ``private`` (migratie 103);
+- de privacykeuze in de interface (Public — Cloud API) met de parameter
+  ``privacy``.
 
 Deze test faalt zodra een van die namen terugkomt in de code, de interface of
 de bouwbestanden, en toetst dat de vervallen routes HTTP 404 geven. Migraties
@@ -32,26 +34,34 @@ ROOT = Path(__file__).resolve().parents[1]
 DEZE_TEST = Path(__file__).resolve()
 
 MAPPEN = ("apps", "packages", "pipelines", "services", "frontend/src")
-LOSSE_BESTANDEN = ("pyproject.toml", "Dockerfile", "docker-compose.yml", ".env.example")
+LOSSE_BESTANDEN = (
+    "pyproject.toml", "uv.lock", "Dockerfile", "docker-compose.yml", ".env.example",
+)
 SOORTEN = {
     ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".json", ".toml", ".yml",
-    ".yaml", ".sh", ".cfg", ".ini", ".conf", ".txt", ".env", ".example",
+    ".yaml", ".sh", ".cfg", ".ini", ".conf", ".txt", ".env", ".example", ".lock",
 }
 OVERSLAAN = ("node_modules", "__pycache__", ".venv", ".next", ".pytest_cache")
 
-#: De migratietests noemen de velden en de tabel die ze definiëren of verwijderen:
-#: 103 verwijdert ze; de tests van 64, 65 en 89 toetsen hun eigen migratie op
-#: ``private``.
-UITGEZONDERD = {
-    "packages/surrealdb-service/tests/test_migration_103_trackj_privacyvelden.py",
+MIGRATIE_103 = "packages/surrealdb-service/tests/test_migration_103_trackj_privacyvelden.py"
+#: De tests van migraties 64, 65 en 89 toetsen hun eigen migratie op ``private``.
+MIGRATIETESTS_PRIVATE = (
+    MIGRATIE_103,
     "packages/surrealdb-service/tests/test_migrations_roundtrip.py",
     "packages/surrealdb-service/tests/test_migration_65_strict_drift_guard.py",
     "packages/surrealdb-service/tests/test_migration_89_classification.py",
-}
+)
 
-#: ``services/summarization`` gebruikt Esperanto en Ollama nog; die dienst
-#: vervalt of wordt omgezet in F2-23 (ADR 0015, correctie in voortgang F2-08).
+#: Uitzonderingen per patroon, nooit per bestand:
+#: - de migratietests noemen het veld ``private`` (en 103 ook de velden en de
+#:   tabel die hij verwijdert);
+#: - ``services/summarization`` gebruikt Esperanto nog; die dienst vervalt in
+#:   F2-23 (ADR 0015, correctie in voortgang F2-08).
 UITGEZONDERD_PER_NAAM = {
+    "veld private": MIGRATIETESTS_PRIVATE,
+    "privacy_mode": (MIGRATIE_103,),
+    "default_privacy_mode": (MIGRATIE_103,),
+    "model_route": (MIGRATIE_103,),
     "esperanto": ("services/summarization/", "docker-compose.yml"),
 }
 
@@ -81,13 +91,19 @@ VERBODEN = {
     "providerregister": re.compile(
         r"\b(?:PROVIDER_CONFIGS|get_provider_config|api_key_env_var)\b|providers[./]registry\b"
     ),
-    "esperanto": re.compile(r"\besperanto\b"),
+    "esperanto": re.compile(r"\besperanto\b", re.I),
     # Oude privacyvelden en het formulierveld ``private``.
     "veld private": re.compile(
         r"\bsource\.private\b|\bisPrivate\b|append\(\s*['\"]private['\"]"
         r"|['\"]private['\"]\s*:|^\s*private\s*[:=]\s*(?:bool|boolean|str\s*=\s*Form|z\.boolean)\b"
-        r"|^\s*private\?\s*:",
+        r"|^\s*private\?\s*:|getattr\([^)]*['\"]private['\"]|\.private\b",
         re.M,
+    ),
+    # De privacykeuze in de interface en de parameter ``privacy`` (Public — Cloud
+    # API / NVIDIA / Ollama).
+    "privacykeuze": re.compile(
+        r"\bPrivacyLevel\b|\bprivacyLevel\b|\bprivacy\??\s*[:=]|\{\s*privacy\s*\}"
+        r"|Cloud API|['\"]public['\"]\s*\|\s*['\"]internal['\"]"
     ),
     "privacy-interface": re.compile(r"\bPrivacyModeToggle\b|privacy-mode\b|\bPrivacyValue\b"),
 }
@@ -110,7 +126,7 @@ def _bestanden():
 def test_geen_verwijzingen_naar_trackj() -> None:
     treffers = []
     for rel, pad in _bestanden():
-        if pad.resolve() == DEZE_TEST or rel in UITGEZONDERD:
+        if pad.resolve() == DEZE_TEST:
             continue
         tekst = pad.read_text(encoding="utf-8", errors="ignore")
         for naam, patroon in VERBODEN.items():
@@ -171,6 +187,13 @@ def test_de_zoektest_ziet_de_mappen() -> None:
         ("veld private", '{"title": "x", "private": False}'),
         ("veld private", "{source.private && <Badge />}"),
         ("privacy-interface", "import { PrivacyModeToggle } from '@/components/routing'"),
+        ("esperanto", "De client gebruikt httpx en niet Esperanto."),
+        ("veld private", 'bool(getattr(source, "private", False))'),
+        ("veld private", "if (doc.private) {"),
+        ("privacykeuze", "export type PrivacyLevel = 'public' | 'internal' | 'confidential'"),
+        ("privacykeuze", "  privacy?: PrivacyLevel"),
+        ("privacykeuze", "      ...(privacy ? { privacy } : {}),"),
+        ("privacykeuze", "<span>— Cloud API (sneller, beter)</span>"),
     ):
         assert VERBODEN[naam].search(voorbeeld), (naam, voorbeeld)
     # Wat blijft: de dunne aanroeper, het IP-filter en de modelpoort.
@@ -219,3 +242,24 @@ def test_vervallen_routes_geven_404(monkeypatch, methode, pad) -> None:
     assert resp.status_code in (404, 405), (pad, resp.status_code)
     if methode == "GET":
         assert resp.status_code == 404, pad
+
+
+def test_preprocessing_kent_geen_privacykeuze(monkeypatch) -> None:
+    """De parameter ``privacy`` (Public — Cloud API) bestaat niet meer: 422."""
+    from app_main.api import agent_auth
+    from app_main.api.app import create_app
+    from app_main.services.agents.audit_service import AgentAuditService
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(AgentAuditService, "record", AsyncMock())
+    monkeypatch.setattr(
+        agent_auth.AgentKeyService,
+        "authenticate",
+        AsyncMock(return_value={"id": "agent_keys:proef", "agent_id": "proef",
+                                "permission": "beheerder", "person": "Proefpersoon",
+                                "label": "proef"}),
+    )
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    resp = client.post("/api/preprocessing/run", headers={"Authorization": "Bearer ak_proef"},
+                       json={"source_id": "source:proef", "privacy": "public"})
+    assert resp.status_code == 422

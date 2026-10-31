@@ -6,8 +6,8 @@ adres komt niet uit de omgeving. Alleen :mod:`llm_manager.aanroep` gebruikt deze
 client, en altijd via :class:`llm_manager.gate.ModelGate`
 (``tests/test_geen_ollama_eindpunten.py``).
 
-De client gebruikt httpx en niet Esperanto: Esperanto verpakt een HTTP-fout als
-``RuntimeError`` met de antwoordtekst erin. Dan ziet de poort de status 502 niet
+De client gebruikt httpx en geen modelbibliotheek: de vroegere bibliotheek
+verpakte een HTTP-fout als ``RuntimeError`` met de antwoordtekst erin. Dan ziet de poort de status 502 niet
 (ADR 0009: opnieuw proberen) en kan tekst van het model in een log belanden.
 :class:`LlamaSwapFout` draagt alleen de status en het fouttype.
 """
