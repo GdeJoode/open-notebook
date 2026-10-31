@@ -13,11 +13,7 @@ import {
   RelatedSourceHybrid,
 } from '@/lib/types/api'
 
-export type PrivacyLevel = 'public' | 'internal' | 'confidential'
-
 export interface DoclingPipelineConfig {
-  // Privacy & model routing
-  privacy?: PrivacyLevel
   // Parser engine override for this reparse run (A.2). When undefined,
   // the backend uses the global parser_engine setting. Empty string in
   // the form maps to undefined here (see PipelineConfigPanel).
@@ -72,7 +68,6 @@ export interface StructureGraphResponse {
 }
 
 export const DEFAULT_PIPELINE_CONFIG: DoclingPipelineConfig = {
-  privacy: 'internal',
   docling_ocr_engine: 'easyocr',
   docling_ocr_languages: ['en', 'nl'],
   docling_table_mode: 'accurate',
@@ -246,10 +241,9 @@ export const sourcesApi = {
     return response.data
   },
 
-  runPreprocessing: async (id: string, privacy?: 'public' | 'internal' | 'confidential') => {
+  runPreprocessing: async (id: string) => {
     const response = await apiClient.post<Record<string, unknown>>('/preprocessing/run', {
       source_id: id,
-      ...(privacy ? { privacy } : {}),
     })
     return response.data
   },

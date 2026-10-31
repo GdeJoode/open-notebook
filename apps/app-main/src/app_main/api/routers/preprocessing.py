@@ -3,7 +3,7 @@
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app_main.dependencies import (
     get_preprocessing_service,
@@ -17,6 +17,9 @@ router = APIRouter(prefix="/preprocessing", tags=["preprocessing"], dependencies
 
 
 class RunPreprocessingRequest(BaseModel):
+    # Geen privacykeuze meer (F2-09): de classificatie van de bron beslist.
+    model_config = ConfigDict(extra="forbid")
+
     source_id: str
 
 
