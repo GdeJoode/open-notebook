@@ -180,7 +180,10 @@ async def get_sources(
                     or job.get("started_at"),
                     "completed_at": execution_metadata.get("completed_at")
                     or job.get("completed_at"),
-                    "error": job.get("error_message"),
+                    # De foutmelding van een job kan tekst bevatten; alleen
+                    # voor een sleutel die alles ziet (F2-05).
+                    "error": job.get("error_message")
+                    if scope == ClassificationScope.ALLES else None,
                 }
             elif command_id:
                 status = "unknown"
@@ -277,26 +280,28 @@ async def get_source(
 
     F2-05: the text is assembled from the chunks of the current version
     (``source.full_text`` is gone), and every count, notebook id and
-    the text only include records within the scope.
+    the text only include records within the scope. All reads go through
+    the scoped repository methods (``tests/test_leesroutes_met_bereik.py``).
     """
     try:
         source = await source_svc.get_scoped(source_id, scope=scope)
         if not source:
             raise HTTPException(status_code=404, detail="Source not found")
         sid = str(source.id)
+        source_repo = source_svc.source_repo
 
-        # Get status information if command exists
+        # Status of the source's processing job, if any.
         status = None
         processing_info = None
-        if hasattr(source, "command") and source.command:
-            try:
-                from app_main.services.command_service import CommandService
-
-                status_data = await CommandService.get_command_status(
-                    str(source.command)
-                )
-                status = status_data.get("status")
-                result_data = status_data.get("result")
+        command_id = str(source.command) if getattr(source, "command", None) else None
+        if command_id:
+            jobs = await source_repo.batch_get_command_status([command_id])
+            job = jobs.get(command_id)
+            if job is None:
+                status = "unknown"
+            else:
+                status = job.get("status")
+                result_data = job.get("result")
                 execution_metadata = (
                     result_data.get("execution_metadata", {})
                     if isinstance(result_data, dict)
@@ -305,39 +310,15 @@ async def get_source(
                 processing_info = {
                     "started_at": execution_metadata.get("started_at"),
                     "completed_at": execution_metadata.get("completed_at"),
-                    "error": status_data.get("error_message"),
+                    # De foutmelding van een job kan tekst bevatten; alleen
+                    # voor een sleutel die alles ziet.
+                    "error": job.get("error_message")
+                    if scope == ClassificationScope.ALLES else None,
                 }
-            except Exception as e:
-                logger.warning(
-                    f"Failed to get status for source {source_id}: {e}"
-                )
-                status = "unknown"
 
-        source_repo = source_svc.source_repo
         counts = await source_repo.count_related(sid, scope=scope)
         notebook_ids = await source_repo.get_notebook_ids_scoped(sid, scope=scope)
         full_text = await source_svc.get_text(sid, scope=scope)
-
-        # relation_count is read from extraction_result: relations do not carry
-        # the source on the edge, so a live source-scoped count is not
-        # straightforward here. PC.5c: NOT its `relation_count`, which is the
-        # raw pre-filter extraction (the row is the re-filter cache), but
-        # `metadata.persisted` — the relations persistence wrote (created) or
-        # reinforced (merged). A row without it (filtering skipped, or written
-        # before PC.1b) has no measured graph count: 0, which the UI hides.
-        from surrealdb_service.connection import execute_query
-
-        extraction_rows = await execute_query(
-            "SELECT metadata.persisted AS persisted FROM extraction_result "
-            "WHERE source_id = $source_id LIMIT 1",
-            {"source_id": sid},
-        )
-        relation_count = 0
-        if extraction_rows:
-            persisted = extraction_rows[0].get("persisted") or {}
-            relation_count = int(persisted.get("relations_created") or 0) + int(
-                persisted.get("relations_merged") or 0
-            )
 
         embedded_chunks = counts["embedding_count"]
         return SourceResponse(
@@ -357,7 +338,7 @@ async def get_source(
             embedded_chunks=embedded_chunks,
             insights_count=counts["insights_count"],
             entity_count=counts["entity_count"],
-            relation_count=relation_count,
+            relation_count=counts["relation_count"],
             file_available=_is_source_file_available(source.asset),
             created=str(source.created),
             updated=str(source.updated),

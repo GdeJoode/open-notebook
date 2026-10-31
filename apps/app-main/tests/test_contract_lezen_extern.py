@@ -186,6 +186,37 @@ async def _graaf(g: Gegevens) -> None:
                      "relation": str(relatie["id"]), "mention": str(vermelding["id"])})
 
 
+async def _randgevallen(g: Gegevens) -> None:
+    """Review F2-05: gevallen op routeniveau rond de externe bron.
+
+    * de externe bron staat ook in het interne notebook;
+    * de externe bron heeft een intern fragment in haar huidige versie en run;
+    * de externe bron heeft een job met een foutmelding met interne tekst;
+    * ``extraction_result`` met een relatietelling voor de externe bron.
+    """
+    bron = g.extern["source"]
+    await _q("RELATE (type::thing($b))->reference->(type::thing($n))",
+             {"b": bron, "n": g.intern["notebook"]})
+    [chunk] = await _q("CREATE chunk CONTENT $d RETURN id", {"d": {
+        "source": _rid(bron), "source_version": _rid(g.extern["version_huidig"]),
+        "run": _rid(g.extern["run_huidig"]), "text": f"{g.woord} {g.kenmerk} fragment",
+        "order": 1, "physical_page": 1, "element_type": "paragraph", "positions": [],
+        "metadata": {}, "classification": "intern"}})
+    g.intern["chunk_in_externe_bron"] = str(chunk["id"])
+    [job] = await _q(
+        "CREATE job CONTENT {job_type: 'process_source', status: 'failed',"
+        " error_message: $m, source_id: $b} RETURN id",
+        {"m": f"verwerking mislukt bij {g.kenmerk}", "b": bron},
+    )
+    g.extern["job"] = str(job["id"])  # de job hoort bij de externe bron
+    await _q("UPDATE type::thing($b) SET command = type::thing($j)", {"b": bron, "j": str(job["id"])})
+    await _q(
+        "CREATE extraction_result CONTENT {source_id: $b, metadata: {persisted:"
+        " {relations_created: 4, relations_merged: 1}}}",
+        {"b": bron},
+    )
+
+
 @pytest.fixture(scope="module")
 def app():
     return create_app()
@@ -208,10 +239,12 @@ async def gegevens(env) -> Gegevens:
     g.extern = await _bron_met_alles(g, "extern")
     g.intern = await _bron_met_alles(g, "intern")
     await _graaf(g)
+    await _randgevallen(g)
     g.intern_ids = set(g.intern.values())
     # Controle op de testdata zelf: interne records zijn echt intern.
     rijen = await _q("SELECT VALUE classification FROM $ids",
-                     {"ids": [_rid(i) for i in g.intern_ids if not i.startswith("processing_run:")]})
+                     {"ids": [_rid(i) for i in g.intern_ids
+                              if not i.startswith("processing_run:")]})
     assert set(rijen) == {"intern"}, rijen
     # Controle op de lekdetectie zelf.
     assert g.lekken(f'{{"id": "{g.intern["note"]}"}}') and g.lekken(g.kenmerk.upper())
@@ -435,3 +468,29 @@ async def test_geen_mentions_van_een_interne_bron(gegevens) -> None:
     assert g.intern["mention"] in {str(e["id"]) for e in alles}
     leeg = await EntityRepository().load_mentions_edges(scope=ClassificationScope.LEEG)
     assert leeg == []
+
+
+async def test_randgevallen_op_routeniveau(lezen_extern, gegevens) -> None:
+    """Review F2-05: gedeeld notebook, intern fragment, job-fout, relaties."""
+    g, c = gegevens, lezen_extern
+    r = await c.get(f"/api/sources/{g.extern['source']}")
+    assert r.status_code == 200
+    _geen_lek(g, r, "bron")
+    bron = r.json()
+    # In een intern én een extern notebook: alleen het externe is zichtbaar.
+    assert bron["notebooks"] == [g.extern["notebook"]]
+    # Een intern fragment in de huidige versie: niet in de tekst.
+    assert g.woord in bron["full_text"] and g.kenmerk not in bron["full_text"].lower()
+    # De job: status wel, foutmelding niet.
+    assert bron["status"] == "failed"
+    assert bron["processing_info"]["error"] is None
+    # `extraction_result` kent geen classificatie: 0 voor `lezen_extern`.
+    assert bron["relation_count"] == 0
+    lijst = await c.get("/api/sources/?limit=100")
+    _geen_lek(g, lijst, "bronlijst")
+    rij = next(s for s in lijst.json() if s["id"] == g.extern["source"])
+    assert rij["processing_info"]["error"] is None
+    for soort in ("text", "vector", "hybrid"):
+        r = await c.post("/api/search", json={"query": g.kenmerk, "type": soort})
+        _geen_lek(g, r, f"zoeken {soort}")
+        assert g.intern["chunk_in_externe_bron"] not in r.text

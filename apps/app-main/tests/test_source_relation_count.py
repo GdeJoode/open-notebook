@@ -27,6 +27,7 @@ from shared.models.extraction import (
     ExtractionResult,
 )
 from surrealdb_service.config import SurrealDBConfig
+from surrealdb_service.repositories.source import SourceRepository
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.requires_docker]
 
@@ -60,11 +61,8 @@ async def _saved_then_read(live: SurrealDBConfig, monkeypatch, metadata) -> int:
         command=None, private=False, processing_stage="complete",
     )
     src.get_text.return_value = "x"
-    src.source_repo = SimpleNamespace(
-        count_related=AsyncMock(return_value={
-            "insights_count": 0, "embedding_count": 0, "entity_count": 0}),
-        get_notebook_ids_scoped=AsyncMock(return_value=[]),
-    )
+    # De echte repository: `count_related` leest `extraction_result` (F2-05).
+    src.source_repo = SourceRepository(live)
     app = FastAPI()
     app.include_router(router, prefix="/api/sources")
     app.dependency_overrides[get_source_service] = lambda: src

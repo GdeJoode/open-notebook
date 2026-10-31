@@ -132,11 +132,18 @@ class SourceRepository(BaseRepository[Source]):
     async def count_related(
         self, source_id: str, *, scope: ClassificationScope
     ) -> Dict[str, int]:
-        """Aantallen inzichten, embeddings en actuele entiteiten van een bron,
-        alleen binnen ``scope``: ook een aantal verraadt anders interne records."""
+        """Aantallen inzichten, embeddings, actuele entiteiten en relaties van een
+        bron, alleen binnen ``scope``: ook een aantal verraadt anders interne
+        records.
+
+        ``relation_count`` is wat de persistentie schreef (``extraction_result``,
+        PC.5c). Dat getal kent geen classificatie, dus alleen het bereik
+        ``ALLES`` krijgt het; elk ander bereik krijgt 0 (review F2-05).
+        """
         rid = eigen_record_id(source_id, "source")
         classifications = classifications_for(scope)
-        leeg = {"insights_count": 0, "embedding_count": 0, "entity_count": 0}
+        leeg = {"insights_count": 0, "embedding_count": 0, "entity_count": 0,
+                "relation_count": 0}
         if rid is None or not classifications:
             return leeg
         rows = await execute_query(
@@ -149,7 +156,9 @@ class SourceRepository(BaseRepository[Source]):
                 entity_count: count(SELECT id FROM entity
                     WHERE source_documents CONTAINSANY [<string> $id]
                         AND (status = 'active' OR status = 'reference')
-                        AND classification IN $classifications)
+                        AND classification IN $classifications),
+                persisted: (SELECT VALUE metadata.persisted FROM extraction_result
+                    WHERE source_id = <string> $id LIMIT 1)[0]
             }
             """,
             {"id": rid, "classifications": classifications},
@@ -158,7 +167,13 @@ class SourceRepository(BaseRepository[Source]):
         rij = rows[0] if isinstance(rows, list) and rows else rows
         if not isinstance(rij, dict):
             return leeg
-        return {k: int(rij.get(k) or 0) for k in leeg}
+        uit = {k: int(rij.get(k) or 0) for k in leeg if k != "relation_count"}
+        persisted = rij.get("persisted") if isinstance(rij.get("persisted"), dict) else {}
+        uit["relation_count"] = (
+            int(persisted.get("relations_created") or 0) + int(persisted.get("relations_merged") or 0)
+            if scope == ClassificationScope.ALLES else 0
+        )
+        return uit
 
     async def get_classification(self, source_id: str) -> Optional[str]:
         """De classificatie van de bron, of ``None`` als die niet bestaat."""

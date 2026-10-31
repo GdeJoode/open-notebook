@@ -15,7 +15,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import surrealdb_service.connection as conn
 from app_main.api.routers.sources_crud import router
 from app_main.dependencies import get_source_service
 
@@ -45,7 +44,7 @@ def _make_app(source_svc):
     return TestClient(app)
 
 
-def _svc(source, *, entity_count=0, embedding_count=0):
+def _svc(source, *, entity_count=0, embedding_count=0, relation_count=0):
     """A SourceService stand-in for ``get_source`` (F2-05: scoped reads).
 
     The counts come from ``SourceRepository.count_related`` (only records
@@ -60,23 +59,12 @@ def _svc(source, *, entity_count=0, embedding_count=0):
             "insights_count": 0,
             "embedding_count": embedding_count,
             "entity_count": entity_count or 0,
+            "relation_count": relation_count,
         }),
+        batch_get_command_status=AsyncMock(return_value={}),
         get_notebook_ids_scoped=AsyncMock(return_value=[]),
     )
     return svc
-
-
-def _patch_execute_query(monkeypatch, *, extraction_rows):
-    """Route the router's ``extraction_result`` query to a fixture."""
-
-    async def fake_execute_query(query, params=None, *args, **kwargs):
-        q = " ".join(query.split())
-        if "FROM extraction_result" in q:
-            assert params["source_id"] == SOURCE_ID
-            return extraction_rows
-        return []
-
-    monkeypatch.setattr(conn, "execute_query", fake_execute_query)
 
 
 @pytest.mark.usefixtures("monkeypatch")
@@ -89,7 +77,6 @@ class TestGetSourceEntityCount:
         reported 0, but the live ``entity`` table has 110 active rows.
         """
         svc = _svc(_fake_source(), entity_count=110, embedding_count=5)
-        _patch_execute_query(monkeypatch, extraction_rows=[])
         client = _make_app(svc)
 
         resp = client.get(f"/api/sources/{SOURCE_ID}")
@@ -106,11 +93,7 @@ class TestGetSourceEntityCount:
         Even if an extraction_result row exists with entity_count 0, the live
         query wins, so the response reflects the entity table.
         """
-        svc = _svc(_fake_source(), entity_count=42, embedding_count=0)
-        _patch_execute_query(
-            monkeypatch,
-            extraction_rows=[{"persisted": {"relations_created": 5, "relations_merged": 2}}],
-        )
+        svc = _svc(_fake_source(), entity_count=42, embedding_count=0, relation_count=7)
         client = _make_app(svc)
 
         resp = client.get(f"/api/sources/{SOURCE_ID}")
@@ -128,14 +111,12 @@ class TestGetSourceEntityCount:
         it as the source's relations reported relations that never reached the
         graph."""
         svc = _svc(_fake_source(), entity_count=3, embedding_count=0)
-        _patch_execute_query(monkeypatch, extraction_rows=[{"persisted": None}])
         data = _make_app(svc).get(f"/api/sources/{SOURCE_ID}").json()
         assert data["relation_count"] == 0
 
     def test_no_entities_returns_zero(self, monkeypatch):
         """Empty live count (GROUP ALL returns []) → entity_count 0."""
         svc = _svc(_fake_source(), entity_count=None, embedding_count=0)
-        _patch_execute_query(monkeypatch, extraction_rows=[])
         client = _make_app(svc)
 
         resp = client.get(f"/api/sources/{SOURCE_ID}")
@@ -152,7 +133,6 @@ class TestGetSourceProcessingStage:
         """The source's ``processing_stage`` is echoed in the detail response so
         the UI can show per-document progress."""
         svc = _svc(_fake_source(processing_stage="graphed"), entity_count=3, embedding_count=5)
-        _patch_execute_query(monkeypatch, extraction_rows=[])
         client = _make_app(svc)
 
         resp = client.get(f"/api/sources/{SOURCE_ID}")
@@ -167,7 +147,6 @@ class TestGetSourceProcessingStage:
         # Simulate a source row whose stage is unset (None).
         src.processing_stage = None
         svc = _svc(src, entity_count=None, embedding_count=0)
-        _patch_execute_query(monkeypatch, extraction_rows=[])
         client = _make_app(svc)
 
         resp = client.get(f"/api/sources/{SOURCE_ID}")
