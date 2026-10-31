@@ -30,7 +30,8 @@
 --     ook bij een herclassificatie in beide richtingen.
 DEFINE INDEX OVERWRITE idx_chunk_text ON chunk FIELDS text SEARCH ANALYZER my_analyzer BM25 HIGHLIGHTS;
 DEFINE TABLE OVERWRITE chunk_extern SCHEMAFULL;
-DEFINE FIELD OVERWRITE chunk ON chunk_extern TYPE record<chunk>;
+DEFINE FIELD OVERWRITE chunk ON chunk_extern TYPE record<chunk>
+    ASSERT $value.classification = 'extern';
 DEFINE FIELD OVERWRITE text ON chunk_extern TYPE string;
 DEFINE INDEX OVERWRITE idx_chunk_extern_text ON chunk_extern FIELDS text SEARCH ANALYZER my_analyzer BM25 HIGHLIGHTS;
 DEFINE EVENT OVERWRITE chunk_extern_bijhouden ON chunk WHEN true THEN {

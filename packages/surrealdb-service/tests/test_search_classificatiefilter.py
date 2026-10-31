@@ -412,3 +412,44 @@ async def test_fragmentteksten_en_huidige_fragmenten(live_surrealdb, data) -> No
     huidig = {str(c.id) for c in await repo.get_by_source(bron, huidig=True)}
     assert huidig == {nieuw, intern}
     assert {str(c.id) for c in await repo.get_by_source(bron)} == {oud, nieuw, intern}
+
+
+async def test_chunk_extern_is_precies_de_externe_fragmenten(live_surrealdb, data) -> None:
+    """Invariant (herreview F2-05): na aanmaken, herclassificatie in beide
+    richtingen en verwijderen is ``chunk_extern.chunk`` precies de verzameling
+    externe fragmenten met tekst."""
+    bronnen = SourceRepository(live_surrealdb)
+    a, b, c = (await data.bron("extern"), await data.bron("extern"), await data.bron("intern"))
+    for bron in (a, b, c):
+        versie, run = await data.versie(bron)
+        for i in range(2):
+            await data.fragment(bron, versie, run, f"tekst {i}", None)
+    # Een fragment strenger dan zijn bron.
+    [streng] = await data.q("SELECT VALUE id FROM chunk WHERE source = type::thing($b) LIMIT 1", {"b": b})
+    await data.q("UPDATE $c SET classification = 'intern'", {"c": ensure_record_id(str(streng))})
+    await bronnen.reclassify(a, from_classification="extern", to_classification="intern",
+                             reason="Synthetische test", agent_key="agent_keys:t", person="Test")
+    await bronnen.reclassify(c, from_classification="intern", to_classification="extern",
+                             reason="Synthetische test", agent_key="agent_keys:t", person="Test")
+    [weg] = await data.q("SELECT VALUE id FROM chunk WHERE source = type::thing($c) LIMIT 1", {"c": c})
+    await data.q("DELETE $c", {"c": ensure_record_id(str(weg))})
+
+    ids = [ensure_record_id(x) for x in (a, b, c)]
+    in_index = set(await data.q(
+        "SELECT VALUE chunk FROM chunk_extern WHERE chunk.source IN $b", {"b": ids}))
+    extern = set(await data.q(
+        "SELECT VALUE id FROM chunk WHERE source IN $b AND classification = 'extern'"
+        " AND type::is::string(text)", {"b": ids}))
+    assert in_index == extern
+    assert len(extern) == 2  # b: één van twee (de andere is strenger), c: één over
+
+
+async def test_rechtstreeks_een_intern_fragment_in_chunk_extern_geweigerd(live_surrealdb, data) -> None:
+    bron = await data.bron("intern")
+    versie, run = await data.versie(bron)
+    chunk = await data.fragment(bron, versie, run, "interne tekst", None)
+    with pytest.raises(RuntimeError, match="chunk_extern|classification|conform"):
+        await data.q("CREATE chunk_extern CONTENT {chunk: $c, text: 'interne tekst'}",
+                     {"c": ensure_record_id(chunk)})
+    assert await data.q("SELECT * FROM chunk_extern WHERE chunk = $c",
+                        {"c": ensure_record_id(chunk)}) == []

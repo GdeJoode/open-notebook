@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import pytest
 from surrealdb_service.config import SurrealDBConfig
-from surrealdb_service.connection import execute_query, execute_transaction
+from surrealdb_service.connection import ensure_record_id, execute_query, execute_transaction
 from surrealdb_service.testing import fixtures as fx
+from surrealdb_service.testing.herkomst import herkomst
 
 pytestmark = [pytest.mark.requires_docker, pytest.mark.asyncio]
 
@@ -97,6 +98,14 @@ async def test_zoekfuncties_hebben_de_nieuwe_parameters(live_surrealdb) -> None:
 
 
 async def test_down_draait_terug_en_weer_op(live_surrealdb) -> None:
+    # Een extern fragment: na opnieuw 91 staat het weer in `chunk_extern`.
+    [bron] = await _q(live_surrealdb, "CREATE source CONTENT {title: 'b', classification: 'extern'} RETURN id")
+    [chunk] = await _q(live_surrealdb, "CREATE chunk CONTENT $d RETURN id", {"d": {
+        "source": ensure_record_id(str(bron["id"])), "text": "openbare tekst", "order": 0,
+        "physical_page": 0, "element_type": "paragraph", "positions": [], "metadata": {},
+        **await herkomst(str(bron["id"]), live_surrealdb)}})
+    chunk_id = ensure_record_id(str(chunk["id"]))
+    assert await _q(live_surrealdb, "SELECT VALUE text FROM chunk_extern WHERE chunk = $c", {"c": chunk_id})
     try:
         await execute_transaction(_migratie(91, down=True), config=live_surrealdb)
         await execute_transaction(_migratie(91, down=True), config=live_surrealdb)
@@ -109,7 +118,12 @@ async def test_down_draait_terug_en_weer_op(live_surrealdb) -> None:
         db = await _info(live_surrealdb, "INFO FOR DB")
         assert "show_notes" in db["functions"]["text_search"]
         assert "show_notes" in db["functions"]["vector_search"]
+        assert "chunk_extern" not in db["tables"]
+        assert "chunk_extern_bijhouden" not in (await _info(live_surrealdb, "INFO FOR TABLE chunk"))["events"]
     finally:
         await _opnieuw_89_tot_91(live_surrealdb)
     await _opnieuw_89_tot_91(live_surrealdb)
     assert "full_text" not in (await _info(live_surrealdb, "INFO FOR TABLE source"))["fields"]
+    assert "chunk_extern_bijhouden" in (await _info(live_surrealdb, "INFO FOR TABLE chunk"))["events"]
+    assert await _q(live_surrealdb, "SELECT VALUE text FROM chunk_extern WHERE chunk = $c",
+                    {"c": chunk_id}) == ["openbare tekst"]
