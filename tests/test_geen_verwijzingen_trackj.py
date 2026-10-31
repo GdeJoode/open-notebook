@@ -85,7 +85,7 @@ VERBODEN = {
     # Oude privacyvelden en het formulierveld ``private``.
     "veld private": re.compile(
         r"\bsource\.private\b|\bisPrivate\b|append\(\s*['\"]private['\"]"
-        r"|['\"]private['\"]\s*:|^\s*private\s*[:=]\s*(?:bool|Form|z\.boolean|boolean)\b"
+        r"|['\"]private['\"]\s*:|^\s*private\s*[:=]\s*(?:bool|boolean|str\s*=\s*Form|z\.boolean)\b"
         r"|^\s*private\?\s*:",
         re.M,
     ),

@@ -210,7 +210,6 @@ services:
       - ./docker.env
     environment:
       - SURREAL_URL=ws://surrealdb:8000
-      - OLLAMA_URL=http://host.docker.internal:11434
       - DOCLING_SERVICE_URL=http://docling:8100
       - USE_DOCLING_SERVICE=true
       - MINERU_SERVICE_URL=http://mineru:8104

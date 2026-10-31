@@ -1,7 +1,7 @@
 """Embedding router - embed content for vector search.
 
-``POST /api/embeddings/item`` (F2-09): eerder ``/api/embed``, maar dat pad is ook
-een Ollama-eindpunt; ``tests/test_geen_ollama_eindpunten.py`` weigert het.
+``POST /api/embeddings/item`` (F2-09): eerder ``embed`` direct onder ``/api``, maar
+dat pad valt samen met een Ollama-eindpunt (``tests/test_geen_ollama_eindpunten.py``).
 """
 
 from fastapi import APIRouter, Depends, HTTPException

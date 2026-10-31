@@ -179,8 +179,9 @@ def test_every_compose_env_name_is_referenced_somewhere() -> None:
     names = _compose_env_names()
     assert len(names) > 20, f"walker control: only {len(names)} env names parsed"
 
-    referenced = _referenced_names(names | {"OLLAMA_URL"})
-    assert "OLLAMA_URL" in referenced, "detector control: a known-live name is missing"
+    # F2-09: OLLAMA_URL is no longer read (shared.model_routing is gone).
+    referenced = _referenced_names(names | {"SURREAL_URL"})
+    assert "SURREAL_URL" in referenced, "detector control: a known-live name is missing"
 
     dead = sorted(n for n in names if n not in referenced and n not in _ALLOWED)
     assert not dead, (
