@@ -171,7 +171,7 @@ def _run_id(run_id: str):
 async def source_map_rule_snapshot(
     rule_id: str, config: Optional[SurrealDBConfig] = None
 ) -> Optional[Dict[str, Any]]:
-    """Classificatie, bevestiging, status en ``rev`` van een bronkaartregel.
+    """Classificatie, bevestiging, status, route en ``rev`` van een bronkaartregel.
 
     De tabel ``source_map_rule`` staat in migratie 93 (F2-13, ADR 0020). Geen
     regel gevonden: ``None``, en de invoer van een run is onbekend.
@@ -183,7 +183,7 @@ async def source_map_rule_snapshot(
     if rid.table_name != "source_map_rule":
         return None
     rows = await execute_query(
-        "SELECT classification, classification_confirmed_by, active, rev FROM $id",
+        "SELECT classification, classification_confirmed_by, active, route_type, rev FROM $id",
         {"id": rid},
         config,
     )

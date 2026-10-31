@@ -105,12 +105,38 @@ async def test_pipeline_start_volgt_uit_de_route(live_surrealdb, route_type, sta
 
 
 async def test_bevestiging_teruggelezen(live_surrealdb) -> None:
+    nu = datetime.now(timezone.utc)
     [rij] = await _q(live_surrealdb, "CREATE source_map_rule CONTENT $d RETURN AFTER", {"d": _regel(
-        classification="extern", classification_confirmed_by="Beheerder Test")})
-    [rij] = await _q(live_surrealdb, "UPDATE $id SET classification_confirmed_at = time::now() RETURN AFTER",
-                     {"id": ensure_record_id(str(rij["id"]))})
+        classification="extern", classification_confirmed_by="Beheerder Test",
+        classification_confirmed_at=nu)})
     assert (rij["classification"], rij["classification_confirmed_by"]) == ("extern", "Beheerder Test")
     assert rij["classification_confirmed_at"]
+    # Samen leeg mag ook; dan geldt de regel als intern.
+    [rij] = await _q(live_surrealdb, "UPDATE $id SET classification_confirmed_by = NONE,"
+                     " classification_confirmed_at = NONE RETURN AFTER",
+                     {"id": ensure_record_id(str(rij["id"]))})
+    assert "classification_confirmed_by" not in rij
+
+
+@pytest.mark.parametrize("fout", [
+    {"classification": "extern", "classification_confirmed_by": "Beheerder Test"},
+    {"classification": "extern", "classification_confirmed_at": "nu"},
+    {"classification": "intern", "classification_confirmed_by": "Beheerder Test",
+     "classification_confirmed_at": "nu"},
+    {"classification": "extern", "route_type": "watchfolder", "pipeline_start": "wachtrij"},
+    {"classification": "extern", "route_type": "upload", "pipeline_start": "na_bevestiging"},
+    {"classification": "extern", "route_type": "bulkupload", "pipeline_start": "na_bevestiging"},
+])
+async def test_bevestiging_samen_en_alleen_extern_op_openbare_route(live_surrealdb, fout) -> None:
+    if fout.get("classification_confirmed_at") == "nu":
+        fout = {**fout, "classification_confirmed_at": datetime.now(timezone.utc)}
+    with pytest.raises(RuntimeError):
+        await _q(live_surrealdb, "CREATE source_map_rule CONTENT $d", {"d": _regel(**fout)})
+    if "route_type" not in fout:
+        batch = {k: v for k, v in fout.items()}
+        with pytest.raises(RuntimeError):
+            await _q(live_surrealdb, "CREATE intake_batch CONTENT $d", {"d": {
+                "route": "inname_pdf", "created_by": "Beheerder Test", **batch}})
 
 
 async def test_batch_standaard_intern(live_surrealdb) -> None:
@@ -145,7 +171,14 @@ async def test_wachtrij_item_statusovergangen(live_surrealdb) -> None:
     [rij] = await _q(live_surrealdb, "UPDATE $id SET status = 'besloten', decision = $b RETURN AFTER",
                      {"id": rid, "b": besluit})
     assert rij["status"] == "besloten" and rij["decision"]["classification"] == "extern"
+    # Het besluit ligt vast: niet wijzigen en niet wissen.
+    for sql, params in (("UPDATE $id SET decision.classification = 'intern'", {}),
+                        ("UPDATE $id SET decision = $b", {"b": {**besluit, "route": "anders"}}),
+                        ("UPDATE $id SET decision = NONE", {})):
+        with pytest.raises(RuntimeError):
+            await _q(live_surrealdb, sql, {"id": rid, **params})
     [rij] = await _q(live_surrealdb, "UPDATE $id SET status = 'verwerkt' RETURN AFTER", {"id": rid})
+    assert rij["decision"]["classification"] == "extern"
     assert rij["status"] == "verwerkt"
     # Terug kan niet.
     with pytest.raises(RuntimeError):

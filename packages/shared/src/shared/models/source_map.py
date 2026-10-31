@@ -5,6 +5,8 @@ De regels over classificatie staan hier op één plek:
 * :func:`standaard_classificatie`: de standaard per innameroute (ADR 0019);
 * :func:`effectieve_classificatie`: ``extern`` geldt alleen met een
   bevestiging door een beheerder en bij een actieve regel; anders ``intern``;
+* :func:`regel_classificatie`: daarbovenop voor een bronkaartregel: alleen een
+  openbare route (API, MCP, feed, website) kan extern zijn;
 * :func:`pipeline_start_voor`: de pipelinestart volgt uit de innameroute.
 """
 
@@ -67,6 +69,23 @@ def effectieve_classificatie(
     return "intern"
 
 
+def regel_classificatie(
+    classification: Optional[str],
+    confirmed_by: Optional[str],
+    *,
+    active: Optional[bool],
+    route_type: Optional[str],
+) -> Classificatie:
+    """De effectieve classificatie van een bronkaartregel.
+
+    Alleen een regel op een openbare route kan extern zijn (ADR 0019): een
+    watchfolder, upload of bulkupload kiest per document of per batch.
+    """
+    if route_type not in OPENBARE_ROUTES:
+        return "intern"
+    return effectieve_classificatie(classification, confirmed_by, active=active)
+
+
 class SourceMapRule(ObjectModel):
     """Een record van ``source_map_rule`` (migratie 93)."""
 
@@ -95,8 +114,9 @@ class SourceMapRule(ObjectModel):
 
     @property
     def effectieve_classificatie(self) -> Classificatie:
-        return effectieve_classificatie(
-            self.classification, self.classification_confirmed_by, active=self.active
+        return regel_classificatie(
+            self.classification, self.classification_confirmed_by,
+            active=self.active, route_type=self.route_type,
         )
 
 
@@ -158,6 +178,7 @@ __all__ = [
     "SourceMapRule",
     "effectieve_classificatie",
     "pipeline_start_voor",
+    "regel_classificatie",
     "standaard_classificatie",
     "standaard_fetch_content",
 ]

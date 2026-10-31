@@ -5,6 +5,7 @@ from shared.models.source_map import (
     IntakeItem,
     effectieve_classificatie,
     pipeline_start_voor,
+    regel_classificatie,
     standaard_classificatie,
 )
 
@@ -43,3 +44,12 @@ def test_wachtrij_item_zonder_besluit_is_intern() -> None:
     besloten = item.model_copy(update={"status": "besloten", "decision": {
         "route": "r", "classification": "extern", "decided_by": "Beheerder Test"}})
     assert besloten.effectieve_classificatie == "extern"
+
+
+@pytest.mark.parametrize("route_type,verwacht", [
+    ("api", "extern"), ("mcp", "extern"), ("feed", "extern"), ("website", "extern"),
+    ("watchfolder", "intern"), ("upload", "intern"), ("bulkupload", "intern"), (None, "intern"),
+])
+def test_regel_alleen_extern_op_openbare_route(route_type, verwacht) -> None:
+    assert regel_classificatie("extern", "Beheerder Test", active=True,
+                               route_type=route_type) == verwacht

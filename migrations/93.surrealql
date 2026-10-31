@@ -37,8 +37,14 @@ DEFINE FIELD OVERWRITE schedule.cron ON source_map_rule TYPE string
 DEFINE FIELD OVERWRITE schedule.timezone ON source_map_rule TYPE string DEFAULT 'Europe/Amsterdam';
 DEFINE FIELD OVERWRITE schedule.catch_up ON source_map_rule TYPE string DEFAULT 'coalesce'
     ASSERT $value IN ['coalesce', 'skip'];
+-- Extern kan alleen op een openbare route (ADR 0019). De bevestiging (persoon
+-- en tijd) is samen gezet of samen leeg, en alleen bij extern. Een ASSERT op
+-- een leeg optioneel veld draait niet; daarom staat dit bij `classification`.
 DEFINE FIELD OVERWRITE classification ON source_map_rule TYPE string DEFAULT 'intern'
-    ASSERT $value IN ['intern', 'extern'];
+    ASSERT $value IN ['intern', 'extern']
+        AND ($value = 'intern' OR $this.route_type IN ['api', 'mcp', 'feed', 'website'])
+        AND (($this.classification_confirmed_by = NONE) = ($this.classification_confirmed_at = NONE))
+        AND ($this.classification_confirmed_by = NONE OR $value = 'extern');
 DEFINE FIELD OVERWRITE classification_confirmed_by ON source_map_rule TYPE option<string>
     ASSERT $value = NONE OR string::len(string::trim($value)) > 0;
 DEFINE FIELD OVERWRITE classification_confirmed_at ON source_map_rule TYPE option<datetime>;
@@ -68,7 +74,9 @@ DEFINE INDEX OVERWRITE idx_source_map_rule_route_type ON source_map_rule FIELDS 
 -- 2. Innamebatch van een bulkupload.
 DEFINE TABLE OVERWRITE intake_batch SCHEMAFULL;
 DEFINE FIELD OVERWRITE classification ON intake_batch TYPE string DEFAULT 'intern'
-    ASSERT $value IN ['intern', 'extern'];
+    ASSERT $value IN ['intern', 'extern']
+        AND (($this.classification_confirmed_by = NONE) = ($this.classification_confirmed_at = NONE))
+        AND ($this.classification_confirmed_by = NONE OR $value = 'extern');
 DEFINE FIELD OVERWRITE classification_confirmed_by ON intake_batch TYPE option<string>
     ASSERT $value = NONE OR string::len(string::trim($value)) > 0;
 DEFINE FIELD OVERWRITE classification_confirmed_at ON intake_batch TYPE option<datetime>;
@@ -105,7 +113,10 @@ DEFINE FIELD OVERWRITE gatekeeper.method ON intake_item TYPE option<string>;
 DEFINE FIELD OVERWRITE gatekeeper.text_source ON intake_item TYPE option<string>;
 DEFINE FIELD OVERWRITE gatekeeper.probability ON intake_item TYPE option<float>;
 DEFINE FIELD OVERWRITE gatekeeper.model ON intake_item TYPE option<string>;
-DEFINE FIELD OVERWRITE decision ON intake_item TYPE option<object>;
+-- Een besluit ligt vast zodra het is genomen; een ander besluit vraagt een
+-- nieuw item.
+DEFINE FIELD OVERWRITE decision ON intake_item TYPE option<object>
+    ASSERT $before = NONE OR $value = $before;
 DEFINE FIELD OVERWRITE decision.route ON intake_item TYPE string
     ASSERT string::len(string::trim($value)) > 0;
 DEFINE FIELD OVERWRITE decision.classification ON intake_item TYPE string
