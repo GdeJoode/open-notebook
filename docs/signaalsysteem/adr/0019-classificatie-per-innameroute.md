@@ -74,3 +74,4 @@ De bouw (`migrations/93.surrealql`, `SourceMapService`) werkt de tabel "Standaar
 - **Bevestiging vervalt.** Elke inhoudelijke wijziging van een regel trekt de bevestiging in, ook het weer aanzetten van een regel. Alleen een wijziging van naam, eigenaar of een beschrijvend veld laat de bevestiging staan.
 - **Bulkupload.** Op regelniveau is `pipeline_start = na_bevestiging`. De route komt van de batch.
 - **Herkomst `zonder_regel`.** Een wachtrij-item kan ook de herkomst `zonder_regel` hebben. Geen regel betekent intern.
+- `document_type` staat nu in de velden die de bevestiging niet intrekken, omdat geen component het gebruikt. Zodra een component (bijvoorbeeld de poortwachter, F3-04) een regel op `document_type` selecteert, gaat het uit die lijst (herreview F2-13).
