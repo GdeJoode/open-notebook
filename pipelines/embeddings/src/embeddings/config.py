@@ -21,8 +21,8 @@ class EmbeddingConfig:
     #
     # ``max_input_chars`` is de eerste grens, vóór elke aanroep: 1 536 tekens
     # = 512 tokens × 3 tekens per token, ruim voor Nederlands met de Engelse
-    # WordPiece van mxbai. Weigert llama-server een tekst toch wegens lengte,
-    # dan halveert de dienst hem tot hij past
+    # WordPiece van mxbai. Weigert llama-server een tekst toch wegens lengte
+    # (``exceed_context_size_error``), dan halveert de dienst hem tot hij past
     # (``EmbeddingService._embed_one_with_shrink``). Een tekst van ten hoogste
     # ``ZEKER_TEKENS`` (510) past altijd: WordPiece maakt per teken hooguit
     # één token, plus [CLS] en [SEP].

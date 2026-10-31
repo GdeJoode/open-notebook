@@ -6,7 +6,7 @@ niet opdelen: één fragment krijgt één vector, de kop blijft.
 - Vóór elke aanroep gaat een fragment met ten hoogste ``max_input_chars``
   (1 536) tekens naar het model.
 - Weigert llama-server de invoer toch wegens lengte
-  (``exceed_context_size_error``), dan halveert de tekst tot hij past, maar
+  (``exceed_context_size_error``, en alleen dan), dan halveert de tekst tot hij past, maar
   nooit onder ``ZEKER_TEKENS`` (510): zo'n tekst past altijd in 512 tokens.
   Weigert het model die ook, dan is het geen lengteprobleem en volgt een fout.
 - Elke poging is één aanroep via ``ModelGate`` en dus één regel in ``model_call``.
@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from llm_manager.aanroep import PoortAanroeper
-from llm_manager.gate import ModelCallRegel, ModelGate
+from llm_manager.gate import AuditNietGeschreven, ModelCallRegel, ModelGate, ModelGeweigerd
 from llm_manager.providers.factory import LlamaSwapClient
 from llm_manager.register import ModelRegister, RegisterModel
 
@@ -35,10 +35,13 @@ from shared.models import Chunk, SourceEmbedding
 
 
 class Audit:
-    def __init__(self) -> None:
+    def __init__(self, faalt: bool = False) -> None:
         self.regels: List[ModelCallRegel] = []
+        self.faalt = faalt
 
     async def schrijf(self, regel: ModelCallRegel) -> None:
+        if self.faalt:
+            raise RuntimeError("database weg")
         self.regels.append(regel)
 
 
@@ -64,10 +67,11 @@ class LlamaServer:
             {"index": i, "embedding": [0.5] * 1024} for i in range(len(teksten))]})
 
 
-def _service(server: LlamaServer, audit: Audit, **config) -> tuple[EmbeddingService, AsyncMock]:
+def _service(server: LlamaServer, audit: Audit, intern: str = "ja",
+             **config) -> tuple[EmbeddingService, AsyncMock]:
     register = ModelRegister(versie=1, modellen=[RegisterModel(
         naam="embed", versie="v1", aanroepwijze="llama-swap", locatie="lokaal",
-        toegestaan_intern="ja", taken=["embedding"])])
+        toegestaan_intern=intern, taken=["embedding"])])
     gate = ModelGate(register, audit, max_pogingen=1)
     embedder = PoortEmbedder(PoortAanroeper(
         gate, LlamaSwapClient(transport=httpx.MockTransport(server))))
@@ -79,9 +83,9 @@ def _service(server: LlamaServer, audit: Audit, **config) -> tuple[EmbeddingServ
     return EmbeddingService(repo, embedder, EmbeddingConfig(retry_delay=0, **config)), repo
 
 
-def _fragment(tekst: str, nr: int) -> Chunk:
+def _fragment(tekst: str, nr: int, classificatie: str = "intern") -> Chunk:
     return Chunk(id=f"chunk:{nr}", text=tekst, order=nr, element_type="paragraph",
-                 physical_page=1, classification="intern")
+                 physical_page=1, classification=classificatie)
 
 
 async def _embed(service: EmbeddingService, repo: AsyncMock, *teksten: str) -> None:
@@ -155,3 +159,49 @@ async def test_een_andere_fout_wordt_niet_als_lengtefout_behandeld():
         await _embed(service, repo, "E" * 2000)
 
     assert [len(t[0]) for t in server.invoer] == [1536, 1536]
+
+
+async def test_een_server_error_wordt_niet_gehalveerd():
+    server, audit = LlamaServer(grens=1000, status=500, soort="server_error"), Audit()
+    service, repo = _service(server, audit, retry_attempts=0)
+
+    with pytest.raises(RuntimeError, match="Embedding failed after"):
+        await _embed(service, repo, "F" * 5000)
+
+    assert [len(t[0]) for t in server.invoer] == [1536]
+    assert [r.status for r in audit.regels] == ["mislukt"]
+
+
+async def test_een_weigering_van_de_poort_wordt_niet_herhaald():
+    server, audit = LlamaServer(), Audit()
+    service, repo = _service(server, audit, intern="nee", retry_attempts=2)
+
+    with pytest.raises(ModelGeweigerd):
+        await _embed(service, repo, "G" * 100)
+
+    assert server.invoer == []
+    assert [r.status for r in audit.regels] == ["geweigerd"]
+
+
+async def test_een_ontbrekende_auditregel_wordt_niet_herhaald():
+    server = LlamaServer()
+    service, repo = _service(server, Audit(faalt=True), retry_attempts=2)
+
+    with pytest.raises(AuditNietGeschreven):
+        await _embed(service, repo, "H" * 100)
+
+    assert len(server.invoer) == 1
+
+
+async def test_een_gemengde_batch_telt_als_intern():
+    """Een batch met een intern en een extern fragment gaat als ``intern``."""
+    server, audit = LlamaServer(), Audit()
+    service, repo = _service(server, audit)
+    repo.get_chunks = AsyncMock(return_value=[
+        _fragment("extern stuk", 0, "extern"), _fragment("intern stuk", 1, "intern")])
+
+    await service.embed_source("source:s")
+
+    assert server.invoer == [["extern stuk", "intern stuk"]]
+    [regel] = audit.regels
+    assert regel.classification == "intern"

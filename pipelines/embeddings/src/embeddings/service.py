@@ -9,7 +9,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from llm_manager.gate import classificatie_van
+from llm_manager.gate import AuditNietGeschreven, ModelGeweigerd, classificatie_van
 from loguru import logger
 
 from embeddings.config import EmbeddingConfig
@@ -21,8 +21,9 @@ from surrealdb_service.repositories.source import SourceRepository
 #: Een tekst van ten hoogste zoveel tekens past altijd in 512 tokens (ADR 0008).
 ZEKER_TEKENS = 510
 
-#: Fouttypen van llama-server bij een te lange invoer (``error.type``).
-LENGTEFOUTEN = frozenset({"exceed_context_size_error", "server_error"})
+#: Fouttype van llama-server bij een te lange invoer (``error.type``). Een
+#: ``server_error`` telt niet: dat kan iets anders zijn, en dan faalt de aanroep.
+LENGTEFOUTEN = frozenset({"exceed_context_size_error"})
 
 
 @dataclass
@@ -208,9 +209,8 @@ class EmbeddingService:
     def _is_context_length_error(error: Exception) -> bool:
         """True als llama-server de invoer kan hebben geweigerd wegens lengte.
 
-        llama-server meldt dat met ``exceed_context_size_error`` of, bij een
-        invoer groter dan de batch, met ``server_error``; de fout draagt alleen
-        dat type, nooit de tekst (``LlamaSwapFout``).
+        llama-server meldt dat met ``exceed_context_size_error``; de fout
+        draagt alleen dat type, nooit de tekst (``LlamaSwapFout``).
         """
         return getattr(error, "soort", None) in LENGTEFOUTEN
 
@@ -289,6 +289,10 @@ class EmbeddingService:
                     return await self.embedding_model.aembed(
                         texts, classificatie=classificatie, run_id=run_id
                     )
+                except (ModelGeweigerd, AuditNietGeschreven):
+                    # Een weigering van de poort of een ontbrekende auditregel
+                    # wordt niet opnieuw geprobeerd (F2-08).
+                    raise
                 except Exception as e:
                     last_error = e
                     if (
