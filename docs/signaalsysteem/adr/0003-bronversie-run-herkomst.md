@@ -136,6 +136,8 @@ De bouw (`migrations/90.surrealql`) wijkt op de volgende punten af van het voors
 - **Invoerclassificatie uit de bronkaartregel.** De invoerclassificatie van een run komt uit de bronkaartregel (`source_map_rule`, ADR 0020). Tot F2-13 is die onbekend, en dan geldt intern. F2-13 en F2-14 binden de regel aan de werkelijke bron; de aanroeper kiest hem niet zelf.
 - **Lezers van `provenance_chain`** (voor F3-08): `EntityRepository` (upsert, merge), `notebook_merge_service`, `recanonicalization_service` en `okf_export_service` (alleen een uitsluitingsnotitie). `semantic_intelligence/reasoning.py` heeft een eigen veld met dezelfde naam; dat valt hier buiten.
 
+- **Runs van `SourceProcessor`** (review F2-04): die krijgen `flow_vastgelegd = true`, omdat het code van de fork is en geen flow van Langflow; `pipeline_version` is de commit van de fork. Alle routes naar `process_source` vragen `beheerder`. Restrisico: een run die door een afgebroken proces `bezig` blijft, kan schrijven voor elke interne bron; F2-14 bindt een run aan bron en aanmaker en sluit runs die te lang `bezig` staan.
+
 **Voorgesteld, Geert beslist** (plan van aanpak §8.1, B26):
 
 - **Bekende inhoudshash die niet de huidige versie is**, bijvoorbeeld inhoud A → B → A.
