@@ -241,6 +241,10 @@ MIGRATIES_TOEGESTAAN = {
         "vult ``chunk_extern`` voor bestaande externe fragmenten (F2-05)",
     ("migrations/98.surrealql", "FUNCTION fn::inhoud_intern"):
         "``CREATE $g``: het tijdelijke record ``inhoud_groep`` (F2-14)",
+    ("migrations/99.surrealql", "FUNCTION fn::inhoud_groep"):
+        "``CREATE $g``: het tijdelijke record ``inhoud_groep`` (F2-14)",
+    ("migrations/99_down.surrealql", "FUNCTION fn::inhoud_intern"):
+        "``CREATE $g``: de vorm van 98 terug (F2-14)",
 }
 
 #: Begin van een deel van een migratie: elke ``DEFINE`` (ook ingesprongen), en

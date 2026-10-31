@@ -1252,10 +1252,16 @@ async def test_batch_die_later_intern_wordt(env, app) -> None:
     await _q("UPDATE type::thing($b) SET classification_confirmed_by = NONE,"
              " classification_confirmed_at = NONE", {"b": batch})
     assert (await _een("SELECT VALUE classification FROM type::thing($b)", {"b": bron})) == "extern"
-    # Bewust intern: de bron wordt intern, met een melding.
+    # Ook bewust intern laat de bestaande bron ongemoeid (vijfde review, besluit
+    # Geert); de batch telt alleen in de controle: een nieuwe externe import
+    # van dezelfde inhoud wordt geweigerd.
     await _q("UPDATE type::thing($b) SET classification = 'intern'", {"b": batch})
-    assert (await _een("SELECT VALUE classification FROM type::thing($b)", {"b": bron})) == "intern"
-    assert [m["soort"] for m in await _meldingen(bron)] == ["inhoud_intern"]
+    assert (await _een("SELECT VALUE classification FROM type::thing($b)", {"b": bron})) == "extern"
+    assert await _meldingen(bron) == []
+    extern = await _regel()
+    async with _client(app) as client:
+        resp = await _importeer(client, env, extern, original, h)
+    assert resp.status_code == 409 and resp.json()["detail"]["code"] == "inhoud_intern_bekend"
 
 
 async def test_interne_batch_zonder_passende_hash_geeft_een_melding(env, app) -> None:
@@ -1407,3 +1413,99 @@ async def test_herclassificatie_naar_extern_geweigerd_als_elders_intern(env, app
     versie_c = await _een("SELECT VALUE current_version FROM type::thing($c)", {"c": c})
     assert str(versie_c) in detail["records"]
     assert (await _een("SELECT VALUE classification FROM type::thing($a)", {"a": a})) == "intern"
+
+
+# --------------------------------------------------------------------------
+# Vijfde review F2-14
+# --------------------------------------------------------------------------
+
+
+async def test_race_herclass_tegen_interne_import(env_rocksdb, app) -> None:
+    """Herclassificatie naar extern slaapt na haar controle; intussen slaagt een
+    interne import van dezelfde inhoud. De interne versie schrijft het record
+    ``inhoud``: de herclassificatie botst, of komt eerst en wordt dan weer
+    ingehaald. Nooit blijft de inhoud extern naast een interne bron."""
+    from surrealdb_service.repositories import source as bronmodule
+
+    env = env_rocksdb
+    extern = await _regel()
+    intern = await _regel(bevestigd=False)
+    original, h = env.origineel(b"%PDF-1.7 race herclass " + uuid.uuid4().hex.encode())
+    async with _client(app) as client:
+        a = (await _importeer(client, env, extern, original, h)).json()["source_id"]
+        env.als(BEHEERDER)
+        assert (await _herclassificeer(client, a, "intern")).status_code == 200
+        env.als(LANGFLOW)
+        doel = "UPDATE $bron SET classification = $naar"
+        tx = bronmodule._HERCLASSIFICATIE.replace(doel, "SLEEP 2s; " + doel, 1)
+        assert "SLEEP 2s" in tx
+        taak = asyncio.create_task(conn.execute_transaction(tx, {
+            "bron": conn.ensure_record_id(a), "van": "intern", "naar": "extern",
+            "reden": "toets", "sleutel": "agent_keys:beheer", "persoon": "Testpersoon"},
+            _herclassificatie=True))
+        await asyncio.sleep(0.5)
+        resp = await _importeer(client, env, intern, original, h)
+        try:
+            await taak
+        except RuntimeError:
+            pass  # schrijfconflict: de herclassificatie gaat niet door
+    assert resp.status_code == 201 and resp.json()["classification"] == "intern"
+    hx = h.removeprefix("sha256:")
+    assert await _een("SELECT VALUE classification FROM type::thing('inhoud', $h)",
+                      {"h": hx}) == "intern"
+    assert await _een("SELECT VALUE classification FROM type::thing($a)", {"a": a}) == "intern"
+
+
+async def test_b2_met_bestaande_externe_bron(env, app) -> None:
+    extern = await _regel()
+    bulk = await _regel("bulkupload", "intern", location=str(env.inname))
+    original, h = env.origineel(b"%PDF-1.7 b2 bestaand " + uuid.uuid4().hex.encode())
+    pad = str(env.inname / f"{uuid.uuid4().hex}.pdf")
+    async with _client(app) as client:
+        a = (await _importeer(client, env, extern, original, h)).json()["source_id"]
+        batch = await _batch(bulk, [pad], "intern", [h])
+        assert await _een("SELECT VALUE classification FROM type::thing($a)", {"a": a}) == "extern"
+        await _q("UPDATE type::thing($b) SET classification = 'extern',"
+                 " classification_confirmed_by = 'Testpersoon', classification_confirmed_at = $t",
+                 {"b": batch, "t": datetime.now(timezone.utc)})
+        run = await _start(client, env, regel=bulk, batch=batch)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=bulk, batch=batch, location=pad))
+    assert resp.status_code == 201 and resp.json()["classification"] == "extern", resp.text
+    assert await _een("SELECT VALUE classification FROM type::thing($a)", {"a": a}) == "extern"
+
+
+@pytest.mark.parametrize("via", ["item", "batch"])
+async def test_eigen_item_of_batch_blokkeert_herclassificatie_niet(env, app, via) -> None:
+    original, h = env.origineel(b"%PDF-1.7 eigen " + uuid.uuid4().hex.encode())
+    pad = str(env.inname / f"{uuid.uuid4().hex}.pdf")
+    if via == "item":
+        regel = await _regel("watchfolder", "intern", location=str(env.inname))
+        koppeling = {"item": await _item(pad, h, besluit="intern")}
+    else:
+        regel = await _regel("bulkupload", "intern", location=str(env.inname))
+        koppeling = {"batch": await _batch(regel, [pad], "intern", [h])}
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel, **koppeling)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel, location=pad, **koppeling))
+        assert resp.status_code == 201 and resp.json()["classification"] == "intern", resp.text
+        env.als(BEHEERDER)
+        resp = await _herclassificeer(client, resp.json()["source_id"], "extern")
+    assert resp.status_code == 200, resp.text
+
+
+async def test_databasestoring_is_503(env, app, monkeypatch) -> None:
+    from surrealdb_service.connection import DatabaseUnavailableError
+
+    async def storing(self, verzoek, *, key_id):
+        raise DatabaseUnavailableError("geen verbinding")
+
+    monkeypatch.setattr(ImportService, "_importeer", storing)
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 storing " + uuid.uuid4().hex.encode())
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel))
+    assert resp.status_code == 503

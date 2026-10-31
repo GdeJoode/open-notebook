@@ -61,7 +61,11 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from loguru import logger
 from shared.utils.text import strip_null_bytes
-from surrealdb_service.connection import ClassificationConflictError, ensure_record_id
+from surrealdb_service.connection import (
+    ClassificationConflictError,
+    DatabaseUnavailableError,
+    ensure_record_id,
+)
 from surrealdb_service.repositories.base import is_schrijfconflict
 from surrealdb_service.repositories.intake import IntakeBatchRepository
 from surrealdb_service.repositories.processing_run import ProcessingRunRepository
@@ -174,12 +178,6 @@ class Origineel:
         os.chmod(self.tijdelijk, 0o444)
         try:
             os.link(self.tijdelijk, doel)
-            # Ook de map: de nieuwe naam staat dan op schijf.
-            mapfd = os.open(self.archief, os.O_RDONLY)
-            try:
-                os.fsync(mapfd)
-            finally:
-                os.close(mapfd)
         except FileExistsError:
             info = os.lstat(doel)
             if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o222
@@ -187,6 +185,12 @@ class Origineel:
                 raise ArchiefFout(self.hexhash) from None
         finally:
             self.tijdelijk.unlink(missing_ok=True)
+        # Ook de map, in beide gevallen: de naam staat dan op schijf.
+        mapfd = os.open(self.archief, os.O_RDONLY)
+        try:
+            os.fsync(mapfd)
+        finally:
+            os.close(mapfd)
 
     def vergeet(self) -> None:
         self.tijdelijk.unlink(missing_ok=True)
@@ -428,6 +432,9 @@ class ImportService:
         for poging in range(POGINGEN):
             try:
                 return await self._importeer(verzoek, key_id=key_id)
+            except DatabaseUnavailableError:
+                # Een storing van de database: 503 (app.py), geen weigering.
+                raise
             except ClassificationConflictError as e:
                 await self._weiger_opslag(verzoek.run_id, e)
             except RuntimeError as e:
