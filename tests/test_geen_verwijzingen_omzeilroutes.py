@@ -3,8 +3,9 @@
 ADR 0002 D en E, ADR 0012. Weg zijn: de router ``services_proxy``
 (``/api/services/*``), de drie MCP-servers in de fork (``surrealdb_service.mcp``,
 ``llm_manager.mcp``, ``file_manager.mcp``), de losse API
-``surrealdb_service.api`` met de script-ingang ``surrealdb-service``, en de
-extractiedienst ``services/extraction``. De querylogica achter de MCP-tools
+``surrealdb_service.api`` met de script-ingang ``surrealdb-service``, de losse
+API ``file_manager.api`` (0.0.0.0:8002) met de script-ingang ``file-manager``, en
+de extractiedienst ``services/extraction``. De querylogica achter de MCP-tools
 blijft in de repositories (``SearchRepository``, ``GraphRepository``).
 
 Deze test faalt zodra een van die namen terugkomt in de code, de interface of
@@ -37,7 +38,7 @@ LOSSE_BESTANDEN = (
 )
 SOORTEN = {
     ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".json", ".toml", ".yml",
-    ".yaml", ".sh", ".cfg", ".ini", ".txt", ".env", ".example",
+    ".yaml", ".sh", ".cfg", ".ini", ".conf", ".txt", ".env", ".example",
 }
 OVERSLAAN = ("node_modules", "__pycache__", ".venv", ".next", "/fixtures/")
 
@@ -49,6 +50,11 @@ VERBODEN = {
     "surrealdb_service.api": re.compile(r"\bsurrealdb_service[./]api\b"),
     "llm_manager.mcp": re.compile(r"\bllm_manager[./]mcp\b"),
     "file_manager.mcp": re.compile(r"\bfile_manager[./]mcp\b"),
+    "file_manager.api": re.compile(r"\bfile_manager[./]api\b"),
+    "from <pakket> import mcp/api": re.compile(
+        r"\bfrom\s+(?:surrealdb_service|llm_manager|file_manager)\s+import\s+\(?\s*(?:mcp|api)\b"
+    ),
+    "script-ingang file-manager": re.compile(r"^\s*file-manager\s*=\s*[\"']", re.M),
     "script-ingang surrealdb-service": re.compile(r"^\s*surrealdb-service\s*=\s*[\"']", re.M),
     "script-ingang *-mcp": re.compile(r"\b(?:surrealdb|llm-manager|file-manager)-mcp\b"),
     "services/extraction": re.compile(r"\bservices/extraction(?![\w-])"),
@@ -92,6 +98,7 @@ def test_verwijderde_paden_bestaan_niet() -> None:
         "packages/surrealdb-service/src/surrealdb_service/api",
         "packages/llm-manager/src/llm_manager/mcp",
         "packages/file-manager/src/file_manager/mcp",
+        "packages/file-manager/src/file_manager/api",
         "services/extraction",
     ):
         assert not (ROOT / rel).exists(), rel
@@ -114,13 +121,19 @@ def test_de_zoektest_ziet_de_mappen() -> None:
         ("surrealdb_service.mcp", "surrealdb-mcp = \"surrealdb_service.mcp.server:main\""),
         ("surrealdb_service.api", "from surrealdb_service.api.app import create_app"),
         ("script-ingang surrealdb-service", 'surrealdb-service = "x:main"'),
+        ("file_manager.api", "from file_manager.api.routers import files"),
+        ("from <pakket> import mcp/api", "from surrealdb_service import mcp"),
+        ("from <pakket> import mcp/api", "from llm_manager import api"),
+        ("script-ingang file-manager", 'file-manager = "file_manager.api.app:main"'),
         ("services/extraction", "dockerfile: services/extraction/Dockerfile"),
     ):
         assert VERBODEN[naam].search(voorbeeld), naam
     # Een werkruimte-bron is geen script-ingang.
-    assert not VERBODEN["script-ingang surrealdb-service"].search(
-        "surrealdb-service = { workspace = true }"
-    )
+    for naam, bron in (
+        ("script-ingang surrealdb-service", "surrealdb-service = { workspace = true }"),
+        ("script-ingang file-manager", "file-manager = { workspace = true }"),
+    ):
+        assert not VERBODEN[naam].search(bron), naam
     # `services/extraction_chunking` in app-main is een ander pakket en blijft.
     assert not VERBODEN["services/extraction"].search("app_main/services/extraction_chunking/")
 

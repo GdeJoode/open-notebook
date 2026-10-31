@@ -1635,11 +1635,9 @@ version = "0.1.0"
 source = { editable = "packages/file-manager" }
 dependencies = [
     { name = "aiofiles" },
-    { name = "fastapi" },
     { name = "loguru" },
     { name = "pydantic-settings" },
     { name = "python-magic" },
-    { name = "python-multipart" },
     { name = "shared" },
     { name = "surrealdb-service" },
     { name = "watchfiles" },
@@ -1661,7 +1659,6 @@ ui = [
 [package.metadata]
 requires-dist = [
     { name = "aiofiles", specifier = ">=23.0.0" },
-    { name = "fastapi", specifier = ">=0.104.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.25.0" },
     { name = "job-queue", marker = "extra == 'queue'", editable = "packages/job-queue" },
     { name = "loguru", specifier = ">=0.7.0" },
@@ -1669,7 +1666,6 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "python-magic", specifier = ">=0.4.27" },
-    { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "shared", editable = "packages/shared" },
     { name = "streamlit", marker = "extra == 'ui'", specifier = ">=1.30.0" },
     { name = "surrealdb-service", editable = "packages/surrealdb-service" },
