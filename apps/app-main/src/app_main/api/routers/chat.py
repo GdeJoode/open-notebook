@@ -436,130 +436,50 @@ async def build_context(
         if not notebook:
             raise HTTPException(status_code=404, detail="Notebook not found")
 
-        from app_main.dependencies import get_source_service, get_note_service
+        from app_main.dependencies import get_source_service
 
         source_svc = get_source_service()
-        note_svc = get_note_service()
 
+        # F2-05 (ADR 0004): de context voor een model bestaat alleen uit
+        # fragmenten: de tekst van de huidige versie van elke gekozen bron.
+        # Inzichten en notities zijn afgeleid en gaan niet mee; "notes" blijft
+        # leeg. Deze route is alleen voor de beheerder (bereik ALLES).
         context_data: dict[str, list[dict]] = {"sources": [], "notes": []}
         total_content = ""
 
         if request.context_config:
-            # Process sources
-            for source_id, status in request.context_config.get(
-                "sources", {}
-            ).items():
-                if "not in" in status:
-                    continue
-                try:
-                    full_source_id = (
-                        source_id
-                        if source_id.startswith("source:")
-                        else f"source:{source_id}"
-                    )
-                    source = await source_svc.get(full_source_id)
-                    if not source:
-                        continue
-
-                    if "insights" in status:
-                        insights = await source_svc.get_insights(full_source_id)
-                        source_context = {
-                            "id": source.id,
-                            "title": source.title,
-                            "insights": [
-                                {"type": i.insight_type, "content": i.content}
-                                for i in insights
-                            ],
-                        }
-                    elif "full content" in status:
-                        source_context = {
-                            "id": source.id,
-                            "title": source.title,
-                            # F2-05: tekst uit de fragmenten van de huidige
-                            # versie; deze route is alleen voor de beheerder.
-                            "full_text": await source_svc.get_text(
-                                str(source.id), scope=ClassificationScope.ALLES
-                            ),
-                        }
-                    else:
-                        continue
-
-                    context_data["sources"].append(source_context)
-                    total_content += str(source_context)
-                except Exception as e:
-                    logger.warning(f"Error processing source {source_id}: {e}")
-                    continue
-
-            # Process notes
-            for note_id, status in request.context_config.get(
-                "notes", {}
-            ).items():
-                if "not in" in status:
-                    continue
-                try:
-                    full_note_id = (
-                        note_id
-                        if note_id.startswith("note:")
-                        else f"note:{note_id}"
-                    )
-                    note = await note_svc.get(full_note_id)
-                    if not note:
-                        continue
-
-                    if "full content" in status:
-                        note_context = {
-                            "id": note.id,
-                            "title": note.title,
-                            "content": note.content,
-                        }
-                        context_data["notes"].append(note_context)
-                        total_content += str(note_context)
-                except Exception as e:
-                    logger.warning(f"Error processing note {note_id}: {e}")
-                    continue
+            bron_ids = [
+                sid
+                for sid, status in request.context_config.get("sources", {}).items()
+                if "not in" not in status
+            ]
         else:
-            # Default: include all with short context
-            sources_data = await notebook_svc.get_sources(request.notebook_id)
-            for sd in sources_data:
-                try:
-                    sid = (
-                        sd.get("id") if isinstance(sd, dict) else sd.id
-                    )
-                    source = await source_svc.get(sid)
-                    if not source:
-                        continue
-                    insights = await source_svc.get_insights(sid)
-                    source_context = {
-                        "id": sid,
-                        "title": source.title,
-                        "insights": [
-                            {"type": i.insight_type, "content": i.content}
-                            for i in insights
-                        ],
-                    }
-                    context_data["sources"].append(source_context)
-                    total_content += str(source_context)
-                except Exception as e:
-                    logger.warning(f"Error processing source: {e}")
+            bron_ids = [
+                sd.get("id") if isinstance(sd, dict) else sd.id
+                for sd in await notebook_svc.get_sources(request.notebook_id)
+            ]
+        for source_id in bron_ids:
+            try:
+                full_source_id = (
+                    source_id if str(source_id).startswith("source:") else f"source:{source_id}"
+                )
+                source = await source_svc.get_scoped(
+                    full_source_id, scope=ClassificationScope.ALLES
+                )
+                if not source:
                     continue
-
-            notes_data = await notebook_svc.get_notes(request.notebook_id)
-            for nd in notes_data:
-                try:
-                    note_context = {
-                        "id": nd.get("id") if isinstance(nd, dict) else nd.id,
-                        "title": nd.get("title")
-                        if isinstance(nd, dict)
-                        else nd.title,
-                        "content": nd.get("content")
-                        if isinstance(nd, dict)
-                        else nd.content,
-                    }
-                    context_data["notes"].append(note_context)
-                    total_content += str(note_context)
-                except Exception as e:
-                    logger.warning(f"Error processing note: {e}")
-                    continue
+                source_context = {
+                    "id": source.id,
+                    "title": source.title,
+                    "full_text": await source_svc.get_text(
+                        str(source.id), scope=ClassificationScope.ALLES
+                    ),
+                }
+                context_data["sources"].append(source_context)
+                total_content += str(source_context)
+            except Exception as e:
+                logger.warning(f"Error processing source {source_id}: {e}")
+                continue
 
         char_count = len(total_content)
         from shared.utils import token_count
