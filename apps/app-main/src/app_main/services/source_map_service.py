@@ -212,6 +212,12 @@ class Locatiecontrole:
         if url:
             if url.group(1).lower() not in ("http", "https"):
                 raise VerbodenLocatieError("alleen http en https")
+            if "\\" in tekst or "@" in tekst.split("://", 1)[-1].split("/", 1)[0]:
+                # Backslash of gebruikersgegevens: een omweg naar een andere host (F2-14).
+                raise VerbodenLocatieError("backslash of gebruikersgegevens")
+            pad_deel = urlsplit(tekst).path
+            if ";" in pad_deel or "%25" in pad_deel.lower():
+                raise VerbodenLocatieError("ongeldig padsegment")
             try:
                 host = (urlsplit(tekst).hostname or "").lower().rstrip(".")
             except ValueError:

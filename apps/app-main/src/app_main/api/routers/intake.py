@@ -175,7 +175,8 @@ async def mark_processed(
 ):
     try:
         item = await service.mark_processed(
-            item_id, rev=body.rev, run_id=body.run_id, door=key.person or key.agent_id
+            item_id, rev=body.rev, run_id=body.run_id, door=key.person or key.agent_id,
+            key_id=key.key_id,
         )
     except _FOUTEN as e:
         raise fout_naar_http(e) from None

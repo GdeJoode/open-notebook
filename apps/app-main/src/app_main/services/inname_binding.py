@@ -22,6 +22,7 @@ run begon.
 from __future__ import annotations
 
 import posixpath
+import re
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import unquote, urlsplit
@@ -77,33 +78,70 @@ def record_tekst(waarde: Optional[str], tabel: str) -> Optional[str]:
 _STANDAARDPOORT = {"http": 80, "https": 443}
 
 
-def _url_delen(url: str) -> Optional[tuple[str, str, int, str]]:
-    """Schema, host, poort en genormaliseerd pad; ``None`` als het geen URL is."""
+_SCHEMA = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]+:")
+
+
+class OngeldigeUrl(ValueError):
+    """Een URL-vorm die de binding niet aanvaardt."""
+
+
+def url_weigerreden(url: str) -> Optional[str]:
+    """Waarom een URL-locatie niet mag, of ``None`` (F2-14, herreview): een
+    backslash, gebruikersgegevens (``user:pw@``), of in het pad een ``;``, een
+    dubbel gecodeerd ``%25`` of een gecodeerde schuine streep (``%2F``, ``%5C``)."""
+    if "\\" in url:
+        return "backslash"
     try:
         delen = urlsplit(url.strip())
+    except ValueError:
+        return "ongeldig adres"
+    if "@" in delen.netloc or delen.username is not None or delen.password is not None:
+        return "gebruikersgegevens"
+    pad = delen.path.lower()
+    if ";" in pad or any(c in pad for c in ("%25", "%2f", "%5c")):
+        return "ongeldig padsegment"
+    return None
+
+
+def _url_delen(url: str) -> Optional[tuple]:
+    """Schema, host, poort, genormaliseerd pad en query; ``None`` als het geen
+    URL is; :class:`OngeldigeUrl` bij een geweigerde vorm."""
+    tekst = url.strip()
+    if not _SCHEMA.match(tekst):
+        return None
+    if url_weigerreden(tekst) is not None:
+        raise OngeldigeUrl(tekst)
+    try:
+        delen = urlsplit(tekst)
         schema = delen.scheme.lower()
         host = (delen.hostname or "").lower().rstrip(".")
         poort = delen.port or _STANDAARDPOORT.get(schema)
     except ValueError:
-        return None
-    if not schema or not host or "://" not in url:
-        return None
+        raise OngeldigeUrl(tekst) from None
+    if not host:
+        raise OngeldigeUrl(tekst)
     pad = posixpath.normpath("/" + unquote(delen.path or "/").lstrip("/"))
-    return schema, host, poort, pad.rstrip("/")
+    return schema, host, poort, pad.rstrip("/"), delen.query
 
 
 def locatie_hoort_bij_regel(locatie: str, regel_locatie: str) -> bool:
     """Valt de locatie van de bron onder de locatie van de regel? (F2-14, B1)
 
-    URL: hetzelfde schema, dezelfde host en poort, en een padprefix op een
-    segmentgrens (``/api`` dekt ``/api/x``, niet ``/apix``). Pad: onder de map
-    van de regel (:func:`ligt_onder`). Een URL onder een padregel, of andersom,
-    hoort er niet bij.
+    URL: hetzelfde schema, dezelfde host en poort, een padprefix op een
+    segmentgrens (``/api`` dekt ``/api/x``, niet ``/apix``) en, als de regel een
+    query heeft, dezelfde query. Geweigerd: zie :func:`url_weigerreden`. Pad:
+    onder de map van de regel (:func:`ligt_onder`). Een URL onder een padregel,
+    of andersom, hoort er niet bij.
     """
-    regel_url = _url_delen(regel_locatie)
-    bron_url = _url_delen(locatie)
+    try:
+        regel_url = _url_delen(regel_locatie)
+        bron_url = _url_delen(locatie)
+    except OngeldigeUrl:
+        return False
     if regel_url is not None or bron_url is not None:
         if regel_url is None or bron_url is None or regel_url[:3] != bron_url[:3]:
+            return False
+        if regel_url[4] and regel_url[4] != bron_url[4]:
             return False
         prefix, pad = regel_url[3], bron_url[3]
         return not prefix or pad == prefix or pad.startswith(prefix + "/")

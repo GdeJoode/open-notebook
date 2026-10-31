@@ -41,25 +41,34 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import functools
 import hashlib
 import html
 import json
 import os
+import random
 import re
+import stat
+import sys
 import tempfile
 import unicodedata
 import uuid
+import weakref
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from loguru import logger
 from shared.utils.text import strip_null_bytes
 from surrealdb_service.connection import ClassificationConflictError, ensure_record_id
 from surrealdb_service.repositories.base import is_schrijfconflict
 from surrealdb_service.repositories.processing_run import ProcessingRunRepository
 from surrealdb_service.repositories.source import SourceRepository
-from surrealdb_service.repositories.source_version import SourceVersionRepository
+from surrealdb_service.repositories.source_version import (
+    GELIJKTIJDIG,
+    SourceVersionRepository,
+)
 
 from app_main import config
 from app_main.api.schemas import ImportChunk, ImportRequest
@@ -79,16 +88,18 @@ from app_main.services.source_map_service import (
 )
 
 #: De markering van het gegenereerde blok van de export naar Obsidian (ADR 0004),
-#: ongeacht hoofdletters en witruimte.
-MARKERING = re.compile(r"<!--\s*signaalsysteem\s*:\s*(begin|end)\s*-->", re.IGNORECASE)
+#: ongeacht hoofdletters en witruimte; ``--!>`` sluit een HTML-commentaar ook af.
+MARKERING = re.compile(r"<!--\s*signaalsysteem\s*:\s*(begin|end)\s*--!?>", re.IGNORECASE)
+#: Meer lagen HTML-codering dan dit geldt als markering (weigeren).
+MAX_LAGEN = 10
 _BLOK = 1 << 20
 #: Zoveel tekens van het vorige blok tellen mee, zodat een markering op een
 #: blokgrens (ook als HTML-entiteit) gevonden wordt.
 _OVERLAP = 512
 #: Zoveel pogingen bij een schrijfconflict of een gelijktijdig verzoek.
-POGINGEN = 5
+POGINGEN = 20
 _GELIJKTIJDIG = ("idx_source_external_id", "idx_source_version_hash",
-                 "idx_source_version_no", "dn_run_ref")
+                 "idx_source_version_no", "dn_run_ref", GELIJKTIJDIG)
 
 
 class ImportWeigering(Exception):
@@ -102,6 +113,22 @@ class ImportWeigering(Exception):
         self.detail: Any = melding if status == 404 else {"code": code, "melding": melding}
 
 
+#: Per extern id een slot, zolang er een import voor loopt.
+_SLOTEN: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
+
+
+def _slot(external_id: str) -> asyncio.Lock:
+    slot = _SLOTEN.get(external_id)
+    if slot is None:
+        slot = asyncio.Lock()
+        _SLOTEN[external_id] = slot
+    return slot
+
+
+class ArchiefFout(Exception):
+    """Een bestaand bestand in het archief van de fork klopt niet (hash of rechten)."""
+
+
 @dataclass
 class ImportResultaat:
     status: str
@@ -112,6 +139,14 @@ class ImportResultaat:
     run_id: str
     classification: str
     chunk_ids: List[str] = field(default_factory=list)
+
+
+def _sha256_bestand(pad: Path) -> str:
+    h = hashlib.sha256()
+    with open(pad, "rb") as f:
+        for blok in iter(lambda: f.read(_BLOK), b""):
+            h.update(blok)
+    return h.hexdigest()
 
 
 @dataclass
@@ -128,13 +163,23 @@ class Origineel:
         return f"forkarchief/{self.hexhash}"
 
     def bewaar(self) -> None:
-        """Zet de kopie onder haar hash in het archief, alleen-lezen."""
+        """Zet de kopie onder haar hash in het archief, alleen-lezen.
+
+        ``os.link`` faalt als het doel al bestaat; dan moet het bestaande
+        bestand een gewoon bestand zijn, zonder schrijfrechten, met deze hash.
+        Anders :class:`ArchiefFout`.
+        """
         doel = self.archief / self.hexhash
-        if doel.exists():
+        os.chmod(self.tijdelijk, 0o444)
+        try:
+            os.link(self.tijdelijk, doel)
+        except FileExistsError:
+            info = os.lstat(doel)
+            if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o222
+                    or _sha256_bestand(doel) != self.hexhash):
+                raise ArchiefFout(self.hexhash) from None
+        finally:
             self.tijdelijk.unlink(missing_ok=True)
-            return
-        os.replace(self.tijdelijk, doel)
-        os.chmod(doel, 0o444)
 
     def vergeet(self) -> None:
         self.tijdelijk.unlink(missing_ok=True)
@@ -152,61 +197,118 @@ def _tekst(chunk: ImportChunk) -> str:
     return strip_null_bytes(chunk.text)
 
 
-def normaliseer(tekst: str) -> str:
-    """HTML-ontsleuteling en NFKC, herhaald tot de tekst niet meer verandert."""
-    for _ in range(4):
-        nieuw = unicodedata.normalize("NFKC", html.unescape(tekst))
+@functools.lru_cache(maxsize=1)
+def _cf_tabel() -> Dict[int, None]:
+    return {cp: None for cp in range(sys.maxunicode + 1)
+            if unicodedata.category(chr(cp)) == "Cf"}
+
+
+def _zonder_opmaaktekens(tekst: str) -> str:
+    """Zonder tekens in Unicode-categorie Cf (zoals U+200B en het zachte afbreekteken)."""
+    return tekst.translate(_cf_tabel())
+
+
+def normaliseer(tekst: str) -> Optional[str]:
+    """Zonder opmaaktekens, HTML-ontsleuteld en NFKC, herhaald tot de tekst niet
+    meer verandert; ``None`` bij meer dan :data:`MAX_LAGEN` lagen."""
+    tekst = _zonder_opmaaktekens(tekst)
+    for _ in range(MAX_LAGEN + 1):
+        nieuw = _zonder_opmaaktekens(unicodedata.normalize("NFKC", html.unescape(tekst)))
         if nieuw == tekst:
-            break
+            return tekst
         tekst = nieuw
-    return tekst
+    return None
 
 
 def bevat_markering(tekst: Optional[str]) -> bool:
-    return bool(tekst) and MARKERING.search(normaliseer(tekst)) is not None
+    if not tekst:
+        return False
+    schoon = normaliseer(tekst)
+    return schoon is None or MARKERING.search(schoon) is not None
+
+
+def _json(waarde: Any) -> str:
+    return json.dumps(waarde, ensure_ascii=False, default=str)
 
 
 def _teksten_van(verzoek: ImportRequest) -> Iterable[str]:
-    """Elk tekstveld van het verzoek, en de fragmenten aaneengeschakeld."""
+    """Elk tekstveld van het verzoek, en titel en fragmenten aaneengeschakeld."""
     geordend = sorted(verzoek.chunks, key=lambda c: c.seq)
-    yield "".join(c.text for c in geordend)
-    yield verzoek.source.title or ""
+    yield (verzoek.source.title or "") + "".join(c.text for c in geordend)
     yield verzoek.source.external_id
     yield verzoek.source.location
+    yield verzoek.source.type
+    yield verzoek.source_version.feed_item_id or ""
+    yield _json(verzoek.extraction.model_dump())
+    yield _json(verzoek.classification.model_dump())
     for c in geordend:
         yield c.doc_ref or ""
         yield c.element_type
         yield c.printed_page or ""
         yield "".join(c.section_path)
-        yield json.dumps(c.labels, ensure_ascii=False)
+        yield _json(c.labels)
     if verzoek.structure is not None:
-        yield json.dumps(verzoek.structure.content, ensure_ascii=False)
+        yield _json(verzoek.structure.model_dump())
 
 
-def lees_origineel(pad: Path, archief: Path) -> Origineel:
-    """Lees het origineel één keer: SHA-256, markering (UTF-8, en UTF-16 bij een
-    BOM) en een kopie in het archief van de fork."""
+def _decoders(eerste: bytes) -> List[Any]:
+    """UTF-8 altijd; UTF-16 bij een BOM, en UTF-16LE of -BE zonder BOM als veel
+    bytes op oneven (of even) posities nul zijn."""
+    decoders = [codecs.getincrementaldecoder("utf-8")("replace")]
+    if eerste.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        decoders.append(codecs.getincrementaldecoder("utf-16")("replace"))
+        return decoders
+    proef = eerste[:4096]
+    if len(proef) >= 4:
+        oneven = proef[1::2].count(0) / max(1, len(proef[1::2]))
+        even = proef[0::2].count(0) / max(1, len(proef[0::2]))
+        if oneven > 0.3:
+            decoders.append(codecs.getincrementaldecoder("utf-16-le")("replace"))
+        if even > 0.3:
+            decoders.append(codecs.getincrementaldecoder("utf-16-be")("replace"))
+    return decoders
+
+
+def open_in_archief(pad: Path, root: Path) -> int:
+    """Open ``pad`` alleen-lezend, zonder een symbolische koppeling te volgen, en
+    toets daarna dat het geopende bestand een gewoon bestand binnen ``root`` is
+    (``fstat`` en het echte pad van de bestandsbeschrijver). ``OSError`` anders."""
+    fd = os.open(pad, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("geen gewoon bestand")
+        proc = Path(f"/proc/self/fd/{fd}")
+        echt = Path(os.path.realpath(proc if proc.exists() else pad))
+        if not echt.is_relative_to(root.resolve()):
+            raise OSError("buiten het bronarchief")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def lees_origineel(fd: int, archief: Path) -> Origineel:
+    """Lees het geopende origineel één keer: SHA-256, markering (UTF-8, en UTF-16
+    bij een BOM of veel nulbytes) en een kopie in het archief van de fork."""
     archief.mkdir(parents=True, exist_ok=True)
     h = hashlib.sha256()
     decoders: List[Any] = []
     staarten: List[str] = []
     gevonden = False
-    fd, naam = tempfile.mkstemp(dir=archief, prefix=".import-")
+    tfd, naam = tempfile.mkstemp(dir=archief, prefix=".import-")
     try:
-        with os.fdopen(fd, "wb") as kopie, open(pad, "rb") as f:
+        with os.fdopen(tfd, "wb") as kopie, os.fdopen(fd, "rb") as f:
             eerste = True
             for blok in iter(lambda: f.read(_BLOK), b""):
                 h.update(blok)
                 kopie.write(blok)
                 if eerste:
-                    decoders = [codecs.getincrementaldecoder("utf-8")("replace")]
-                    if blok.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
-                        decoders.append(codecs.getincrementaldecoder("utf-16")("replace"))
+                    decoders = _decoders(blok)
                     staarten = ["" for _ in decoders]
                     eerste = False
                 for i, dec in enumerate(decoders):
                     venster = staarten[i] + dec.decode(blok)
-                    gevonden = gevonden or MARKERING.search(normaliseer(venster)) is not None
+                    gevonden = gevonden or bevat_markering(venster)
                     staarten[i] = venster[-_OVERLAP:]
     except BaseException:
         Path(naam).unlink(missing_ok=True)
@@ -269,17 +371,21 @@ class ImportService:
         raise ImportWeigering(422, "afgeleide_tekst",
                               "Invoer bevat de markering van het gegenereerde blok")
 
-    def _origineel(self, original: str) -> Path:
-        root = Path(self._bronarchief or config.get_bronarchief()).resolve()
+    def _open_origineel(self, original: str) -> int:
+        """De bestandsbeschrijver van het origineel in het bronarchief; 422 als het
+        pad buiten het archief valt, een koppeling is of niet bestaat."""
+        root = Path(self._bronarchief or config.get_bronarchief())
         rel = original.strip().replace("\\", "/")
         if rel.startswith("bronarchief/"):
             rel = rel[len("bronarchief/"):]
-        if not rel or rel.startswith("/") or ":" in rel:
+        delen = rel.split("/")
+        if not rel or rel.startswith("/") or ":" in rel or ".." in delen:
             raise ImportWeigering(422, "origineel", "Origineel niet in het bronarchief")
-        pad = (root / rel).resolve()
-        if not pad.is_relative_to(root) or not pad.is_file():
-            raise ImportWeigering(422, "origineel", "Origineel niet in het bronarchief")
-        return pad
+        try:
+            return open_in_archief(root / rel, root)
+        except OSError:
+            raise ImportWeigering(422, "origineel",
+                                  "Origineel niet in het bronarchief") from None
 
     @staticmethod
     def _zelfde_id(gevraagd: Optional[str], van_run: Optional[str], tabel: str) -> bool:
@@ -296,6 +402,18 @@ class ImportService:
     # -- Import -------------------------------------------------------------
 
     async def importeer(self, verzoek: ImportRequest, *, key_id: str) -> ImportResultaat:
+        """Importeer; per bron één tegelijk.
+
+        Binnen het proces van de fork gaan imports voor hetzelfde externe id na
+        elkaar (:func:`_slot`). De teller op de bron (migratie 96) serialiseert
+        daarnaast in de database; onder SurrealDB v2.7.0 ging daar bij veel
+        gelijktijdige transacties af en toe een ophoging verloren, vandaar ook
+        het slot.
+        """
+        async with _slot(verzoek.source.external_id):
+            return await self._met_pogingen(verzoek, key_id=key_id)
+
+    async def _met_pogingen(self, verzoek: ImportRequest, *, key_id: str) -> ImportResultaat:
         for poging in range(POGINGEN):
             try:
                 return await self._importeer(verzoek, key_id=key_id)
@@ -306,7 +424,7 @@ class ImportService:
                 # een volgnummer: opnieuw lezen en opnieuw proberen.
                 if not (is_schrijfconflict(e) or any(i in str(e) for i in _GELIJKTIJDIG)):
                     raise
-                await asyncio.sleep(0.02 * (poging + 1))
+                await asyncio.sleep(random.uniform(0.01, 0.05) * (poging + 1))
         raise ImportWeigering(409, "gelijktijdig", "Gelijktijdige wijziging; probeer opnieuw")
 
     async def _importeer(self, verzoek: ImportRequest, *, key_id: str) -> ImportResultaat:
@@ -353,9 +471,9 @@ class ImportService:
             raise BindingError("bron hoort niet bij de batch")
 
         # 4. Ruwe inhoud: één leesgang voor hash, markering en kopie.
-        pad = self._origineel(verzoek.source_version.original)
+        fd = self._open_origineel(verzoek.source_version.original)
         archief = Path(self._fork_archief or config.get_fork_archief())
-        origineel = await asyncio.to_thread(lees_origineel, pad, archief)
+        origineel = await asyncio.to_thread(lees_origineel, fd, archief)
         try:
             return await self._verder(verzoek, run, invoer, locatie, origineel)
         finally:
@@ -409,7 +527,15 @@ class ImportService:
             if versie is not None:
                 return await self._bekend(verzoek, run_id, bron, versie, klasse)
 
-        await asyncio.to_thread(origineel.bewaar)
+        try:
+            await asyncio.to_thread(origineel.bewaar)
+        except ArchiefFout:
+            logger.error("Archief van de fork: bestaand bestand klopt niet ({h})",
+                         h=origineel.hexhash)
+            await self.run_repo.append_log(run_id, [_logregel(
+                "archief_onjuist", "Bestaand bestand in het archief van de fork klopt niet")])
+            raise ImportWeigering(409, "archief_onjuist",
+                                  "Archief van de fork klopt niet") from None
         return await self._nieuw(verzoek, run_id, bron, regel_id, origineel, klasse)
 
     async def _bekend(self, verzoek, run_id, bron, versie, klasse) -> ImportResultaat:

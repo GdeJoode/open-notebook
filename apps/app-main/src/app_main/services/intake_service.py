@@ -264,9 +264,11 @@ class IntakeService:
             door=person, logs=[log])
 
     async def mark_processed(
-        self, item_id: str, *, rev: int, run_id: Optional[str], door: str
+        self, item_id: str, *, rev: int, run_id: Optional[str], door: str,
+        key_id: Optional[str] = None,
     ) -> IntakeItem:
-        """Zet een besloten item op ``verwerkt`` (``pijplijn``)."""
+        """Zet een besloten item op ``verwerkt`` (``pijplijn``); een run moet aan
+        het item gebonden zijn en door dezelfde sleutel zijn aangemaakt (F2-14)."""
         huidig = await self.get_item(item_id)
         controleer_rev(rev, huidig.rev, huidig.id)
         if huidig.status != "besloten":
@@ -278,7 +280,8 @@ class IntakeService:
                 raise InvalidInputError("Geen id van een verwerkingsrun")
             # Alleen een run die aan dit item gebonden is (F2-14).
             gelezen = await self.run_repo.get(str(run))
-            if gelezen is None or gelezen.intake_item != str(huidig.id):
+            if (gelezen is None or gelezen.intake_item != str(huidig.id)
+                    or not gelezen.created_by_key or gelezen.created_by_key != key_id):
                 raise BindingError("run hoort niet bij het item")
             data["run"] = run
         return await self.item_repo.update(str(huidig.id), rev=huidig.rev, data=data, door=door)
