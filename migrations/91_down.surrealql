@@ -1,12 +1,15 @@
 -- Migratie 91 terug (F2-05). Idempotent.
 --
 -- De zoekfuncties krijgen hun vorm uit migratie 4 (`fn::text_search`) en 9
--- (`fn::vector_search`) terug, met `$sources` en `$show_notes`. `is_derived`
--- en de index op `chunk.text` vervallen. `source.full_text` komt terug als
+-- (`fn::vector_search`) terug, met `$sources` en `$show_notes`. `is_derived`,
+-- de index op `chunk.text` en de tabel `chunk_extern` vervallen.
+-- `source.full_text` komt terug als
 -- optioneel veld met zijn index; de tekst zelf komt niet terug (die is uit de
 -- fragmenten samen te stellen).
 
 REMOVE INDEX IF EXISTS idx_chunk_text ON chunk;
+REMOVE EVENT IF EXISTS chunk_extern_bijhouden ON chunk;
+REMOVE TABLE IF EXISTS chunk_extern;
 REMOVE FIELD IF EXISTS is_derived ON note;
 REMOVE FIELD IF EXISTS is_derived ON source_insight;
 

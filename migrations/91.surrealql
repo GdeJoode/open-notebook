@@ -19,22 +19,57 @@
 --    tekst van de fragmenten van haar huidige versie. Tekstzoeken gebruikt een
 --    BM25-index op `chunk.text`.
 
--- 3a. Tekstzoeken op het fragment.
+-- 3a. Tekstzoeken op het fragment. Het externe bereik heeft een eigen tabel
+--     `chunk_extern` met een eigen BM25-index: alleen externe fragmenten staan
+--     erin, dus de documentfrequentie (IDF), het aantal documenten en de
+--     gemiddelde lengte tellen alleen externe fragmenten mee. Score en volgorde
+--     van externe treffers verraden zo niets over interne fragmenten (review
+--     F2-05). Een veld op `chunk` met een eigen index volstaat niet: onder
+--     v2.7.0 telt een index ook records met `NONE` mee.
+--     Een event op `chunk` houdt `chunk_extern` bij, bij elk schrijven en dus
+--     ook bij een herclassificatie in beide richtingen.
 DEFINE INDEX OVERWRITE idx_chunk_text ON chunk FIELDS text SEARCH ANALYZER my_analyzer BM25 HIGHLIGHTS;
+DEFINE TABLE OVERWRITE chunk_extern SCHEMAFULL;
+DEFINE FIELD OVERWRITE chunk ON chunk_extern TYPE record<chunk>;
+DEFINE FIELD OVERWRITE text ON chunk_extern TYPE string;
+DEFINE INDEX OVERWRITE idx_chunk_extern_text ON chunk_extern FIELDS text SEARCH ANALYZER my_analyzer BM25 HIGHLIGHTS;
+DEFINE EVENT OVERWRITE chunk_extern_bijhouden ON chunk WHEN true THEN {
+    LET $doel = type::thing('chunk_extern', record::id(($after OR $before).id));
+    IF $event != 'DELETE' AND $after.classification = 'extern' AND type::is::string($after.text) {
+        UPSERT $doel CONTENT { chunk: $after.id, text: $after.text } RETURN NONE;
+    } ELSE {
+        DELETE $doel RETURN NONE;
+    };
+};
+-- Bestaande fragmenten (de database is leeg, B3; dit houdt de migratie idempotent).
+DELETE chunk_extern WHERE chunk.classification != 'extern' RETURN NONE;
+FOR $c IN (SELECT id, text FROM chunk WHERE classification = 'extern' AND type::is::string(text)) {
+    UPSERT type::thing('chunk_extern', record::id($c.id)) CONTENT { chunk: $c.id, text: $c.text } RETURN NONE;
+};
 
--- 1. Zoekfuncties.
+-- 1. Zoekfuncties. Met alleen 'extern' zoekt de tekstfunctie in
+--    `chunk_extern`; met elk ander bereik in de volledige index op `chunk`.
 REMOVE FUNCTION IF EXISTS fn::text_search;
 DEFINE FUNCTION fn::text_search($query_text: string, $match_count: int, $classifications: array<string>, $history: bool) {
-    LET $treffers = (
-        SELECT id AS chunk, source, search::score(1) AS relevance
+    LET $treffers = IF $classifications = ['extern'] {
+        (SELECT chunk, chunk.source AS source, search::score(1) AS relevance
+        FROM chunk_extern
+        WHERE text @1@ $query_text
+            AND chunk.classification IN $classifications
+            AND chunk.source.classification IN $classifications
+            AND ($history = true
+                OR (chunk.source_version = chunk.source.current_version
+                    AND chunk.run = chunk.source_version.current_run)))
+    } ELSE {
+        (SELECT id AS chunk, source, search::score(1) AS relevance
         FROM chunk
         WHERE text @1@ $query_text
             AND classification IN $classifications
             AND source.classification IN $classifications
             AND ($history = true
                 OR (source_version = source.current_version
-                    AND run = source_version.current_run))
-    );
+                    AND run = source_version.current_run)))
+    };
     RETURN (
         SELECT source AS id, source AS parent_id, source.title AS title,
             math::max(relevance) AS relevance, array::group(chunk) AS chunks

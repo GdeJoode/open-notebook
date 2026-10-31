@@ -331,3 +331,62 @@ async def test_volledigheid_filter_voor_de_rangschikking(live_surrealdb, data) -
         f"gerangschikt): extern gevonden {meting}; zonder filter tekst "
         f"{len(alles['tekst'])}, vector {len(alles['vector'])} van 15"
     )
+
+
+# --------------------------------------------------------------------------
+# BM25 verraadt geen interne documentfrequentie (review F2-05)
+# --------------------------------------------------------------------------
+
+
+async def test_score_en_volgorde_extern_onafhankelijk_van_interne_fragmenten(
+    live_surrealdb, data
+) -> None:
+    """Met bereik ``EXTERN`` telt de BM25-index alleen externe fragmenten mee.
+
+    Interne fragmenten met hetzelfde woord veranderen score en volgorde van
+    externe treffers niet, ook niet in het tekstdeel van hybride zoeken.
+    """
+    woord, vector = _woord(), _richting()
+    await data.bron_met_fragment("extern", f"{woord} openbare tekst een twee drie", vector)
+    await data.bron_met_fragment("extern", f"{woord} {woord} tweede openbare bron", _richting())
+    repo = SearchRepository(live_surrealdb)
+
+    async def meting():
+        tekst = await repo.text_search(woord, 10, scope=EXTERN)
+        hybride = await repo.hybrid_search(woord, vector, 10, 0.99, scope=EXTERN)
+        return (
+            [(h["id"], h["relevance"]) for h in tekst],
+            [(h["id"], h["_combined_score"], h["_text_rank"]) for h in hybride],
+        )
+
+    voor = await meting()
+    for _ in range(15):
+        await data.bron_met_fragment("intern", f"{woord} geheim", _richting())
+    na = await meting()
+    assert len(voor[0]) == 2
+    assert voor == na
+
+
+async def test_externe_index_volgt_herclassificatie(live_surrealdb, data) -> None:
+    woord = _woord()
+    bron = await data.bron_met_fragment("extern", f"{woord} openbaar", _richting())
+    repo = SearchRepository(live_surrealdb)
+    bronnen = SourceRepository(live_surrealdb)
+
+    async def extern_gevonden() -> bool:
+        return bron in _ids(await repo.text_search(woord, 10, scope=EXTERN))
+
+    async def in_externe_index() -> set:
+        return set(await data.q(
+            "SELECT VALUE text FROM chunk_extern WHERE chunk.source = type::thing($b)", {"b": bron}))
+
+    assert await extern_gevonden() and await in_externe_index() == {f"{woord} openbaar"}
+    await bronnen.reclassify(bron, from_classification="extern", to_classification="intern",
+                             reason="Synthetische test", agent_key="agent_keys:t", person="Test")
+    assert await in_externe_index() == set()
+    assert not await extern_gevonden()
+    assert bron in _ids(await repo.text_search(woord, 10, scope=ALLES))
+    await bronnen.reclassify(bron, from_classification="intern", to_classification="extern",
+                             reason="Synthetische test", agent_key="agent_keys:t", person="Test")
+    assert await in_externe_index() == {f"{woord} openbaar"}
+    assert await extern_gevonden()
