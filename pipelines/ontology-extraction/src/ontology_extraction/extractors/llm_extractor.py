@@ -5,26 +5,16 @@ Back-compat shim. New code should call
 B4 confidence-everywhere invariant. This module stays in place so existing
 wiring (``workflow.py`` + tests) keeps working unchanged.
 
-Phase B.1f changes
-==================
+Modelaanroep (F2-08, ADR 0006)
+==============================
 
-The pre-B.1f code attempted ``from llm_manager.manager import LLMManager``
-and called ``manager.generate(...)``. Both symbols are wrong: the class
-is :class:`llm_manager.manager.ModelManager` and there is no
-``generate`` method — the post-rename API is
-``ModelManager().get_model_from_config(model).achat_complete([...])``
-returning an ``esperanto`` ``ChatCompletion``. Until B.1f the import
-raised ``ImportError`` and the extractor silently produced an empty
-result (a silent-failure footgun).
-
-This module now switches to **dependency injection**: callers pass an
-async ``llm_caller`` with the same signature as Pass-2's
-:type:`LLMCaller` alias (``(system_prompt, user_prompt, model) -> str``).
-Defaulting to ``None`` preserves the legacy "no LLM available → empty
-result + WARNING" behaviour, but in production
-:class:`app_main.services.entity_extraction_service.EntityExtractionService`
-wires :func:`_make_default_llm_caller` which goes through
-:class:`ModelManager` properly.
+De extractor roept zelf geen model aan. De aanroeper geeft een async
+``llm_caller`` mee met de vorm van Pass-2's :type:`LLMCaller` alias
+(``(system_prompt, user_prompt, model) -> str``). Zonder caller geeft de
+extractor een leeg resultaat met een WARNING. In de fork levert
+:func:`app_main.services.entity_extraction_service.make_default_llm_caller`
+die caller: hij gaat via ``ModelGate`` naar llama-swap, met de classificatie
+van de fragmenten; het model komt uit het register.
 """
 
 from __future__ import annotations

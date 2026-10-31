@@ -428,10 +428,8 @@ class PreprocessingService:
                 classificatie=classificatie,
             )
             raw = antwoord.tekst
-            logger.debug(
-                f"LLM response length: {len(raw) if raw else 0}, "
-                f"first 200 chars: {repr(raw[:200]) if raw else '(empty)'}"
-            )
+            # Geen modelantwoord in de log, ook niet op debugniveau (F2-08): het
+            # kan inhoud van een interne bron bevatten.
 
             if not raw or not raw.strip():
                 logger.warning("LLM returned empty response for document analysis")

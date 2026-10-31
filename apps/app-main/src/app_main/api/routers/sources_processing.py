@@ -104,7 +104,9 @@ class ReprocessRequest(BaseModel):
 
 class RunEntitiesRequest(BaseModel):
     ontology_name: str = "general"
-    extractor_type: str = "llm"  # "llm" or "langextract"
+    # F2-08: alleen "llm". LangExtract gaat om de modelpoort heen en is
+    # uitgeschakeld; "langextract" geeft 422 bij de aanvraag.
+    extractor_type: Literal["llm"] = "llm"
     # LangExtract-specific options (forwarded when extractor_type == "langextract")
     langextract_model_id: Optional[str] = None
     langextract_model_url: Optional[str] = None

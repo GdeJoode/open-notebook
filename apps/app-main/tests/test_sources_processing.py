@@ -8,7 +8,7 @@ Pins three properties the B.3c UI keys off:
    notebook has ``review_required=True`` and no accepted extensions.
 2. ``multi_schema_enabled: false`` passed through to the queued job
    payload (kill-switch must reach the handler).
-3. langextract-specific options forwarded into the job payload.
+3. ``extractor_type="langextract"`` is refused with 422 (F2-08).
 
 All filesystem / DB / queue interactions are mocked at the
 ``CommandService.submit_command_job`` /
@@ -274,84 +274,24 @@ class TestRunEntitiesPayloadForwarding:
         assert payload["extractor_type"] == "llm"
         assert payload["source_id"] == "source:abc"
 
-    def test_langextract_options_forwarded(self):
-        """langextract-specific options must reach the handler so the
-        worker can build a LangExtractExtractor with the requested
-        config — without forwarding, the UI's per-run model override
-        is silently lost.
-        """
+    def test_langextract_wordt_geweigerd(self):
+        """F2-08: LangExtract gaat om de modelpoort heen; de aanvraag geeft 422 en
+        er wordt geen taak ingediend."""
         source = make_source(id="source:abc")
         svc = _source_svc_returning(source)
-
-        mock_source_repo = MagicMock()
-        mock_source_repo.get_notebook_id = AsyncMock(return_value=None)
-
         submit_spy = AsyncMock(return_value="job:queued1")
 
         with patch(
-            "app_main.dependencies.get_source_repo",
-            return_value=mock_source_repo,
-        ), patch(
             "app_main.services.command_service.CommandService.submit_command_job",
             new=submit_spy,
         ):
             client = _make_app(svc)
             resp = client.post(
                 "/api/sources/source:abc/run-entities",
-                json={
-                    "ontology_name": "general",
-                    "extractor_type": "langextract",
-                    "langextract_model_id": "gemma-7b",
-                    "langextract_model_url": "http://gpu:8000",
-                    "langextract_temperature": 0.1,
-                    "langextract_use_schema_constraints": True,
-                    "langextract_fence_output": False,
-                },
+                json={"ontology_name": "general", "extractor_type": "langextract",
+                      "langextract_model_url": "http://gpu:8000"},
             )
 
-        assert resp.status_code == 200, resp.text
-        args, kwargs = submit_spy.await_args.args, submit_spy.await_args.kwargs
-        payload = args[2] if len(args) >= 3 else kwargs.get("command_args")
-        assert payload is not None
-        assert payload["extractor_type"] == "langextract"
-        assert payload["langextract_model_id"] == "gemma-7b"
-        assert payload["langextract_model_url"] == "http://gpu:8000"
-        assert payload["langextract_temperature"] == 0.1
-        assert payload["langextract_use_schema_constraints"] is True
-        assert payload["langextract_fence_output"] is False
+        assert resp.status_code == 422
+        submit_spy.assert_not_called()
 
-    def test_langextract_path_skips_review_gate(self):
-        """The review-gate check only applies to ``extractor_type=llm``
-        — langextract runs an entirely separate extraction path that
-        does not consult notebook-schema state. Verify the pre-check
-        is not even called for non-llm extractors.
-        """
-        source = make_source(id="source:abc")
-        svc = _source_svc_returning(source)
-
-        mock_source_repo = MagicMock()
-        # Spy will detect any call.
-        mock_source_repo.get_notebook_id = AsyncMock(return_value="notebook:xyz")
-
-        submit_spy = AsyncMock(return_value="job:queued1")
-
-        with patch(
-            "app_main.dependencies.get_source_repo",
-            return_value=mock_source_repo,
-        ), patch(
-            "app_main.services.command_service.CommandService.submit_command_job",
-            new=submit_spy,
-        ):
-            client = _make_app(svc)
-            resp = client.post(
-                "/api/sources/source:abc/run-entities",
-                json={
-                    "ontology_name": "general",
-                    "extractor_type": "langextract",
-                },
-            )
-
-        assert resp.status_code == 200
-        # Pre-check should be skipped — the langextract branch never
-        # consults the notebook-schema state.
-        mock_source_repo.get_notebook_id.assert_not_called()
