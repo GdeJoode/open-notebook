@@ -7,7 +7,7 @@ Fetches authoritative entity lists from:
 - OpenAlex: academic topic taxonomy (4500 topics in 4-level hierarchy)
 
 Downloaded once, stored as YAML in /app/vocabularies/.
-Refreshed on demand via POST /vocabularies/refresh.
+Refreshed on demand via ``refresh_all()``.
 
 Each vocabulary is a list of entries:
   - name: "Gemeente Amsterdam"
