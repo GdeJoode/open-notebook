@@ -7,7 +7,7 @@ wordt de run vastgelegd als ``mislukt`` en volgt HTTP 409. Bij externe invoer
 blijft het een waarschuwing ``niet_vastgelegd`` in het runlogboek.
 
 De invoer is alleen extern als de bronkaartregel van de run extern is, door een
-beheerder bevestigd en actief (ADR 0001, 0020). Zonder regel is de invoer
+beheerder bevestigd en actief, op een openbare route (ADR 0001, 0019, 0020). Zonder regel is de invoer
 onbekend. De run legt id en ``rev`` van zijn regel vast (F2-13).
 
 ``PATCH /api/v1/runs/{id}`` sluit een run af. Een afgesloten run geeft 409. Een
@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from shared.models.processing_run import AFGESLOTEN, ProcessingRun
-from shared.models.source_map import effectieve_classificatie
+from shared.models.source_map import regel_classificatie
 from surrealdb_service.repositories.processing_run import (
     ProcessingRunRepository,
     source_map_rule_snapshot,
@@ -84,10 +84,11 @@ class ProcessingRunService:
         if not regel:
             return "onbekend", None
         rev = regel.get("rev") if isinstance(regel.get("rev"), int) else None
-        return effectieve_classificatie(
+        return regel_classificatie(
             regel.get("classification"),
             regel.get("classification_confirmed_by"),
             active=regel.get("active"),
+            route_type=regel.get("route_type"),
         ), rev
 
     async def start(

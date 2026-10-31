@@ -9,8 +9,9 @@
   standaardclassificatie en wacht; een upload krijgt het voorstel van de
   poortwachter. Tot het besluit van de beheerder geldt ``intern`` (FO 9).
   Het besluit (route en classificatie) neemt alleen een ``beheerder``, met
-  één regel in ``classification_log``.
-* Geen pad in de vault of de exportmap (ADR 0004), net als bij een regel.
+  één regel in ``classification_log``; daarna ligt het vast (409).
+* Paden volgen de locatiecontrole van een regel: onder een innamemap, niet in
+  de vault of de exportmap (ADR 0004).
 """
 
 from __future__ import annotations
@@ -95,6 +96,8 @@ class IntakeService:
             regel = await self.rule_repo.get(source_map_rule)
             if regel is None:
                 raise InvalidInputError("Onbekende bronkaartregel")
+            if regel.route_type != "bulkupload":
+                raise InvalidInputError("Een batch hoort bij een regel voor bulkupload")
             data["source_map_rule"] = eigen_record_id(regel.id, "source_map_rule")
         log = None
         if bevestig:
@@ -135,12 +138,15 @@ class IntakeService:
                 raise InvalidInputError("Alleen extern wordt bevestigd")
             data.update(classification_confirmed_by=person, classification_confirmed_at=_nu())
             na = na.model_copy(update={"classification_confirmed_by": person})
+        # Eén logregel als de effectieve classificatie verandert (bevestiging of
+        # intrekking), zoals bij een bronkaartregel.
         log = None
-        if bevestig or na.classification != huidig.classification:
+        voor, daarna = huidig.effectieve_classificatie, na.effectieve_classificatie
+        if voor != daarna:
             log = logregel(
-                van=huidig.effectieve_classificatie, naar=na.effectieve_classificatie,
-                reden=reason or ("Batch extern bevestigd" if bevestig
-                                 else "Classificatie batch gewijzigd"),
+                van=voor, naar=daarna,
+                reden=reason or ("Batch extern bevestigd" if daarna == "extern"
+                                 else "Bevestiging batch ingetrokken"),
                 key_id=key_id, person=person)
         return await self.batch_repo.update(str(huidig.id), rev=rev, data=data, door=person, log=log)
 
@@ -205,8 +211,9 @@ class IntakeService:
         """Het besluit van de beheerder: route en classificatie (status ``besloten``)."""
         person = beheerder(permission, person)
         huidig = await self.get_item(item_id)
-        if huidig.status == "verwerkt":
-            raise IntakeConflictError("Item is al verwerkt")
+        if huidig.status != "wacht":
+            # Het besluit ligt vast; een ander besluit vraagt een nieuw item.
+            raise IntakeConflictError("Over dit item is al besloten")
         besluit = {"route": route, "classification": classification,
                    "decided_by": person, "decided_at": _nu()}
         log = logregel(van=huidig.effectieve_classificatie, naar=classification,

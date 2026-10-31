@@ -932,6 +932,10 @@ _Classificatie = Literal["intern", "extern"]
 _RouteType = Literal["api", "mcp", "feed", "website", "bulkupload", "watchfolder", "upload"]
 _SourceType = Literal["pdf", "map", "website", "api", "video", "podcast", "mcp"]
 _FetchContent = Literal["metadata", "transcript", "volledige_media", "volledig_document"]
+#: Een flow-id in Git (``route``): letters, cijfers, ``_``, ``-`` en ``.``.
+_ROUTE = r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,127}$"
+#: SHA-256 van de ruwe inhoud, zoals in het importverzoek (plan §5.1).
+_SHA256 = r"^sha256:[0-9a-f]{64}$"
 
 
 class ScheduleModel(BaseModel):
@@ -966,7 +970,7 @@ class SourceMapRuleCreate(BaseModel):
     schedule: Optional[ScheduleModel] = None
     classification: Optional[_Classificatie] = None
     document_type: Optional[List[str]] = None
-    route: str = Field(..., min_length=1)
+    route: str = Field(..., pattern=_ROUTE)
     selection: Optional[List[str]] = None
     label_schema: Optional[LabelSchemaModel] = None
     owner: Optional[str] = None
@@ -990,7 +994,7 @@ class SourceMapRulePatch(BaseModel):
     schedule: Optional[ScheduleModel] = None
     classification: Optional[_Classificatie] = None
     document_type: Optional[List[str]] = None
-    route: Optional[str] = Field(None, min_length=1)
+    route: Optional[str] = Field(None, pattern=_ROUTE)
     selection: Optional[List[str]] = None
     label_schema: Optional[LabelSchemaModel] = None
     owner: Optional[str] = Field(None, min_length=1)
@@ -1038,7 +1042,7 @@ class IntakeBatchCreate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    route: str = Field(..., min_length=1)
+    route: str = Field(..., pattern=_ROUTE)
     files: List[str] = Field(default_factory=list)
     classification: Optional[_Classificatie] = None
     source_map_rule_id: Optional[str] = None
@@ -1050,7 +1054,7 @@ class IntakeBatchPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rev: int
-    route: Optional[str] = Field(None, min_length=1)
+    route: Optional[str] = Field(None, pattern=_ROUTE)
     files: Optional[List[str]] = None
     classification: Optional[_Classificatie] = None
     confirm: bool = False
@@ -1092,7 +1096,7 @@ class IntakeItemCreate(BaseModel):
 
     origin: Literal["watchfolder", "upload", "zonder_regel"]
     path: str = Field(..., min_length=1)
-    content_hash: str = Field(..., min_length=1)
+    content_hash: str = Field(..., pattern=_SHA256)
     gatekeeper: Optional[GatekeeperModel] = None
 
 
@@ -1112,7 +1116,7 @@ class IntakeDecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rev: int
-    route: str = Field(..., min_length=1)
+    route: str = Field(..., pattern=_ROUTE)
     classification: _Classificatie
     reason: Optional[str] = None
 

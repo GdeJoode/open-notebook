@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -197,8 +198,9 @@ async def _regel(classification: str, bevestigd: bool = True) -> str:
             "location": "https://example.org/api", "pipeline_start": "automatisch",
             "route": "inname_pdf", "fetch_content": "volledig_document",
             "classification": classification, "active": True}
-    if bevestigd:
+    if bevestigd and classification == "extern":
         data["classification_confirmed_by"] = "Testpersoon"
+        data["classification_confirmed_at"] = datetime.now(timezone.utc)
     await conn.execute_query("CREATE type::thing($id) CONTENT $d", {"id": rid, "d": data})
     return rid
 
@@ -272,6 +274,9 @@ async def test_flow_buiten_git_met_externe_invoer_geeft_201_met_waarschuwing(
     env, app, git_flows
 ) -> None:
     regel = await _regel("extern")
+    # Een gewijzigde regel: de run neemt de `rev` van dat moment over.
+    await conn.execute_query("UPDATE type::thing($id) SET name = 'Openbare testbron 2'",
+                             {"id": regel})
     async with _client(app) as client:
         resp = await client.post("/api/v1/runs", json=_verzoek(git_flows.head, "0" * 64, regel))
     assert resp.status_code == 201
@@ -281,7 +286,7 @@ async def test_flow_buiten_git_met_externe_invoer_geeft_201_met_waarschuwing(
     assert [r["status"] for r in run["log"]] == ["niet_vastgelegd"]
     assert run["flow_vastgelegd"] is False
     # De fork legt de regel en haar `rev` vast (ADR 0020).
-    assert (run["source_map_rule_id"], run["source_map_rule_rev"]) == (regel, 0)
+    assert run["source_map_rule_id"] == regel and run["source_map_rule_rev"] >= 1
 
     # Zo'n run mag een versie en fragment van een externe bron schrijven, niet
     # van een interne (migratie 90).

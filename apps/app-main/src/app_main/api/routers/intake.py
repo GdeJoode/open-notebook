@@ -17,7 +17,7 @@ Wachtrij (Langflow meldt aan en haalt op; de fork roept Langflow niet aan, B5):
 ``lezen_extern`` en ``lezen_intern`` krijgen op elke route 403.
 """
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Response
 from shared.models.agents import Right
@@ -154,7 +154,7 @@ async def register_item(
 
 @router.get("/items", response_model=List[IntakeItemResponse])
 async def list_items(
-    status: Optional[str] = None,
+    status: Optional[Literal["wacht", "besloten", "verwerkt"]] = None,
     key: AgentKeyContext = Depends(require_right(Right.PIJPLIJN)),
     service: IntakeService = Depends(get_intake_service),
 ):

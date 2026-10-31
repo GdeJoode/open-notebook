@@ -260,3 +260,13 @@ def get_vault_paden() -> list[str]:
 def get_exportmap_paden() -> list[str]:
     """De exportmap van de export naar Obsidian (``SIGNAAL_EXPORTMAP_PADEN``)."""
     return _paden_env("SIGNAAL_EXPORTMAP_PADEN", ())
+
+
+def get_inname_paden() -> list[str]:
+    """De toegestane hoofdmappen voor een padlocatie (``SIGNAAL_INNAME_PADEN``).
+
+    Allowlist: een padlocatie van een bronkaartregel, batchbestand of
+    wachtrij-item moet onder een van deze mappen liggen. Leeg: elk pad wordt
+    geweigerd.
+    """
+    return _paden_env("SIGNAAL_INNAME_PADEN", ())

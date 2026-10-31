@@ -41,6 +41,10 @@ def _opslag(body: Any, velden: Dict[str, Any]) -> Dict[str, Any]:
     """De velden voor de database; ``label_schema`` met de sleutel ``schema``."""
     if getattr(body, "label_schema", None) is not None:
         velden["label_schema"] = body.label_schema.opslag()
+    if getattr(body, "schedule", None) is not None:
+        # Volledig, ook bij PATCH: een DEFAULT onder `schedule` geldt onder
+        # v2.7.0 niet bij een UPDATE.
+        velden["schedule"] = body.schedule.model_dump()
     return velden
 
 
@@ -51,7 +55,7 @@ def fout_naar_http(e: Exception) -> HTTPException:
     if isinstance(e, RecordNotFoundError):
         return HTTPException(status_code=404, detail="Niet gevonden")
     if isinstance(e, VerbodenLocatieError):
-        return HTTPException(status_code=422, detail="Locatie in de vault of de exportmap")
+        return HTTPException(status_code=422, detail="Locatie niet toegestaan")
     if isinstance(e, PermissionError):
         return HTTPException(status_code=403, detail="Onvoldoende recht")
     if isinstance(e, IntakeConflictError):

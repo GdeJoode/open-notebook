@@ -26,6 +26,7 @@ import random
 import re
 import string
 import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -230,6 +231,7 @@ async def _bronkaart(g: Gegevens) -> None:
                  "fetch_content": "volledig_document", "classification": soort}
         if soort == "extern":
             regel["classification_confirmed_by"] = "Beheerder Test"
+            regel["classification_confirmed_at"] = datetime.now(timezone.utc)
         [rij] = await _q("CREATE source_map_rule CONTENT $d RETURN id", {"d": regel})
         doel["source_map_rule"] = str(rij["id"])
         [batch] = await _q("CREATE intake_batch CONTENT $d RETURN id", {"d": {
