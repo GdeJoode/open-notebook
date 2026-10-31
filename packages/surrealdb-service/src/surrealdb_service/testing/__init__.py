@@ -16,10 +16,12 @@ from surrealdb_service.testing.fixtures import (
     SURREALDB_IMAGE,
     docker_available,
     live_surrealdb,
+    live_surrealdb_rocksdb,
 )
 
 __all__ = [
     "SURREALDB_IMAGE",
     "docker_available",
     "live_surrealdb",
+    "live_surrealdb_rocksdb",
 ]

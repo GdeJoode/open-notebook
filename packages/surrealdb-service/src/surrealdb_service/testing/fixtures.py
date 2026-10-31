@@ -124,6 +124,9 @@ def _port_open(host: str, port: int, timeout_s: float = 2.0) -> bool:
 def live_surrealdb() -> Iterator[SurrealDBConfig]:
     """Boot a SurrealDB container, apply all migrations, yield a config.
 
+    Storage engine ``memory``; see :func:`live_surrealdb_rocksdb` for the
+    production engine.
+
     Returns a :class:`SurrealDBConfig` whose ``url`` points at the container.
     The container is torn down at session-end.
 
@@ -135,6 +138,21 @@ def live_surrealdb() -> Iterator[SurrealDBConfig]:
             rows = await execute_query("INFO FOR DB;", config=live_surrealdb)
             ...
     """
+    yield from _live("memory")
+
+
+@pytest.fixture(scope="session")
+def live_surrealdb_rocksdb() -> Iterator[SurrealDBConfig]:
+    """As :func:`live_surrealdb`, on the ``rocksdb`` engine that production uses.
+
+    For tests of concurrent transactions (F2-14): the engines differ in how they
+    detect write conflicts.
+    """
+    yield from _live("rocksdb:/tmp/test.db")
+
+
+def _live(engine: str) -> Iterator[SurrealDBConfig]:
+    """Boot a container with ``engine``, apply all migrations, yield a config."""
     if not docker_available():
         pytest.skip("Docker daemon not reachable — skipping requires_docker tests")
 
@@ -153,7 +171,7 @@ def live_surrealdb() -> Iterator[SurrealDBConfig]:
         DockerContainer(SURREALDB_IMAGE)
         .with_exposed_ports(SURREALDB_INTERNAL_PORT)
         .with_command(
-            "start --log info --user root --pass root memory"
+            f"start --log info --user root --pass root {engine}"
         )
     )
     container.start()

@@ -33,7 +33,7 @@ from shared.models.transformation import DefaultPrompts
 # tests (e.g. test_relation_merge.py) can request ``live_surrealdb`` by name,
 # mirroring packages/surrealdb-service/tests/conftest.py. Auto-skips when Docker
 # is unreachable (see surrealdb_service.testing.fixtures).
-from surrealdb_service.testing import live_surrealdb  # noqa: F401
+from surrealdb_service.testing import live_surrealdb, live_surrealdb_rocksdb  # noqa: F401
 
 _DISABLE_METRICS_KEY = "OPEN_NOTEBOOK_DISABLE_METRICS"
 
