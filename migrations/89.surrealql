@@ -8,11 +8,13 @@
 --    mag niet losser zijn dan die bron (ASSERT; de fork geeft dan HTTP 409).
 -- 2. Van 'intern' naar 'extern' kan alleen binnen een herclassificatie: de
 --    `SourceRepository.reclassify` zet daarvoor `$herclassificatie = true` in
---    zijn transactie. `execute_query` en `execute_transaction` weigeren die
---    vlag in elke andere query, en `tests/test_herclassificatievlag.py` faalt
---    als de vlag elders in de code voorkomt. Een import, de poortwachter of een
---    gewone update faalt dus op de ASSERT. Een rechtstreekse rootverbinding
---    met de database (buiten de fork) kan de vlag wel zetten.
+--    zijn transactie. De verbindingslaag (`execute_query`,
+--    `execute_transaction`) weigert elke andere query die het woord noemt, en
+--    `tests/test_herclassificatievlag.py` faalt als de vlag elders in de code
+--    voorkomt. Een import, de poortwachter of een gewone update faalt dus op
+--    de ASSERT. Vrije SurrealQL met rootrechten heeft geen afscherming: een
+--    rechtstreekse verbinding, of een hulpmiddel dat vrije queries uitvoert
+--    (zoals `query_database` van de MCP-server, dat in F2-02 verdwijnt).
 -- 3. Afgeleide classificatie (ADR 0001): een vermelding (PC.3-herkomst: een
 --    bron in `source_documents`, met het fragment uit
 --    `properties.grounding[bron].chunk_id`) krijgt de strengste waarde van
@@ -150,9 +152,9 @@ DEFINE EVENT OVERWRITE strengste_classificatie ON source
 -- Indexen voor de herberekening. CONTAINSANY gebruikt een index op een
 -- arrayveld (per element); CONTAINS doet dat onder v2.7.0 niet.
 DEFINE INDEX OVERWRITE idx_source_embedding_source ON source_embedding FIELDS source;
--- Geen index op `source_insight.source`: onder v2.7.0 verandert die de vorm
--- van `SELECT VALUE count() ... GROUP ALL` (een object in plaats van een
--- getal), en daarop leunt `sources_crud.py`. Een bron heeft weinig inzichten.
+-- Met deze index geeft `SELECT VALUE count() ... GROUP ALL` onder v2.7.0 een
+-- object in plaats van een getal; `sources_crud.py` pakt beide vormen uit.
+DEFINE INDEX OVERWRITE idx_source_insight_source ON source_insight FIELDS source;
 DEFINE INDEX OVERWRITE idx_entity_alias_source_document ON entity_alias FIELDS source_document;
 DEFINE INDEX OVERWRITE idx_entity_source_documents ON entity FIELDS source_documents;
 DEFINE INDEX OVERWRITE idx_relation_source_documents ON relation FIELDS source_documents;

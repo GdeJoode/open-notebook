@@ -329,7 +329,14 @@ async def get_source(
             "WHERE source = $source_id GROUP ALL",
             {"source_id": ensure_record_id(source.id or source_id)},
         )
-        insights_count = insights_rows[0] if insights_rows else 0
+        # Een kaal getal of een ``{"count": N}``-rij (dat laatste met de index
+        # op ``source_insight.source``, migratie 89): beide uitpakken.
+        insights_count = 0
+        if insights_rows:
+            _eerste = insights_rows[0]
+            insights_count = (
+                _eerste.get("count", 0) if isinstance(_eerste, dict) else (_eerste or 0)
+            )
 
         # Live entity count: count active entities whose source_documents
         # links back to this source. This replaces the previously-read

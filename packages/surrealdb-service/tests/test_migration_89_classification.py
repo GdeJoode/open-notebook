@@ -46,7 +46,7 @@ def _migratie_89_bovenop(live_surrealdb: SurrealDBConfig) -> None:
 
     import surrealdb_service.connection as conn
 
-    asyncio.run(execute_transaction(_migratie(89), config=live_surrealdb))
+    asyncio.run(execute_transaction(_migratie(89), config=live_surrealdb, _herclassificatie=True))
     # De pool hoort nu bij de afgesloten lus van asyncio.run.
     conn._pool = None
 
@@ -179,13 +179,24 @@ async def test_embedding_niet_losser_dan_zijn_fragment(live_surrealdb: SurrealDB
         await _q(live_surrealdb, "UPDATE type::thing($id) SET classification = 'extern'", {"id": rid})
 
 
+@pytest.mark.parametrize("waarde", ["openbaar", "o'brien", "Intern", 5, True, ["extern"]])
 @pytest.mark.parametrize("tabel", EIGEN)
-async def test_onbekende_waarde_wordt_geweigerd(live_surrealdb: SurrealDBConfig, tabel: str) -> None:
+async def test_onbekende_waarde_wordt_geweigerd(
+    live_surrealdb: SurrealDBConfig, tabel: str, waarde
+) -> None:
     bron = await _bron(live_surrealdb, "extern")
     rid = bron if tabel == "source" else await _maak(live_surrealdb, tabel, bron)
-    # Een ongeldige waarde is geen regelschending: 422, geen 409.
-    with pytest.raises(ClassificationValueError):
-        await _q(live_surrealdb, "UPDATE type::thing($id) SET classification = 'openbaar'", {"id": rid})
+    voor = (await _lees(live_surrealdb, rid))["classification"]
+    # Een ongeldige waarde (ook een apostrof of een ander type) is geen
+    # regelschending: 422, geen 409 en geen 500.
+    for uitvoeren in (execute_query, execute_transaction):
+        with pytest.raises(ClassificationValueError):
+            await uitvoeren(
+                "UPDATE type::thing($id) SET classification = $w",
+                {"id": rid, "w": waarde},
+                live_surrealdb,
+            )
+    assert (await _lees(live_surrealdb, rid))["classification"] == voor
 
 
 @pytest.mark.parametrize("tabel", ["source", "note", "notebook", "chunk"])
@@ -217,9 +228,17 @@ async def test_intern_naar_extern_alleen_bij_herclassificatie(
         ("LET $herclassificatie = true; UPDATE type::thing($id) SET classification = 'extern'", {}),
         ("let  $Herclassificatie = true; UPDATE type::thing($id) SET classification = 'extern'", {}),
         ("DEFINE PARAM OVERWRITE $herclassificatie VALUE true", {}),
+        # Reviewvormen: FOR, commentaar ertussen, functieparameter, ontsnapte namen.
+        ("FOR $herclassificatie IN [true] { UPDATE type::thing($id) SET classification = 'extern' }", {}),
+        ("LET /* x */ $herclassificatie = true; UPDATE type::thing($id) SET classification = 'extern'", {}),
+        ("LET -- x\n $herclassificatie = true; UPDATE type::thing($id) SET classification = 'extern'", {}),
+        ("DEFINE FUNCTION OVERWRITE fn::omweg($herclassificatie: bool) {"
+         " UPDATE type::thing($id) SET classification = 'extern' }", {}),
+        ("LET $`herclassificatie` = true; UPDATE type::thing($id) SET classification = 'extern'", {}),
+        ("LET $⟨herclassificatie⟩ = true; UPDATE type::thing($id) SET classification = 'extern'", {}),
     ],
 )
-async def test_de_vlag_kan_niet_van_buiten_worden_gezet(
+async def test_de_verbindingslaag_weigert_elke_vermelding_van_de_vlag(
     live_surrealdb: SurrealDBConfig, sql: str, params: dict
 ) -> None:
     bron = await _bron(live_surrealdb)
@@ -333,8 +352,8 @@ async def test_logregel_wijzigen_of_verwijderen_wordt_geweigerd(live_surrealdb: 
 
 
 async def test_migratie_twee_keer_na_elkaar(live_surrealdb: SurrealDBConfig) -> None:
-    await execute_transaction(_migratie(89), config=live_surrealdb)
-    await execute_transaction(_migratie(89), config=live_surrealdb)
+    await execute_transaction(_migratie(89), config=live_surrealdb, _herclassificatie=True)
+    await execute_transaction(_migratie(89), config=live_surrealdb, _herclassificatie=True)
     bron = await _bron(live_surrealdb)
     assert (await _lees(live_surrealdb, bron))["classification"] == "intern"
 
@@ -380,7 +399,7 @@ async def test_down_draait_terug_en_zet_private_op_alle_bronnen(
         rows = await _q(live_surrealdb, "SELECT VALUE private FROM source")
         assert rows and all(p is True for p in rows)
     finally:
-        await execute_transaction(_migratie(89), config=live_surrealdb)
+        await execute_transaction(_migratie(89), config=live_surrealdb, _herclassificatie=True)
 
     bron = await _bron(live_surrealdb)
     assert (await _lees(live_surrealdb, bron))["classification"] == "intern"

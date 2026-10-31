@@ -31,6 +31,7 @@ REMOVE FIELD IF EXISTS classification ON entity_alias;
 REMOVE FIELD IF EXISTS classification ON triage_queue;
 
 REMOVE INDEX IF EXISTS idx_source_embedding_source ON source_embedding;
+REMOVE INDEX IF EXISTS idx_source_insight_source ON source_insight;
 REMOVE INDEX IF EXISTS idx_entity_alias_source_document ON entity_alias;
 REMOVE INDEX IF EXISTS idx_entity_source_documents ON entity;
 REMOVE INDEX IF EXISTS idx_relation_source_documents ON relation;

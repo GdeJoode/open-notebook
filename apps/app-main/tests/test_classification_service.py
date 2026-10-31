@@ -184,8 +184,9 @@ async def test_een_lege_classificatie_verandert_niets(env) -> None:
 
 async def test_ongeldige_waarde_is_422_en_regelschending_409(env, app) -> None:
     bron = await _bron()
-    with pytest.raises(ClassificationValueError):
-        await SourceRepository().update(bron, {"classification": "openbaar"})
+    for waarde in ("openbaar", "o'brien", 5):
+        with pytest.raises(ClassificationValueError):
+            await SourceRepository().update(bron, {"classification": waarde})
     with pytest.raises(ClassificationConflictError):
         await SourceRepository().update(bron, {"classification": "extern"})
     assert await _classificatie(bron) == "intern"
@@ -194,6 +195,22 @@ async def test_ongeldige_waarde_is_422_en_regelschending_409(env, app) -> None:
         None, ClassificationConflictError("x")
     )
     assert (waarde.status_code, conflict.status_code) == (422, 409)
+
+
+async def test_telling_van_inzichten_met_de_index(env, app) -> None:
+    # Met de index op source_insight.source (migratie 89) geeft
+    # `SELECT VALUE count() ... GROUP ALL` een {"count": N}-rij.
+    bron = await _bron("extern")
+    await _kinderen(bron)
+    await _q(
+        "CREATE source_insight CONTENT $c",
+        {"c": {"source": conn.ensure_record_id(bron), "content": "t", "insight_type": "summary",
+               "embedding": []}},
+    )
+    async with _client(app) as client:
+        resp = await client.get(f"/api/sources/{bron}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["insights_count"] == 2
 
 
 # --------------------------------------------------------------------------
