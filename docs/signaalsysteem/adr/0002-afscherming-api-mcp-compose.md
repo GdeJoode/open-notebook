@@ -97,7 +97,7 @@ Optie 2, in zes onderdelen.
   - de exportgegevens voor Obsidian (ADR 0018) en het codeboek.
   
   `pijplijn` kan niet herclassificeren, geen bronkaartregel of batch aanmaken of op `extern` zetten, geen besluit nemen over een wachtrij-item of triage-item, en geen sleutels, modellen of instellingen beheren.
-- `ophalen`, de sleutel van de container `ophalen` (fase 4), mag alleen `GET /api/v1/source-map-rules/{id}/ophaalcontrole` aanroepen; het antwoord is ja of nee (ADR 0022). Het bereik is leeg: deze sleutel ziet geen records.
+- `ophalen`, de sleutel van de container `ophalen` (fase 4), mag alleen `GET /api/v1/source-map-rules/{rule_id}/ophaalcontrole` aanroepen; het antwoord is ja of nee (ADR 0022). Het bereik is leeg: deze sleutel ziet geen records.
 - `beheerder`, een persoonlijke sleutel met verplichte `person`, krijgt alles. Dat omvat ook herclassificatie, bronkaartregels en batches met hun bevestiging, besluiten in de wachtrijen en de triage, sleutels, modellen, instellingen, chat, ask, podcasts en transformaties. De werkbak (ADR 0016) gebruikt deze sleutel.
 - Chat en ask blijven bestaan (FO 13.2 punt 7), maar zijn voor open-notebook-mcp afgesloten. De tools `ask_question`, `execute_chat`, `create_*`, `update_*`, `delete_*`, `create_model` en `update_settings` krijgen HTTP 403. Er is geen eigen chatfunctie (FO 10).
 - Routes voor entiteiten en de kennisgraaf staan niet op de lijst voor `lezen_extern`. Wanneer een entiteit extern zichtbaar mag zijn, wordt vastgelegd bij de herkomsteindpunten uit FO 10.

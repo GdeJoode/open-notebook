@@ -1,7 +1,7 @@
 # ADR 0019: Classificatie en pipelinestart per innameroute; externe verwerking voor extern
 
 - **Status:** besloten (Geert, 2026-10-30)
-- **Datum:** 2026-10-30; bijgewerkt 2026-10-30 na de review (poortwachter op lokale tekst)
+- **Datum:** 2026-10-30; bijgewerkt 2026-10-30 na de review (poortwachter op lokale tekst); 2026-10-31 uitwerking in F2-13
 - **Raakt FO-paragraaf:** 2 (principe 4), 4, 5 (brontypen, bronkaartregel), 6, 9 (beleidsregel "onbekend is intern"), 12.1 (volledig lokaal); opdracht.md §1, harde eis 4
 - **Wijzigt:** ADR 0001 (standaardclassificatie), ADR 0010 (inname), ADR 0014 (adres van docling-serve)
 
@@ -62,3 +62,15 @@ Optie 2.
 - **FO:** §5 (bronkaartregel en brontypen), §9 (beleidsregels) en §12.1 (volledig lokaal) worden bijgewerkt.
 - **Opdracht:** harde eis 4 in `opdracht.md` §1 wordt bijgewerkt.
 - **Proef P4:** de lektest blijft gelijk, want het filter werkt op het label, niet op de route.
+
+## Uitwerking in F2-13 (31-10)
+
+De bouw (`migrations/93.surrealql`, `SourceMapService`) werkt de tabel "Standaard per route" als volgt uit.
+
+**Besloten** (akkoord reviewer, 31-10):
+
+- **Effectief extern.** Een bronkaartregel is alleen effectief `extern` als hij `extern`, bevestigd en actief is, en alleen op een openbare route: API, MCP, feed of website. Voor watchfolder, losse upload en bulkupload is een regel nooit extern; daar beslist het wachtrij-item (watchfolder) of de batch (bulkupload).
+- **Logregel.** De logregel volgt de effectieve classificatie. Elke overgang van intern naar extern en elke intrekking wordt gelogd, met de persoon.
+- **Bevestiging vervalt.** Elke inhoudelijke wijziging van een regel trekt de bevestiging in, ook het weer aanzetten van een regel. Alleen een wijziging van naam, eigenaar of een beschrijvend veld laat de bevestiging staan.
+- **Bulkupload.** Op regelniveau is `pipeline_start = na_bevestiging`. De route komt van de batch.
+- **Herkomst `zonder_regel`.** Een wachtrij-item kan ook de herkomst `zonder_regel` hebben. Geen regel betekent intern.

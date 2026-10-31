@@ -39,7 +39,7 @@ Optie 2, in zes onderdelen.
 **B. Bronnen ophalen (fase 4): container `ophalen`**
 
 - Een eigen kleine container `ophalen` op `ophalen-intern` en `uitgaand`. Langflow vraagt hem een bron op te halen met het id van een bronkaartregel en een adres.
-- `ophalen` haalt alleen op voor externe routes. Per aanvraag vraagt hij de fork of het mag: `GET /api/v1/source-map-rules/{id}/ophaalcontrole?url=…`. De fork antwoordt alleen ja of nee: ja als de regel actief is, `extern` bevestigd is (ADR 0020), en het adres de `location` van de regel is of op dezelfde host ligt (een item uit de feed van die regel). Bij nee weigert `ophalen` (HTTP 403). Alleen `GET` en `HEAD`.
+- `ophalen` haalt alleen op voor externe routes. Per aanvraag vraagt hij de fork of het mag: `GET /api/v1/source-map-rules/{rule_id}/ophaalcontrole?url=…`. De fork antwoordt alleen ja of nee: ja als de regel actief is, `extern` bevestigd is (ADR 0020), en het adres de `location` van de regel is of op dezelfde host ligt (een item uit de feed van die regel). Bij nee weigert `ophalen` (HTTP 403). Alleen `GET` en `HEAD`.
 - `ophalen` heeft daarvoor een eigen sleutel met het recht `ophalen`, dat alleen dit eindpunt mag aanroepen (ADR 0002 B). Hij heeft geen sleutel met leesrechten: een container met internet ziet zo geen gegevens van de fork. `open-notebook` hangt daarom ook aan `ophalen-intern`.
 - Interne routes (watchfolder, uploads) halen niets op; ze lezen lokale mappen.
 - Hij legt elke aanvraag vast (tijd, regel, adres, status, grootte), zonder inhoud.

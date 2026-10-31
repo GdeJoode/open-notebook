@@ -1,7 +1,7 @@
 # ADR 0020: De bronkaart als tabel in de fork, alleen via de API
 
 - **Status:** besloten (Geert, 2026-10-30)
-- **Datum:** 2026-10-30; bijgewerkt 2026-10-30 na de review (rechten, leesrecht, locatie)
+- **Datum:** 2026-10-30; bijgewerkt 2026-10-30 na de review (rechten, leesrecht, locatie); 2026-10-31 uitwerking in F2-13
 - **Raakt FO-paragraaf:** 5 (bronkaart, bronkaartregel), 6 (regels eerst), 11 (planning en routes in Langflow)
 - **Lost op:** plan van aanpak §8, besluitpunt B2 en aanname A4
 
@@ -49,3 +49,17 @@ Optie 2. Besloten door Geert op 30-10.
 - **Langflow:** leest de regels via `GET /api/v1/source-map-rules` met de sleutel `pijplijn`; de planning (F4-01) en de terugval met APScheduler (ADR 0017 C) gebruiken dezelfde route.
 - **Tests (stopcondities, F2-13):** schemacontrole met de standaardwaarden; een sleutel `lezen_extern` of `lezen_intern` krijgt op elke bronkaart-, batch- en wachtrijroute HTTP 403; een sleutel `pijplijn` kan geen regel of batch aanmaken, wijzigen of bevestigen (HTTP 403); een regel met een locatie in de vault of de exportmap geeft HTTP 422; een wijziging met een verouderde `rev` geeft HTTP 409; een run bevat id en `rev` van zijn regel.
 - **Plan van aanpak:** B2 besloten; aanname A4 vervalt; §5.2 noemt deze ADR.
+
+## Uitwerking in F2-13 (31-10)
+
+De bouw (`migrations/93.surrealql`, `SourceMapService`) wijkt op de volgende punten af van het voorstel hierboven, of vult het aan. De regels voor de classificatie staan in ADR 0019, "Uitwerking in F2-13".
+
+**Besloten** (akkoord reviewer, 31-10):
+
+- **Migratienummer.** De migratie is 93, niet 95.
+- **`fetch_content`.** Standaard `metadata` voor video, anders `volledig_document`.
+- **Wachtrij.** Een besluit over een wachtrij-item ligt vast zodra het item niet meer op `wacht` staat.
+- **Locaties.**
+  - Een padlocatie moet binnen een toegestane hoofdmap liggen (allowlist `SIGNAAL_INNAME_PADEN`). Is die lijst leeg, dan wordt elk pad geweigerd.
+  - Daarnaast worden geweigerd: de vault en de exportmap, Windows-omwegen (`\\?\`, UNC, 8.3-namen, een punt of spatie aan het eind, alternatieve datastromen) en `obsidian://`.
+  - **Restrisico.** `subst` en junctions zijn vanuit de fork niet te zien. `realpath` lost koppelingen op in de container van de fork, niet in die van Langflow. De echte grens is wat Compose koppelt (F2-10).
