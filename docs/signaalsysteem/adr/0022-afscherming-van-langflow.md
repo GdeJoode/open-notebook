@@ -60,6 +60,12 @@ Optie 2, in zes onderdelen.
 **E. Flow buiten Git**
 
 - Een run met een flow die niet in Git staat, mislukt zodra de invoer intern of onbekend is (ADR 0017 B). De fork vergelijkt bij `POST /api/v1/runs` en bij de import de Git-commit en de hash van de flow-JSON met de flows in de repository, en weigert anders (HTTP 409). Bij externe invoer blijft het een waarschuwing `niet_vastgelegd`.
+- **Restrisico** (review F2-04, 31-10). Commit en hash zijn een opgave van Langflow zelf. Wie de hash van het vastgelegde bestand opgeeft, komt door de controle, welke flow er ook echt draait. Beperking:
+  - de fork leest de hashes uit Git (`HEAD`), niet uit de werkmap;
+  - een map met flows met niet-vastgelegde wijzigingen telt als niet vastgelegd;
+  - een opgegeven commit die niet gelijk is aan `HEAD` telt als niet vastgelegd.
+
+  Wat blijft: een Langflow die liegt over de flow die hij draait. De echte afscherming daarvoor is het netwerk en de vaste lijst van componenten (A–D), niet deze controle.
 
 **F. Tracing en sleutels**
 

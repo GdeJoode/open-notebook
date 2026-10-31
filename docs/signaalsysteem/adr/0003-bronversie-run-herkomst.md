@@ -1,7 +1,7 @@
 # ADR 0003: Bronversie, verwerkingsrun en herkomst; herverwerking zonder overschrijven
 
 - **Status:** besloten
-- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 na de review (`doc_node`, `source.full_text`, `models` uit `model_call`)
+- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 na de review (`doc_node`, `source.full_text`, `models` uit `model_call`); 2026-10-31 uitwerking in F2-04 (B26 voorgesteld)
 - **Raakt FO-paragraaf:** 2 (principe 5 en 6), 4 (stap 2 en 9), 5 (planning), 8
 - **Lost op:** verschilanalyse conflict 7, open vraag 5 (de vraag of de run een nieuwe tabel wordt) en open vraag 15
 
@@ -120,3 +120,25 @@ Optie 2, met velden die op PROV-O passen.
   - een test dat een wijziging met een verouderde `rev` HTTP 409 geeft;
   - de toets van fase 2 (FO 15): elk fragment is herleidbaar tot bronversie en run.
 - **Afhankelijkheden:** het importeindpunt (ADR 0010) schrijft deze velden. Het auditlog van modelaanroepen (ADR 0007) verwijst naar `processing_run`.
+
+## Uitwerking in F2-04 (31-10)
+
+De bouw (`migrations/90.surrealql`) wijkt op de volgende punten af van het voorstel hierboven, of vult het aan.
+
+**Besloten** (akkoord reviewer, 31-10):
+
+- **Herkomst onveranderlijk.** `source`, `source_version` en `run` zijn `READONLY` op `chunk` en `doc_node`, en `source` op `source_embedding`. De herkomst hoort bij de eigen bron; een fragment kan niet naar een andere bron, versie of run worden verhangen.
+- **Alleen schrijven in een lopende run.** Een fragment of `doc_node` mag alleen worden aangemaakt bij een run met status `bezig`. Bij een interne bron moet de flow van die run vastgelegd zijn (`processing_run.flow_vastgelegd`, ADR 0022 E).
+- **Trigger `inname`.** Nieuwe triggerwaarde voor de eerste verwerking van een upload of import. `handmatig` blijft alleen voor een correctie door de beheerder (ADR 0005), zodat de bescherming van handmatige runs hierboven niet op gewone inname slaat.
+- **Vermelding.** De vermelding slaat `run` en `classification` op. Een vermelding met een fragment van een andere of onbekende bron wordt geweigerd.
+- **`mentions`** volgt de classificatie van haar bron.
+- **`_down` van 90** laat `processing_run`, `source_version` en de herkomstvelden staan (optioneel, zonder `ASSERT`), zodat een terugdraaiing geen herkomst wist. De index `dn_ref` komt zonder `UNIQUE` terug.
+- **Invoerclassificatie uit de bronkaartregel.** De invoerclassificatie van een run komt uit de bronkaartregel (`source_map_rule`, ADR 0020). Tot F2-13 is die onbekend, en dan geldt intern. F2-13 en F2-14 binden de regel aan de werkelijke bron; de aanroeper kiest hem niet zelf.
+- **Lezers van `provenance_chain`** (voor F3-08): `EntityRepository` (upsert, merge), `notebook_merge_service`, `recanonicalization_service` en `okf_export_service` (alleen een uitsluitingsnotitie). `semantic_intelligence/reasoning.py` heeft een eigen veld met dezelfde naam; dat valt hier buiten.
+
+**Voorgesteld, Geert beslist** (plan van aanpak §8.1, B26):
+
+- **Bekende inhoudshash die niet de huidige versie is**, bijvoorbeeld inhoud A → B → A.
+  - Nu: `register` vindt v1, maar `current_version` blijft v2, en zoeken toont B als actueel.
+  - Voorstel: `current_version` gaat terug naar de bestaande versie v1, met een logregel in de run. Er komt geen nieuwe versie, zodat de unieke index op (`source`, `content_hash`) blijft gelden.
+  - Alternatief: een nieuwe versie v3 met dezelfde hash als v1. Dat bewaart de volgorde als reeks versies, maar de unieke index vervalt.
