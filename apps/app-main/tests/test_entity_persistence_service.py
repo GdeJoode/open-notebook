@@ -581,7 +581,7 @@ class TestPersistFilteredResult:
         not raised — only a fully-empty write is fatal."""
         call_count = {"n": 0}
 
-        async def flaky_upsert(_entity):
+        async def flaky_upsert(_entity, *, run_id=None):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 raise RuntimeError("transient")

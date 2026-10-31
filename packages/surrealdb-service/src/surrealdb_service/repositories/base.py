@@ -125,6 +125,76 @@ class RevWijziging:
 #: Velden die alleen de database of deze functie zet.
 _VERGRENDELVELDEN = ("id", "rev", "modified_by", "modified_at")
 
+#: Wat een automatisch proces (een run, of een proces zonder sleutel van een
+#: beheerder) aan een vastgezette entiteit (``manual_override = true``) mag
+#: toevoegen: vermeldingen en herkomst (voorstel B28). Al het andere, zoals
+#: naam, type, beschrijving, status, ``external_ids``, aliassen en samenvoegen
+#: als winnaar of verliezer, slaat het over via :func:`bewaak_vastgezet`.
+TOEGESTAAN_OP_VASTGEZET = ("source_documents", "properties.grounding", "mentions")
+
+#: Tekst van een schrijfconflict in de opslag (RocksDB onder SurrealDB v2).
+_SCHRIJFCONFLICT = ("read or write conflict", "can be retried", "Transaction conflict")
+
+
+def _is_schrijfconflict(error: BaseException) -> bool:
+    tekst = str(error)
+    return any(t in tekst for t in _SCHRIJFCONFLICT)
+
+
+async def bewaak_vastgezet(
+    record_ids: Sequence[Any],
+    *,
+    actie: str,
+    run_id: Optional[str] = None,
+    config: Optional[SurrealDBConfig] = None,
+) -> set:
+    """De vastgezette records onder ``record_ids``; elk ervan wordt gemeld.
+
+    De ene grens voor alle automatische schrijvers (ADR 0003, voorstel B28):
+    die roepen deze functie aan vóór een wijziging die niet in
+    :data:`TOEGESTAAN_OP_VASTGEZET` valt, en slaan de teruggegeven records
+    over. Per overgeslagen record komt er een regel ``conflict`` in het
+    logboek van de run, of zonder run een ``beheer_melding``. De melding noemt
+    alleen het record en de actie, geen inhoud.
+    """
+    ids = []
+    for r in record_ids:
+        if r:
+            try:
+                ids.append(ensure_record_id(str(r)))
+            except Exception:  # noqa: BLE001 — een ongeldig id is niet vastgezet
+                continue
+    if not ids:
+        return set()
+    rows = await execute_query(
+        "SELECT id FROM $ids WHERE manual_override = true", {"ids": ids}, config
+    )
+    vast = sorted({str(r["id"]) for r in rows or []})
+    if not vast:
+        return set()
+    melding = f"{actie} overgeslagen: manual_override"
+    if run_id:
+        # Late import: zo blijft de basisrepository los van de runrepository.
+        from surrealdb_service.repositories.processing_run import ProcessingRunRepository
+
+        nu = datetime.now(timezone.utc)
+        await ProcessingRunRepository(config).append_log(str(run_id), [
+            {"at": nu, "step": "vergrendeling", "status": "conflict",
+             "message": f"{rid}: {melding}"}
+            for rid in vast
+        ])
+    else:
+        for rid in vast:
+            entity = ensure_record_id(rid)
+            await execute_query(
+                "CREATE beheer_melding CONTENT $d RETURN NONE",
+                {"d": {"soort": "vastgezet_overgeslagen", "melding": melding,
+                       **({"entity": entity} if entity.table_name == "entity" else {})}},
+                config,
+            )
+    logger.info("{n} vastgezette record(s) overgeslagen: {actie}", n=len(vast), actie=actie)
+    return set(vast)
+
 
 async def wijzig_met_rev(
     wijzigingen: Sequence[RevWijziging],
@@ -179,6 +249,10 @@ async def wijzig_met_rev(
     try:
         await execute_transaction("\n".join(regels), params, config)
     except RuntimeError as e:
+        if _is_schrijfconflict(e):
+            # Een gelijktijdige schrijfactie in de opslag: net als een
+            # verouderde rev, opnieuw lezen en opnieuw proberen (HTTP 409).
+            raise RevConflictError([str(rid) for rid in ids]) from None
         if "wijzig_met_rev:" not in str(e):
             if (fout := as_classification_error(e)) is not None:
                 raise fout from e
@@ -207,8 +281,11 @@ async def _wijzig_door_run(
 ) -> List[Optional[Dict[str, Any]]]:
     """Schrijven door een run: ``manual_override`` wint; het conflict gaat in het logboek."""
     uitkomst: List[Optional[Dict[str, Any]]] = []
-    conflicten: List[Dict[str, Any]] = []
+    vast = await bewaak_vastgezet(ids, actie="wijziging", run_id=run_id, config=config)
     for rid, w, data in zip(ids, wijzigingen, datas):
+        if str(rid) in vast:
+            uitkomst.append(None)
+            continue
         params: Dict[str, Any] = {"id": rid, "d": data}
         voorwaarde = "(manual_override = NONE OR manual_override = false)"
         if w.rev is not None:
@@ -219,6 +296,8 @@ async def _wijzig_door_run(
                 f"UPDATE $id MERGE $d WHERE {voorwaarde} RETURN AFTER", params, config
             )
         except Exception as e:
+            if _is_schrijfconflict(e):
+                raise RevConflictError([str(rid)]) from None
             if (fout := as_classification_error(e)) is not None:
                 raise fout from e
             raise
@@ -231,22 +310,11 @@ async def _wijzig_door_run(
         )
         if not staten:
             raise RecordNotFoundError([str(rid)])
-        staat = staten[0]
-        if staat.get("manual_override") is True:
-            conflicten.append({
-                "at": datetime.now(timezone.utc),
-                "step": "vergrendeling",
-                "status": "conflict",
-                "message": f"{rid} heeft manual_override; niet gewijzigd",
-            })
+        if staten[0].get("manual_override") is True:
+            # Tussen de controle en de wijziging vastgezet.
+            await bewaak_vastgezet([rid], actie="wijziging", run_id=run_id, config=config)
         else:
             raise RevConflictError([str(rid)])
-    if conflicten:
-        # Late import: processing_run importeert deze module niet, maar zo
-        # blijft de basisrepository los van de runrepository.
-        from surrealdb_service.repositories.processing_run import ProcessingRunRepository
-
-        await ProcessingRunRepository(config).append_log(str(run_id), conflicten)
     return uitkomst
 
 

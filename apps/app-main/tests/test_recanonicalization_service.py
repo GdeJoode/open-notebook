@@ -98,9 +98,14 @@ class FakeEntityRepo:
         match_type: str,
         similarity_score: float,
         method: str = "",
+        **_kw,
     ) -> bool:
         self.writes.append(f"alias:{canonical_entity_id}:{alias_text}")
         return True
+
+    async def bewaak_vastgezet(self, entity_ids, *, actie, run_id=None):
+        """F2-06 (B28): no row here is pinned; the real guard is tested live."""
+        return set()
 
     async def mark_merged(self, loser_id: str, winner_id: str) -> bool:
         self.writes.append(f"mark_merged:{loser_id}")

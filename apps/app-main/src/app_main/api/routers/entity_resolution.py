@@ -269,7 +269,7 @@ async def apply_merges(
             member_surface_forms=c.member_surface_forms,
             total_source_docs=0,
         )
-        result = await svc.apply_merge(cluster)
+        result = await svc.apply_merge(cluster, door=persoon)
         if result.skipped:
             skipped += 1
         else:
@@ -303,6 +303,10 @@ async def _claim_revs(clusters: List[ApplyClusterIn], persoon: str) -> None:
     F2-06 (ADR 0003): optimistic locking before any cluster is applied. A
     member without a ``rev`` is 422; a stale ``rev`` is 409 and nothing is
     merged. A later writer holding the old ``rev`` gets 409 in turn.
+
+    The claim raises ``rev`` first and commits on its own: when a merge fails
+    after it, the raised ``rev`` stays, and the client reloads before trying
+    again.
     """
     claims: List[RevWijziging] = []
     for c in clusters:

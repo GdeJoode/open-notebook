@@ -35,7 +35,8 @@ class _Recanon:
     def __init__(self) -> None:
         self.applied: List[Any] = []
 
-    async def apply_merge(self, cluster):
+    async def apply_merge(self, cluster, *, door=None, run_id=None):
+        assert door == "Testpersoon"  # a curator's merge, not an automatic one
         self.applied.append(cluster)
         losers = [i for i in cluster.loser_ids if ENTITIES[i]["status"] == "active"]
         return MergeResult(new_canonical=cluster.new_canonical, entity_type=cluster.entity_type,

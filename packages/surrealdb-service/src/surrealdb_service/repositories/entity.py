@@ -23,7 +23,9 @@ from surrealdb_service.connection import (
 )
 from surrealdb_service.repositories.base import (
     RecordNotFoundError,
+    RevConflictError,
     RevWijziging,
+    bewaak_vastgezet,
     wijzig_met_rev,
 )
 
@@ -262,8 +264,15 @@ class EntityRepository:
             )
             return []
 
-    async def upsert_entity(self, entity: Entity) -> str:
+    async def upsert_entity(self, entity: Entity, *, run_id: Optional[str] = None) -> str:
         """Upsert a canonical entity, returning its record ID.
+
+        Upsert is an automatic writer (extraction, OKF import, notebook merge).
+        On a pinned entity (``manual_override = true``) it only adds mentions
+        and provenance (``source_documents``, ``properties.grounding``; voorstel
+        B28); every other change is skipped and reported through
+        :func:`bewaak_vastgezet`, in the log of ``run_id`` or, without a run,
+        as a ``beheer_melding``.
 
         Lookup is by ``(canonical_name, entity_type)`` — the unique-index pair
         declared in migration 39 (``idx_entity_name_type``). When a row with
@@ -400,6 +409,10 @@ class EntityRepository:
                 # lacking the column reads as False.
                 "manual_override": bool(existing.get("manual_override") or False),
             }
+            if update_payload["manual_override"]:
+                update_payload = await self._alleen_vermeldingen(
+                    existing, update_payload, merged_grounding, run_id
+                )
             try:
                 await execute_query(
                     """
@@ -497,6 +510,39 @@ class EntityRepository:
             )
         return str(result[0]["id"])
 
+    async def bewaak_vastgezet(
+        self, entity_ids: List[str], *, actie: str, run_id: Optional[str] = None
+    ) -> set:
+        """:func:`bewaak_vastgezet` with this repository's database (voorstel B28)."""
+        return await bewaak_vastgezet(entity_ids, actie=actie, run_id=run_id, config=self.config)
+
+    async def _alleen_vermeldingen(
+        self,
+        existing: Dict[str, Any],
+        payload: Dict[str, Any],
+        merged_grounding: Optional[Dict[str, Any]],
+        run_id: Optional[str],
+    ) -> Dict[str, Any]:
+        """The upsert payload for a pinned entity: only mentions are added (B28)."""
+        properties = dict(existing.get("properties") or {})
+        if merged_grounding:
+            properties["grounding"] = merged_grounding
+        beperkt = {
+            **payload,
+            "confidence": float(existing.get("confidence") or 0.0),
+            "properties": properties,
+            "type_tags": list(existing.get("type_tags") or []),
+            "primary_type": existing.get("primary_type"),
+            "provenance_chain": list(existing.get("provenance_chain") or []),
+        }
+        if any(beperkt[k] != payload[k] for k in
+               ("confidence", "properties", "type_tags", "primary_type", "provenance_chain")):
+            await bewaak_vastgezet(
+                [existing["id"]], actie="upsert buiten vermeldingen",
+                run_id=run_id, config=self.config,
+            )
+        return beperkt
+
     async def get_entity(self, record_id: str) -> Optional[Entity]:
         """Fetch a single entity by record ID, returning a typed ``Entity``.
 
@@ -588,6 +634,10 @@ class EntityRepository:
             except RecordNotFoundError:
                 return False
             return na is not None
+        if respect_override and await bewaak_vastgezet(
+            [rid], actie="status", config=self.config
+        ):
+            return False
 
         # Condition the UPDATE on the override flag in the query itself so the
         # check and the write are one atomic statement. ``UPDATE`` returns the
@@ -658,6 +708,8 @@ class EntityRepository:
             await wijzig_met_rev([RevWijziging(rid, rev, data)], door=door, config=self.config)
         except RecordNotFoundError:
             return False
+        except RevConflictError:
+            raise  # a stale rev is the caller's 409, not a failure to log
         except Exception as e:
             logger.exception(
                 f"set_manual_override failed for {entity_id} "
@@ -886,8 +938,14 @@ class EntityRepository:
         entity_id: str,
         external_ids: List[str],
         aliases: Optional[List[str]] = None,
+        *,
+        run_id: Optional[str] = None,
     ) -> bool:
         """Union the reconciled external_ids (+ aliases) onto an entity (K.4).
+
+        An automatic writer: a pinned entity is skipped and reported through
+        :func:`bewaak_vastgezet` (voorstel B28); then this returns ``False``.
+        The curator's TOOI link goes through the triage decision instead.
 
         The vocabulary reconciler (K.4) calls this after linking an entity to a
         single high-confidence ``reference_entity``. The write is dedup-preserving
@@ -911,30 +969,47 @@ class EntityRepository:
         except Exception as e:
             logger.error(f"update_external_ids: invalid id '{entity_id}': {e}")
             return False
+        if await bewaak_vastgezet([rid], actie="external_ids", run_id=run_id, config=self.config):
+            return False
         try:
-            existing_rows = await execute_query(
-                "SELECT external_ids, aliases FROM type::thing($id) LIMIT 1;",
-                {"id": rid},
-                self.config,
-            )
-            existing = existing_rows[0] if existing_rows else {}
-            merged_ids = _union_preserve_order(
-                existing.get("external_ids") or [], list(external_ids or [])
-            )
-            merged_aliases = _union_preserve_order(
-                existing.get("aliases") or [], list(aliases or [])
-            )
+            data = await self.external_ids_wijziging(entity_id, external_ids, aliases)
             await execute_query(
                 "UPDATE type::thing($id) SET "
                 "external_ids = $ext, aliases = $aliases, "
                 "updated_at = time::now();",
-                {"id": rid, "ext": merged_ids, "aliases": merged_aliases},
+                {"id": rid, "ext": (data or {}).get("external_ids", []),
+                 "aliases": (data or {}).get("aliases", [])},
                 self.config,
             )
         except Exception as e:
             logger.error(f"update_external_ids failed for '{entity_id}': {e}")
             return False
         return True
+
+    async def external_ids_wijziging(
+        self,
+        entity_id: str,
+        external_ids: List[str],
+        aliases: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """``external_ids`` and ``aliases`` after the union, or ``None`` if absent.
+
+        The data for a write; the caller writes it (``update_external_ids``, or
+        the triage decision in one transaction with its row, F2-06).
+        """
+        rows = await execute_query(
+            "SELECT external_ids, aliases FROM $id",
+            {"id": ensure_record_id(entity_id)},
+            self.config,
+        )
+        if not rows:
+            return None
+        return {
+            "external_ids": _union_preserve_order(
+                rows[0].get("external_ids") or [], list(external_ids or [])
+            ),
+            "aliases": _union_preserve_order(rows[0].get("aliases") or [], list(aliases or [])),
+        }
 
     async def list_active_entities(
         self, source_ids: Optional[List[str]] = None
@@ -1252,8 +1327,15 @@ class EntityRepository:
         match_type: str,
         similarity_score: float,
         method: str = "",
+        *,
+        door: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> bool:
         """Register a new alias for a canonical entity.
+
+        Without ``door`` (the person of a ``beheerder`` key) this is an
+        automatic write: a pinned entity gets no alias, reported through
+        :func:`bewaak_vastgezet` (voorstel B28); then this returns ``False``.
 
         Creates a mapping from the given alias text to the specified
         canonical entity. If the alias already exists for this entity,
@@ -1273,6 +1355,10 @@ class EntityRepository:
             failure.
         """
         if not canonical_entity_id or not alias_text:
+            return False
+        if door is None and await bewaak_vastgezet(
+            [canonical_entity_id], actie="alias", run_id=run_id, config=self.config
+        ):
             return False
 
         try:

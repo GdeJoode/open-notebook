@@ -14,7 +14,9 @@
 -- 4. Een handmatige run is beschermd: `source_version.current_run` gaat niet
 --    van een handmatige run naar een run met een andere trigger. De fork logt
 --    dat in de run en zet een melding in `beheer_melding` (ADR 0003).
--- 5. `beheer_melding`: de wachtrij van de beheerder voor meldingen van runs.
+-- 5. `beheer_melding`: de wachtrij van de beheerder voor meldingen van runs,
+--    en van automatische processen zonder run die een vastgezette entiteit
+--    (`manual_override`) niet mochten wijzigen (voorstel B28).
 --
 -- Lege database (B3): geen omzetting van bestaande records. Idempotent via
 -- OVERWRITE. Alleen hele regels commentaar: de migratieloader plakt de regels
@@ -63,12 +65,13 @@ DEFINE FIELD OVERWRITE current_run ON source_version TYPE record<processing_run>
 -- bron, alleen verwijzingen en een vaste melding.
 DEFINE TABLE OVERWRITE beheer_melding SCHEMAFULL;
 DEFINE FIELD OVERWRITE soort ON beheer_melding TYPE string READONLY
-    ASSERT $value IN ['handmatige_run_beschermd'];
+    ASSERT $value IN ['handmatige_run_beschermd', 'vastgezet_overgeslagen'];
 DEFINE FIELD OVERWRITE melding ON beheer_melding TYPE string READONLY;
 DEFINE FIELD OVERWRITE source ON beheer_melding TYPE option<record<source>> READONLY;
 DEFINE FIELD OVERWRITE source_version ON beheer_melding TYPE option<record<source_version>> READONLY;
 DEFINE FIELD OVERWRITE run ON beheer_melding TYPE option<record<processing_run>> READONLY;
 DEFINE FIELD OVERWRITE current_run ON beheer_melding TYPE option<record<processing_run>> READONLY;
+DEFINE FIELD OVERWRITE entity ON beheer_melding TYPE option<record<entity>> READONLY;
 DEFINE FIELD OVERWRITE status ON beheer_melding TYPE string DEFAULT 'open'
     ASSERT $value IN ['open', 'afgehandeld'];
 DEFINE FIELD OVERWRITE created_at ON beheer_melding TYPE datetime DEFAULT time::now() READONLY;

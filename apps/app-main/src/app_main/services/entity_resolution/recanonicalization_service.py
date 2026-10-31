@@ -217,8 +217,20 @@ class RecanonicalizationService:
     # Apply (mutating — guarded behind apply_plan's dry_run default)
     # ------------------------------------------------------------------
 
-    async def apply_merge(self, cluster: MergeCluster) -> MergeResult:
+    async def apply_merge(
+        self,
+        cluster: MergeCluster,
+        *,
+        door: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> MergeResult:
         """Apply one cluster's merge as a single logical operation.
+
+        ``door`` is the person of a ``beheerder`` key (``POST /apply``). Without
+        it the merge is automatic (OKF import): a cluster with a pinned winner
+        or loser (``manual_override``) is skipped whole and reported through
+        :meth:`EntityRepository.bewaak_vastgezet`, in the log of ``run_id`` or as a
+        ``beheer_melding`` (voorstel B28).
 
         Steps (idempotent throughout):
             1. Re-point every ``relation`` edge from each loser onto the winner
@@ -247,6 +259,20 @@ class RecanonicalizationService:
             A ``MergeResult`` describing what changed (or ``skipped=True`` when
             the cluster was already fully merged).
         """
+        skipped = MergeResult(
+            new_canonical=cluster.new_canonical,
+            entity_type=cluster.entity_type,
+            winner_id=cluster.winner_id,
+            merged_loser_ids=[],
+            relations_repointed=0,
+            aliases_created=0,
+            skipped=True,
+        )
+        if door is None and await self.entity_repo.bewaak_vastgezet(
+            [cluster.winner_id, *cluster.loser_ids], actie="samenvoegen", run_id=run_id,
+        ):
+            return skipped
+
         # Idempotency gate: only operate on losers that are still active.
         active_losers = await self._active_loser_rows(cluster.loser_ids)
         if not active_losers:
@@ -291,6 +317,7 @@ class RecanonicalizationService:
                 match_type="exact",
                 similarity_score=1.0,
                 method="recanonicalization",
+                door=door or "systeem:recanonicalization",
             )
             if ok:
                 aliases_created += 1

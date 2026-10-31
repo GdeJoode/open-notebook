@@ -737,7 +737,11 @@ class EntityPersistenceService:
                     embedding=embedding_vec,
                     extraction_method=extraction_method,
                 )
-                upserted_id = await self._entity_repo.upsert_entity(entity_model)
+                # B28: op een vastgezette entiteit alleen vermeldingen; een
+                # overgeslagen wijziging komt in het logboek van de run.
+                upserted_id = await self._entity_repo.upsert_entity(
+                    entity_model, run_id=run_id
+                )
                 entities_upserted += 1
                 if upserted_id:
                     persisted_entity_ids.append(str(upserted_id))
