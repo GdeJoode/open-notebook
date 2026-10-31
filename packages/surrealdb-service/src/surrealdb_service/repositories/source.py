@@ -26,6 +26,25 @@ from surrealdb_service.repositories.source_version import NIEUWE_VERSIE
 
 #: De ``THROW`` van een externe import waarvan de inhoud intern bekend is.
 INHOUD_INTERN_BEKEND = "inhoud:intern_bekend"
+#: De ``THROW`` van een herclassificatie naar extern terwijl elders dezelfde
+#: inhoud intern is (F2-14, migratie 98).
+INHOUD_ELDERS_INTERN = "inhoud:elders_intern"
+
+
+class InhoudEldersInternError(RuntimeError):
+    """Herclassificatie naar extern, terwijl andere records dezelfde inhoud
+    intern houden (HTTP 409 ``inhoud_elders_intern``)."""
+
+    def __init__(self, records: List[str]) -> None:
+        super().__init__(INHOUD_ELDERS_INTERN)
+        self.records = records
+        #: Het antwoord: vaste code en melding, en de id's van de records
+        #: (geen inhoud).
+        self.detail = {
+            "code": "inhoud_elders_intern",
+            "melding": "Dezelfde inhoud is elders intern; herclassificeer die eerst",
+            "records": records,
+        }
 
 # The ``processing_stage`` filter shared by the sources list (``?stage=``) and
 # the Werkbak (WB.1), so both count the same rows. The field is a strict string
@@ -42,13 +61,27 @@ STAGE_IN = "processing_stage IN $stages"
 # alleen naar 'intern' (een afgeleide tekst wordt niet losser). De afgeleide
 # records worden opnieuw berekend (VALUE in migratie 89; een entiteit werkt
 # via een EVENT haar relaties, aliassen en triage-items bij), net als de
-# graafrelatie ``mentions`` (migratie 90). Daarna precies
-# één logregel. Faalt één stap, dan verandert niets.
+# graafrelatie ``mentions`` (migratie 90). Naar extern (F2-14, migratie 98):
+# het record ``inhoud`` van elke hash van de bron gaat alleen terug naar
+# extern als geen andere versie, item of batch die inhoud intern houdt; anders
+# ``THROW`` met :data:`INHOUD_ELDERS_INTERN`. Alleen hier staat
+# ``$beheer_inhoud_los``. Daarna precies één logregel. Faalt één stap, dan
+# verandert niets.
 _HERCLASSIFICATIE = """
 BEGIN TRANSACTION;
 LET $herclassificatie = true;
+LET $beheer_inhoud_los = $naar = 'extern';
 LET $huidig = (SELECT VALUE classification FROM ONLY $bron);
 IF $huidig != $van { THROW 'classificatie is intussen gewijzigd' };
+LET $hashes = array::distinct((SELECT VALUE content_hash FROM source_version WHERE source = $bron));
+IF $naar = 'extern' AND array::len(fn::inhoud_elders_intern($hashes, $bron)) > 0 {
+    THROW 'inhoud:elders_intern'
+};
+IF $naar = 'extern' {
+    FOR $h IN $hashes {
+        UPDATE type::thing('inhoud', $h) SET classification = 'extern' RETURN NONE;
+    };
+};
 UPDATE $bron SET classification = $naar RETURN NONE;
 UPDATE source_version SET classification = $naar WHERE source = $bron RETURN NONE;
 UPDATE chunk SET classification = $naar WHERE source = $bron RETURN NONE;
@@ -221,6 +254,9 @@ class SourceRepository(BaseRepository[Source]):
         except ClassificationConflictError:
             raise
         except RuntimeError as e:
+            if INHOUD_ELDERS_INTERN in str(e):
+                raise InhoudEldersInternError(
+                    await self.inhoud_elders_intern(source_id)) from e
             if "intussen gewijzigd" in str(e):
                 raise ClassificationConflictError(str(e)) from e
             raise
@@ -331,6 +367,17 @@ class SourceRepository(BaseRepository[Source]):
             "RETURN fn::inhoud_intern_bekend($h)", {"h": content_hash}, self.config)
         waarde = rows[0] if isinstance(rows, list) and rows else rows
         return bool(waarde)
+
+    async def inhoud_elders_intern(self, source_id: str) -> List[str]:
+        """De records buiten deze bron die haar inhoud intern houden (F2-14)."""
+        rows = await execute_query(
+            "RETURN fn::inhoud_elders_intern(array::distinct("
+            "(SELECT VALUE content_hash FROM source_version WHERE source = $b)), $b)",
+            {"b": ensure_record_id(source_id)},
+            self.config,
+        )
+        waarde = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], list) else rows
+        return [str(r) for r in waarde or []]
 
     async def bekende_versie(
         self,

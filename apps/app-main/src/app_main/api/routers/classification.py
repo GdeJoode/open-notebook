@@ -6,14 +6,15 @@ leesrechten krijgen 403. Er is geen route om een logregel te wijzigen of te
 verwijderen.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from shared.models.agents import Right
+from surrealdb_service.repositories.source import InhoudEldersInternError
 
 from app_main.api.agent_auth import AgentKeyContext, require_right
+from app_main.api.fouten import fout_zonder_inhoud
 from app_main.api.schemas import ClassificationRequest, ClassificationResponse
 from app_main.dependencies import get_classification_service
 from app_main.services.classification_service import ClassificationService
-from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(prefix="/v1/sources", tags=["classification"])
 
@@ -36,6 +37,9 @@ async def reclassify_source(
         )
     except PermissionError as e:
         raise fout_zonder_inhoud(e, "Geen toegang", status_code=403)
+    except InhoudEldersInternError as e:
+        # De id's van de records, geen inhoud (F2-14).
+        raise HTTPException(status_code=409, detail=e.detail) from None
     return ClassificationResponse(
         source_id=uitkomst.source_id,
         from_classification=uitkomst.from_classification,

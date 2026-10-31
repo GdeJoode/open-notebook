@@ -16,7 +16,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MAPPEN = ("apps", "packages", "pipelines", "services", "scripts", "migrations")
-VLAG = re.compile(r"\$herclassificatie\b|\b_herclassificatie\b|[\"']herclassificatie[\"']", re.I)
+VLAG = re.compile(r"\$herclassificatie\b|\b_herclassificatie\b|[\"']herclassificatie[\"']"
+                  r"|\$?beheer_inhoud_los\b", re.I)
 
 CONNECTION = "packages/surrealdb-service/src/surrealdb_service/connection.py"
 SOURCE_REPO = "packages/surrealdb-service/src/surrealdb_service/repositories/source.py"
@@ -24,6 +25,8 @@ MIGRATIE = "migrations/89.surrealql"
 #: Migratie 90 (F2-04) geeft `source_version` dezelfde regel als een fragment.
 MIGRATIE_90 = "migrations/90.surrealql"
 MIGRATIELOADER = "packages/surrealdb-service/src/surrealdb_service/migrations.py"
+#: Migratie 98 (F2-14): ``inhoud`` alleen losser binnen de herclassificatie.
+MIGRATIE_98 = "migrations/98.surrealql"
 
 
 def _bestanden():
@@ -42,7 +45,8 @@ def test_de_vlag_staat_alleen_op_de_toegestane_plekken() -> None:
         rel for rel, pad in _bestanden()
         if VLAG.search(pad.read_text(encoding="utf-8", errors="ignore"))
     }
-    assert gevonden == {CONNECTION, SOURCE_REPO, MIGRATIE, MIGRATIE_90, MIGRATIELOADER}
+    assert gevonden == {CONNECTION, SOURCE_REPO, MIGRATIE, MIGRATIE_90, MIGRATIE_98,
+                        MIGRATIELOADER}
 
 
 def test_de_migratieloader_gebruikt_de_route_alleen_voor_de_up_migratie() -> None:

@@ -17,7 +17,10 @@ from dataclasses import dataclass
 from typing import Optional
 
 from shared.models.agents import Right
-from surrealdb_service.repositories.source import SourceRepository
+from surrealdb_service.repositories.source import (
+    InhoudEldersInternError,
+    SourceRepository,
+)
 
 from app_main.exceptions import InvalidInputError, NotFoundError
 
@@ -72,6 +75,13 @@ class ClassificationService:
         if current == to:
             return Herclassificatie(source_id, current, to, changed=False)
 
+        if to == "extern":
+            # Strengste wint per inhoud (F2-14): eerst de andere records die
+            # dezelfde inhoud intern houden; de beheerder herclassificeert die
+            # zelf. De transactie toetst het nog eens.
+            elders = await self.source_repo.inhoud_elders_intern(source_id)
+            if elders:
+                raise InhoudEldersInternError(elders)
         log_id = await self.source_repo.reclassify(
             source_id,
             from_classification=current,

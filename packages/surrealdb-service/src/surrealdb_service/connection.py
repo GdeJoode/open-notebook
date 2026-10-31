@@ -115,6 +115,9 @@ def as_classification_error(error: BaseException) -> Optional[RuntimeError]:
 #: ``reclassify`` en de migratieloader (die migratie 89 uitvoert) gebruiken de
 #: interne route ``_herclassificatie=True``.
 _HERCLASSIFICATIEVLAG = "herclassificatie"
+#: Net zo voor de vlag waarmee alleen dezelfde herclassificatie het record
+#: ``inhoud`` weer losser mag maken (migratie 98, F2-14).
+_INHOUDVLAG = "beheer_inhoud_los"
 
 
 def _weiger_herclassificatievlag(
@@ -123,7 +126,8 @@ def _weiger_herclassificatievlag(
     if toegestaan:
         return
     sleutels = " ".join(str(k) for k in (params or {})).lower()
-    if _HERCLASSIFICATIEVLAG in sleutels or _HERCLASSIFICATIEVLAG in query.lower():
+    tekst = query.lower()
+    if any(v in sleutels or v in tekst for v in (_HERCLASSIFICATIEVLAG, _INHOUDVLAG)):
         raise ValueError(
             "De herclassificatievlag mag alleen SourceRepository.reclassify zetten (F2-03)"
         )
