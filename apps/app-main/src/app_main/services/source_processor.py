@@ -34,6 +34,7 @@ from surrealdb_service.repositories import (
 )
 
 from app_main.services.chunking import chunk_builder
+from app_main.services.flow_register import fork_commit
 from app_main.services.graph.doc_graph_builder import DocGraphBuilder
 from app_main.services.log_stream import get_log_stream
 from app_main.services.source_extractor import ExtractionResult, SourceExtractor
@@ -130,10 +131,12 @@ class SourceProcessor:
         # 3. Run (F2-04, ADR 0003): elke verwerking is een run, ook een die
         # mislukt. De eerste verwerking heet `inname`; `handmatig` is alleen
         # voor correcties door de beheerder (ADR 0005). De pipeline is code van
-        # de fork zelf, geen flow; die staat in Git (`flow_vastgelegd`).
+        # de fork zelf, geen flow; die staat in Git (`flow_vastgelegd`), met
+        # de commit van de fork als `pipeline_version`.
         run = await self.run_repo.create(
             trigger="herverwerking" if source.current_version else "inname",
             pipeline_id=PIPELINE_ID,
+            pipeline_version={"git_commit": fork_commit(), "flow_hash": None},
             input_classification=source.classification or "onbekend",
             flow_vastgelegd=True,
         )

@@ -1134,6 +1134,11 @@ class TestProcessSource:
         version_repo.register.assert_awaited_once()
         # De eerste verwerking heet `inname` (ADR 0005: `handmatig` is voor correcties).
         assert run_repo.create.await_args.kwargs["trigger"] == "inname"
+        # De run legt de commit van de fork vast.
+        from app_main.services.flow_register import fork_commit
+
+        versie = run_repo.create.await_args.kwargs["pipeline_version"]
+        assert versie["git_commit"] == fork_commit() and versie["git_commit"]
         version_repo.set_current_run.assert_awaited_once_with(
             "source_version:v1", "processing_run:r1"
         )

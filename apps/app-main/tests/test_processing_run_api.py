@@ -238,3 +238,46 @@ async def test_handmatig_fragment_toevoegen_geeft_409(app) -> None:
         app.dependency_overrides.pop(get_source_service, None)
     assert resp.status_code == 409
     assert "handmatige run" in resp.json()["detail"]
+
+
+# --------------------------------------------------------------------------
+# Wat de afnemer niet zelf kan zetten
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.echte_sleutels
+async def test_trigger_handmatig_alleen_voor_beheerder(env, app, git_flows, monkeypatch) -> None:
+    body = {"trigger": "handmatig", "pipeline_id": "inname_pdf",
+            "pipeline_version": {"git_commit": git_flows.head, "flow_hash": git_flows.hash}}
+    async with _client(app) as client:
+        resp = await client.post("/api/v1/runs", json=body)
+        assert resp.status_code == 403
+        beheerder = agent_auth.AgentKeyContext(
+            key_id="agent_keys:b", agent_id="mens", permission=Right.BEHEERDER,
+            person="Testpersoon",
+        )
+
+        async def _beheerder(_request):
+            return beheerder
+
+        monkeypatch.setattr(agent_auth, "authenticate_request", _beheerder)
+        resp = await client.post("/api/v1/runs", json=body)
+        assert resp.status_code == 201
+
+
+async def test_flow_vastgelegd_in_de_body_telt_niet(env, app, git_flows) -> None:
+    [regel] = await _q("CREATE source_map_rule CONTENT {classification: 'extern',"
+                       " classification_confirmed_by: 'Testpersoon', active: true} RETURN id")
+    async with _client(app) as client:
+        resp = await client.post("/api/v1/runs", json={
+            "trigger": "schema", "pipeline_id": "inname_pdf",
+            "pipeline_version": {"git_commit": git_flows.head, "flow_hash": "0" * 64},
+            "source_map_rule_id": str(regel["id"]), "flow_vastgelegd": True,
+        })
+        assert resp.status_code == 201
+        run_id = resp.json()["run_id"]
+        resp = await client.patch(f"/api/v1/runs/{run_id}",
+                                  json={"flow_vastgelegd": True, "log": []})
+        assert resp.status_code == 200 and resp.json()["flow_vastgelegd"] is False
+    [waarde] = await _q("SELECT VALUE flow_vastgelegd FROM type::thing($id)", {"id": run_id})
+    assert waarde is False

@@ -9,12 +9,12 @@
 Recht ``pijplijn`` (en ``beheerder``).
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from shared.models.agents import Right
 from shared.models.processing_run import ProcessingRun
 
-from app_main.api.agent_auth import require_right
+from app_main.api.agent_auth import current_key, require_right
 from app_main.api.schemas import (
     RunCreateRequest,
     RunCreateResponse,
@@ -42,8 +42,12 @@ def _antwoord(run: ProcessingRun) -> RunResponse:
 @router.post("", status_code=201, response_model=RunCreateResponse)
 async def create_run(
     body: RunCreateRequest,
+    request: Request,
     service: ProcessingRunService = Depends(get_processing_run_service),
 ):
+    # `handmatig` is alleen voor correcties door de beheerder (ADR 0005).
+    if body.trigger == "handmatig" and (await current_key(request)).permission != Right.BEHEERDER:
+        raise HTTPException(status_code=403, detail="Trigger handmatig vraagt een beheerder")
     try:
         run = await service.start(
             trigger=body.trigger,
