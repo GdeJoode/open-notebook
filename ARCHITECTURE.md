@@ -383,85 +383,52 @@ The OKF export reuses `ObsidianExportRequest` for its filter contract
 the Track D four-stage filter pipeline above — dialog counts and the
 actual bundle cannot drift.
 
-## 8. Cloud/local model routing (Track J)
+## 8. Model calls: one gate to llama-swap (ADR 0006, 0007)
 
-The three LLM pipeline stages — **entity extraction**, **summarization**,
-**chat** — route through a privacy-aware ordered provider chain with
-per-document failover and a local last-resort fallback. The service lives in
-`apps/app-main/src/app_main/services/model_routing/`.
-
-### The three-stage routing path
+Every model call from `apps/`, `packages/` and `pipelines/` goes through one
+gate. There is no provider chain, no failover, no privacy mode and no cloud
+provider in the fork (the Track J routing was removed in F2-09).
 
 ```
-                       resolve_privacy_mode(source.private, notebook.privacy_mode, global)
-                                            │  (document > notebook > global, sticky-private)
-                                            ▼
-        LLMTask {ENTITY_EXTRACTION │ SUMMARIZATION │ CHAT}  +  PrivacyMode {CLOUD │ PRIVATE}
-                                            │
-                                            ▼
-                         RouteResolver.resolve(task, mode)  →  ResolvedRoute
-                          (model_route row, else hard-coded default chain;
-                           drops keyless providers; CLOUD appends local tail;
-                           PRIVATE = local-only)
-                                            │
-                          ┌─────────────────┴──────────────────┐
-            extraction / summarization                       chat
-                          │                                    │
-        FailoverExecutor.execute_with_failover         provision_langchain_model
-        (circuit-breaker skip, rate-limit + backoff,   (construction-time failover
-         is_failover_eligible whitelist, advance        only — J-D4; no mid-stream
-         on transient error → next candidate →          re-issue)
-         local last resort)                                    │
-                          │                                    │
-                          └──────────────► record_routing_event ◄──────────────┘
-                                     (routing.served telemetry: served_provider,
-                                      was_failover, fallback_from, task, source, notebook)
+  caller (extraction, summarization, chat, embeddings, entity matcher, search)
+        │  task + classification of the input (intern | extern; unknown = intern)
+        ▼
+  app_main.services.model_routing.llm_call     (thin caller; LLMTask = task name)
+        ▼
+  llm_manager.aanroep.PoortAanroeper
+        ▼
+  llm_manager.gate.ModelGate
+     1. model for the task from the register (config/modelregister.yaml)
+     2. refuse a model not allowed for intern input — no fallback
+     3. retry on HTTP 502 (ADR 0009)
+     4. exactly one audit row in model_call (never prompt or answer text)
+        ▼
+  llm_manager.providers.factory.LlamaSwapClient  →  http://llama-swap:8080/v1
 ```
 
-- **Resolver** (`route_resolver.py`): generalizes B.8's `resolve_default_model_id`
-  from one model id to an ordered `ResolvedRoute`. `LLMTask` has **exactly three
-  members** — there is deliberately no `EMBEDDING`/`PARSING` (see the invariant
-  below). `resolve_default_model_id` is preserved as a thin shim over
-  `ordered_candidates[0]` so the B.8 contract stays intact.
-- **Failover executor** (`failover_executor.py`) + **circuit breaker**
-  (`circuit_breaker.py`) + **rate limiter** (`rate_limiter.py`): execute a route
-  with per-document failover. A transient provider error (whitelisted by
-  `error_mapping.is_failover_eligible` — 429/5xx/timeout/connect/401/403) trips
-  the breaker and advances to the next candidate; a non-eligible error
-  (programming bug, 400) propagates rather than masking it. The cloud rate
-  limiter (conservative default, `RateLimitTimeout`-on-saturation → failover to
-  the throttle-exempt local without a breaker penalty) is the fair-use guard.
-  Breaker/limiter state is **in-process** (single-worker V1, J-D3).
-- **Privacy resolver** (`privacy_resolver.py`): document `private` → notebook
-  `privacy_mode` → global `default_privacy_mode` (default `cloud`), most-specific
-  wins, with a single early-return **sticky** rule so a `private` document can
-  never resolve to CLOUD.
-- **Telemetry** (`telemetry.py`): one `routing.served` `metrics` row per routed
-  stage carrying the served provider/model + failover trail. The
-  `GET /api/model-routes/health` + `GET /api/model-routes/summary` endpoints read
-  it back for the UI's per-provider health chips and the per-notebook
-  cloud-vs-local routing summary.
+- **Register** (`config/modelregister.yaml`, `llm_manager.register`): name,
+  version, invocation (`llama-swap`, `api`, `cli`), location, `toegestaan_intern`
+  (default `nee`) and tasks. `GET /api/models` shows it read-only; changing it
+  takes a commit and a restart. There are no model rows or default models in
+  the database.
+- **Audit log** (`model_call`, migration 101): written by
+  `ModelCallTelemetry` (`model_routing/telemetry.py`) for the fork and by
+  `POST /api/v1/model-calls` for Langflow; `processing_run.models` is derived
+  from it.
+- **Classification** decides what stays local: the `classification` field
+  (migration 89, ADR 0001) replaced `source.private`, `notebook.privacy_mode`
+  and `default_privacy_mode` (removed in migration 103).
+- **Stop tests**: `tests/test_geen_ollama_eindpunten.py` (no Ollama endpoint, no
+  model library or llama-swap client outside the gate) and
+  `tests/test_geen_verwijzingen_trackj.py` (no Track J name, model row or old
+  privacy field returns).
 
-### Invariant — embeddings + parsing stay LOCAL and FIXED (§1.2)
+### Invariant — embeddings stay LOCAL and FIXED
 
-> **Blocking, not a preference.** Embeddings are pinned to 768-dim
-> `nomic-embed-text` (Track I.G HNSW index). Routing an embedding through the
-> cloud chain would change the vector space (OpenAI `text-embedding-3` is
-> 1536/3072-dim) and silently corrupt vector search.
-
-`get_embedding_service` resolves embeddings via `DefaultModels` and imports
-**nothing** from `model_routing`. Parsing (docling/MinerU) is GPU-service-bound,
-never an LLM routing call. The enforcement is mechanical: `LLMTask` has no
-embedding/parsing member, and `test_embedding_local_guardrail.py` is the
-falsifiable canary (asserts the embedding-service source contains no
-`model_routing` import and that `resolve_route("embedding")` raises).
-
-### Operator surface
-
-`docs/tracks/J-model-routing/OPERATOR_GUIDE.md` documents the provider env keys
-(`NVIDIA_API_KEY`), the layered privacy model, the provider-chain config UI, the
-fair-use caution (local for high-volume extraction, cloud for summarization), and
-how to enable/disable providers.
+Embeddings use the register's `embedding` model (`mxbai-embed-large`, 1 024
+dimensions, ADR 0008) through the same gate to `/v1/embeddings`. `LLMTask` has
+no embedding or parsing member; `test_embedding_local_guardrail.py` is the
+canary.
 
 ## 9. Document relatedness: computed vs materialized (Tracks R + U)
 
@@ -825,7 +792,7 @@ the §9 `cites` membership gate).
    topically-ranked) and forms `(source, related)` pairs (self-excluded, deduped,
    bounded by top-`k`). The corpus is never enumerated; LLM cost is O(top-`k`),
    not O(pairs).
-2. **Pairwise LLM judge.** Each pair is judged by the **Track J** routed LLM
+2. **Pairwise LLM judge.** Each pair is judged through the model gate (§8)
    (`RoutedLLMCaller` / `make_default_llm_caller(default_chat_model, json_mode=True)`)
    over a compact context (both titles + bounded `full_text` snippets). The system
    prompt is a conservative fact-checker that is repeatedly biased toward
@@ -963,8 +930,8 @@ correctly reaches `graphed → complete`.
   ordering is enforced by the **job chain**, not by worker serialization — a
   successor stage is only ever enqueued *after* its predecessor completes, so
   concurrent workers cannot reorder a source's stages. The DB layer is
-  per-connection-pooled (no shared session state) and the LLM path is already
-  `asyncio.Lock`-coordinated (Track J rate limiter + circuit breakers).
+  per-connection-pooled (no shared session state) and every LLM call goes
+  through the model gate (§8).
 - **Sync ingest decoupled from the shared worker**: the sync upload path runs
   the `DOCUMENT_PARSE` handler **in-request** (via the registry) instead of
   enqueuing it onto the shared queue and polling 300s — so a sync ingest no
@@ -1028,7 +995,7 @@ always available as the parser/Docling config home.
 - `docs/tracks/B-kg-quality/RETRO.md` — Track B retrospective (multi-schema KG)
 - `docs/tracks/D-output-richness/RETRO.md` — Track D retrospective (export surfaces)
 - `docs/tracks/U-document-graph/status.md` — Track U retrospective (document graph: `mentions`/`cites`, computed-vs-materialized)
-- `docs/tracks/J-model-routing/OPERATOR_GUIDE.md` — cloud/local routing: env keys, privacy model, fair-use, enable/disable
+- `docs/tracks/J-model-routing/OPERATOR_GUIDE.md` — cloud/local routing (Track J; obsolete since F2-09, see §8)
 - `docs/tracks/W-mcp-graph-memory/status.md` — Track W retrospective (MCP graph-tools shared substrate + hybrid search + reranker)
 - `docs/tracks/W-mcp-graph-memory/OPERATOR_GUIDE.md` — gated reranker bring-up/smoke/fallback (the `surrealdb-mcp` part is obsolete since F2-02)
 - `docs/tracks/X-citations-to-source/status.md` — Track X retrospective (provenance → citation flow + faithfulness guard; membership-not-semantic)
