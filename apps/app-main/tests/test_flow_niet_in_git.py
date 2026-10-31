@@ -101,6 +101,48 @@ def test_zonder_git_is_niets_vastgelegd(tmp_path, git_flows) -> None:
     assert FlowRegister(tmp_path / "bestaat_niet").hashes() == {}
 
 
+def test_botsing_tussen_bestandsnaam_en_id_telt_niet(git_flows) -> None:
+    # `andere.json` draagt als id de bestandsnaam van een andere flow.
+    andere = git_flows.commit("andere", {"id": "inname_pdf", "data": {}})
+    reg = git_flows.register
+    for h in (git_flows.hash, andere):
+        assert not reg.is_vastgelegd("inname_pdf", git_flows.head, h)
+    # De naam zonder botsing blijft vastgelegd.
+    assert reg.is_vastgelegd("andere", git_flows.head, andere)
+
+
+def test_skip_worktree_verbergt_geen_wijziging(git_flows) -> None:
+    git_flows.git("update-index", "--skip-worktree",
+                  "services/langflow/flows/inname_pdf.json")
+    (git_flows.map / "inname_pdf.json").write_text('{"id": "inname-pdf", "x": 1}',
+                                                   encoding="utf-8")
+    assert git_flows.git("status", "--porcelain") == ""  # git status ziet het niet
+    assert not git_flows.register.schoon()
+    assert not git_flows.register.is_vastgelegd("inname_pdf", git_flows.head, git_flows.hash)
+
+
+def test_symbolische_link_telt_niet(git_flows) -> None:
+    (git_flows.map / "link.json").symlink_to("inname_pdf.json")
+    git_flows.git("add", "-A")
+    git_flows.git("commit", "-q", "-m", "link")
+    git_flows.head = git_flows.git("rev-parse", "HEAD")
+    reg = git_flows.register
+    assert "link" not in reg.hashes()
+    assert not reg.is_vastgelegd("link", git_flows.head, git_flows.hash)
+    assert reg.is_vastgelegd("inname_pdf", git_flows.head, git_flows.hash)
+
+
+def test_symbolische_link_in_de_werkmap_is_niet_schoon(git_flows) -> None:
+    pad = git_flows.map / "inname_pdf.json"
+    kopie = git_flows.map.parent / "kopie.json"
+    kopie.write_bytes(pad.read_bytes())
+    git_flows.git("update-index", "--assume-unchanged",
+                  "services/langflow/flows/inname_pdf.json")
+    pad.unlink()
+    pad.symlink_to(kopie)
+    assert not git_flows.register.is_vastgelegd("inname_pdf", git_flows.head, git_flows.hash)
+
+
 def test_standaardmap_ligt_in_de_root_van_de_repository() -> None:
     root = Path(__file__).resolve().parents[3]
     assert STANDAARD_MAP == root / "services" / "langflow" / "flows"
@@ -238,15 +280,11 @@ async def test_flow_buiten_git_met_externe_invoer_geeft_201_met_waarschuwing(
     # De fork legt de regel en haar `rev` vast (ADR 0020).
     assert (run["source_map_rule_id"], run["source_map_rule_rev"]) == (regel, 4)
 
-    # Zo'n run mag een fragment van een externe bron schrijven, niet van een
-    # interne (migratie 90).
-    for classification, toegestaan in (("extern", True), ("intern", False)):
-        bron = await _bron(classification, resp.json()["run_id"])
-        if toegestaan:
-            await _fragment(bron)
-        else:
-            with pytest.raises(RuntimeError, match="run"):
-                await _fragment(bron)
+    # Zo'n run mag een versie en fragment van een externe bron schrijven, niet
+    # van een interne (migratie 90).
+    await _fragment(await _bron("extern", resp.json()["run_id"]))
+    with pytest.raises(RuntimeError, match="created_by_run"):
+        await _bron("intern", resp.json()["run_id"])
 
 
 @pytest.mark.requires_docker

@@ -9,7 +9,8 @@ flow is *vastgelegd* als:
 * een opgegeven ``SIGNAAL_FLOWS_COMMIT`` ook gelijk is aan HEAD;
 * de map met flows schoon is (``git status --porcelain`` op die map is leeg);
 * de flow in HEAD (``git show HEAD:<pad>``, niet de werkmap) precies die hash
-  heeft.
+  heeft, het bestand in de werkmap gelijk is aan die blob en geen symbolische
+  link is, en de naam niet bij twee flows hoort.
 
 In alle andere gevallen, ook zonder Git, is niets vastgelegd; wat dan volgt,
 bepaalt ``ProcessingRunService``. Een flow heet naar haar bestandsnaam zonder
@@ -45,6 +46,7 @@ class FlowRegister:
         self.verwachte_commit = (verwachte_commit or "").strip().lower() or None
         self._head: Optional[str] = None
         self._hashes: Dict[str, str] = {}
+        self._bestanden: Dict[str, str] = {}
 
     @classmethod
     def from_env(cls) -> "FlowRegister":
@@ -74,27 +76,63 @@ class FlowRegister:
         return uit.strip().lower() if uit else None
 
     def schoon(self) -> bool:
-        uit = self._git("status", "--porcelain", "--untracked-files=all", "--", ".")
-        return uit is not None and uit.strip() == ""
+        """Geen wijziging in de map, ook niet verborgen voor ``git status``.
 
-    def _laad(self, head: str) -> Dict[str, str]:
-        hashes: Dict[str, str] = {}
-        namen = self._git("ls-tree", "-r", "--name-only", head, "--", ".") or ""
-        for naam in namen.splitlines():
+        ``git status`` ziet een bestand met ``skip-worktree`` of
+        ``assume-unchanged`` niet. Daarom vergelijkt het register ook elk
+        bestand in de werkmap met zijn blob in HEAD, en weigert het een
+        symbolische link in de werkmap.
+        """
+        uit = self._git("status", "--porcelain", "--untracked-files=all", "--", ".")
+        if uit is None or uit.strip() != "":
+            return False
+        self.hashes()
+        for naam, h in self._bestanden.items():
+            pad = self.map / naam
+            if pad.is_symlink() or not pad.is_file():
+                return False
+            if hashlib.sha256(pad.read_bytes()).hexdigest() != h:
+                return False
+        return True
+
+    def _laad(self, head: str) -> None:
+        """Lees de flows in HEAD: per bestand de hash, per naam de hash.
+
+        Een symbolische link (modus 120000) telt niet als flow. Een naam die
+        bij twee verschillende flows hoort (een bestandsnaam en een ``id`` in
+        een andere flow), telt ook niet: die botsing wordt gelogd.
+        """
+        self._bestanden = {}
+        self._hashes = {}
+        botsingen: set[str] = set()
+        regels = self._git("ls-tree", "-r", head, "--", ".") or ""
+        for regel in regels.splitlines():
+            kop, _, naam = regel.partition("\t")
+            modus = kop.split(" ")[0]
             if not naam.endswith(".json"):
+                continue
+            if modus == "120000":
+                logger.warning(f"Flow {naam} is een symbolische link; niet vastgelegd")
                 continue
             inhoud = self._git("show", f"{head}:./{naam}", binair=True)
             if inhoud is None:
                 continue
             h = hashlib.sha256(inhoud).hexdigest()
-            hashes[Path(naam).stem] = h
+            self._bestanden[naam] = h
             try:
                 flow_id = json.loads(inhoud).get("id")
             except (ValueError, AttributeError):
                 flow_id = None
+            namen = {Path(naam).stem}
             if isinstance(flow_id, str) and flow_id:
-                hashes[flow_id] = h
-        return hashes
+                namen.add(flow_id)
+            for n in namen:
+                if n in self._hashes and self._hashes[n] != h:
+                    botsingen.add(n)
+                self._hashes[n] = h
+        for n in botsingen:
+            logger.warning(f"Flownaam {n!r} hoort bij meer dan één flow; niet vastgelegd")
+            del self._hashes[n]
 
     def hashes(self) -> Dict[str, str]:
         """De hashes in HEAD; leeg zonder Git."""
@@ -102,7 +140,7 @@ class FlowRegister:
         if head is None:
             return {}
         if head != self._head:
-            self._hashes = self._laad(head)
+            self._laad(head)
             self._head = head
         return self._hashes
 
@@ -120,3 +158,12 @@ class FlowRegister:
         if git_commit.strip().lower() != head or not self.schoon():
             return False
         return self.hashes().get(pipeline_id) == flow_hash.strip().lower()
+
+
+@lru_cache(maxsize=1)
+def fork_commit() -> Optional[str]:
+    """De Git-commit van de fork: ``SIGNAAL_FLOWS_COMMIT``, anders HEAD van de repository."""
+    gezet = (os.environ.get("SIGNAAL_FLOWS_COMMIT") or "").strip().lower()
+    if gezet:
+        return gezet
+    return FlowRegister(_ROOT).head()
