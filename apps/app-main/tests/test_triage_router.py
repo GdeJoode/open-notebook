@@ -113,7 +113,7 @@ def test_decision_pins_entity_and_closes_row():
     # F2-06: row closed against its rev, entity pinned in the same transaction.
     queue.set_decision.assert_awaited_once_with(
         "triage_queue:1", "active", rev=3, door="Testpersoon",
-        entiteit=("entity:a", {"status": "active", "manual_override": True}),
+        entiteit=("entity:a", None, {"status": "active", "manual_override": True}),
     )
 
 
@@ -281,7 +281,7 @@ def test_linking_writes_the_chosen_uri_and_its_current_names_and_closes():
     queue.get = AsyncMock(return_value=_tooi_item())
     entity_repo = AsyncMock()
     koppeling = {"external_ids": [_TOOI_CANDS[1]["uri"]], "aliases": ["Groningen"]}
-    entity_repo.external_ids_wijziging = AsyncMock(return_value=koppeling)
+    entity_repo.external_ids_wijziging = AsyncMock(return_value=(5, koppeling))
     resp = _make_app(queue=queue, entity_repo=entity_repo).post(
         "/api/triage/queue/triage_queue:1/tooi-decision",
         json={"action": "link", "uri": _TOOI_CANDS[1]["uri"], "rev": 0})
@@ -290,7 +290,8 @@ def test_linking_writes_the_chosen_uri_and_its_current_names_and_closes():
         "entity:a", [_TOOI_CANDS[1]["uri"]], ["Groningen", "GR", "provincie Groningen"])
     # F2-06: link and closed row in one transaction.
     queue.set_decision.assert_awaited_once_with(
-        "triage_queue:1", "linked", rev=0, door="Testpersoon", entiteit=("entity:a", koppeling))
+        "triage_queue:1", "linked", rev=0, door="Testpersoon",
+        entiteit=("entity:a", 5, koppeling))
     entity_repo.update_external_ids.assert_not_awaited()
     entity_repo.set_manual_override.assert_not_awaited()  # status untouched
 

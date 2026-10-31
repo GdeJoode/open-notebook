@@ -191,7 +191,7 @@ async def test_set_decision_with_a_stale_rev_changes_nothing(
     )
     with pytest.raises(RevConflictError):
         await q.set_decision(rid, "active", rev=gelezen, door="Testpersoon",
-                             entiteit=(eid, {"status": "active", "manual_override": True}))
+                             entiteit=(eid, None, {"status": "active", "manual_override": True}))
     rows = await execute_query("SELECT manual_override FROM $id", {"id": ensure_record_id(eid)},
                                live_surrealdb)
     assert not rows[0].get("manual_override")
@@ -199,7 +199,7 @@ async def test_set_decision_with_a_stale_rev_changes_nothing(
 
     beslist = await q.set_decision(rid, "active", rev=(await q.get(rid)).rev,
                                    door="Testpersoon",
-                                   entiteit=(eid, {"status": "active", "manual_override": True}))
+                                   entiteit=(eid, None, {"status": "active", "manual_override": True}))
     assert beslist.decision == "active"
     rows = await execute_query("SELECT manual_override, status, modified_by FROM $id",
                                {"id": ensure_record_id(eid)}, live_surrealdb)
@@ -220,20 +220,30 @@ async def test_a_tooi_link_with_a_stale_rev_writes_nothing(
     rid = await q.upsert_tooi(eid, name="G", type="administrative_area", reason="tooi: x",
                               candidates=[{"uri": "https://example.org/tooi/1"}], batch_id="r1")
     gelezen = (await q.get(rid)).rev
-    koppeling = await EntityRepository(config=live_surrealdb).external_ids_wijziging(
+    entity_rev, koppeling = await EntityRepository(config=live_surrealdb).external_ids_wijziging(
         eid, ["https://example.org/tooi/1"], ["G"])
     await execute_query("UPDATE $id SET reason = 'tooi: y'", {"id": ensure_record_id(rid)},
                         live_surrealdb)
     with pytest.raises(RevConflictError):
         await q.set_decision(rid, "linked", rev=gelezen, door="Testpersoon",
-                             entiteit=(eid, koppeling))
+                             entiteit=(eid, entity_rev, koppeling))
     rows = await execute_query("SELECT external_ids, modified_by FROM $id",
                                {"id": ensure_record_id(eid)}, live_surrealdb)
     assert not rows[0].get("external_ids") and rows[0].get("modified_by") is None
     assert (await q.get(rid)).decision == "open"
 
+    # A change of the entity between reading and writing is a 409 as well.
+    await execute_query("UPDATE $id SET description = 'x'", {"id": ensure_record_id(eid)},
+                        live_surrealdb)
+    with pytest.raises(RevConflictError):
+        await q.set_decision(rid, "linked", rev=(await q.get(rid)).rev, door="Testpersoon",
+                             entiteit=(eid, entity_rev, koppeling))
+    assert (await q.get(rid)).decision == "open"
+
+    entity_rev, koppeling = await EntityRepository(config=live_surrealdb).external_ids_wijziging(
+        eid, ["https://example.org/tooi/1"], ["G"])
     await q.set_decision(rid, "linked", rev=(await q.get(rid)).rev, door="Testpersoon",
-                         entiteit=(eid, koppeling))
+                         entiteit=(eid, entity_rev, koppeling))
     rows = await execute_query("SELECT external_ids, modified_by FROM $id",
                                {"id": ensure_record_id(eid)}, live_surrealdb)
     assert rows[0]["external_ids"] == ["https://example.org/tooi/1"]

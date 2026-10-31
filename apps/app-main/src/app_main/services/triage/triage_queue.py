@@ -359,7 +359,7 @@ class TriageQueueRepository:
         *,
         rev: Optional[int],
         door: str,
-        entiteit: Optional[Tuple[str, Dict[str, Any]]] = None,
+        entiteit: Optional[Tuple[str, Optional[int], Dict[str, Any]]] = None,
     ) -> Optional[QueueItem]:
         """Record an operator decision on a queue row (moves it off 'open').
 
@@ -373,9 +373,10 @@ class TriageQueueRepository:
             rev: The row version the operator read; ``None`` only for a row
                 closed as a consequence of another checked write.
             door: The person of the key.
-            entiteit: ``(entity_id, data)`` written to the row's entity in the
-                same transaction (the pin, or the TOOI link), unchecked
-                (``rev=None``) but stamped with ``modified_by``.
+            entiteit: ``(entity_id, rev, data)`` written to the row's entity in
+                the same transaction (the pin, or the TOOI link) and stamped
+                with ``modified_by``; with a ``rev`` a change of the entity
+                meanwhile is a :class:`RevConflictError` too.
 
         Returns:
             The updated :class:`QueueItem`, or ``None`` if the row (or the
@@ -384,8 +385,8 @@ class TriageQueueRepository:
         nu = datetime.now(timezone.utc)
         wijzigingen = [RevWijziging(queue_id, rev, {"decision": decision, "updated_at": nu})]
         if entiteit is not None:
-            entity_id, data = entiteit
-            wijzigingen.append(RevWijziging(entity_id, None, {**data, "updated_at": nu}))
+            entity_id, entity_rev, data = entiteit
+            wijzigingen.append(RevWijziging(entity_id, entity_rev, {**data, "updated_at": nu}))
         try:
             rows = await wijzig_met_rev(wijzigingen, door=door, config=self.config)
         except RecordNotFoundError:
