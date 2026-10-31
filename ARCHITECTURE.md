@@ -576,8 +576,10 @@ The query logic the graph tools exposed stays in the repositories:
 | `cite` | `SourceRepository.relate_cites` |
 | `add_note` | `NoteRepository.create_with_embedding` + `add_to_notebook` |
 
-The provenance and navigation endpoints that FO 10 asks for are built in the
-API, with a classification scope (F3-09).
+The provenance endpoints that FO 10 asks for are built in the API, with a
+classification scope (F3-09). Entity navigation (what `get_node` and
+`get_entity_graph` did) also waits for B10: when an entity is visible to
+`lezen_extern`.
 
 ### Two retrieval layers, deliberately separate
 
