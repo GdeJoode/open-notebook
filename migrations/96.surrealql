@@ -1,0 +1,55 @@
+-- ============================================================================
+-- Migratie 96: importeindpunt na de herreview (F2-14, ADR 0003, 0001).
+--
+-- 1. `source.version_seq`: het laatst uitgegeven versienummer van de bron.
+--    Een nieuwe versie krijgt het volgende nummer en zet de teller alleen als
+--    die nog de gelezen waarde heeft; anders mislukt de transactie en probeert
+--    de fork opnieuw. Zo krijgen gelijktijdige versies unieke nummers en een
+--    lineaire keten van `predecessor`.
+-- 2. Index op de hashes van batchbestanden: een interne batch telt mee bij
+--    "inhoud intern bekend".
+-- 3. Strengste wint per inhoud: komt een inhoud (hash) intern binnen (een
+--    interne bronversie) of wordt een wachtrij-item met die hash intern
+--    besloten, dan wordt elke externe bron waarvan de huidige versie die hash
+--    heeft intern, in dezelfde transactie en via het event
+--    `strengste_classificatie` (fragmenten, embeddings, `chunk_extern`). Per
+--    geraakte bron een `beheer_melding` van soort `inhoud_intern`.
+--
+-- Lege database (B3). Idempotent via OVERWRITE. Alleen hele regels commentaar:
+-- de migratieloader plakt de regels aan elkaar.
+-- ============================================================================
+
+-- 1. Versieteller.
+DEFINE FIELD OVERWRITE version_seq ON source TYPE option<int>
+    ASSERT $value = NONE OR $value >= 0;
+
+-- 2. Hashes van batchbestanden.
+DEFINE INDEX OVERWRITE idx_intake_batch_file_hash ON intake_batch FIELDS file_hashes.*.content_hash;
+
+-- 3. Strengste wint per inhoud.
+DEFINE FIELD OVERWRITE soort ON beheer_melding TYPE string READONLY
+    ASSERT $value IN ['handmatige_run_beschermd', 'vastgezet_overgeslagen', 'inhoud_intern'];
+
+DEFINE FUNCTION OVERWRITE fn::inhoud_intern($hash: any) {
+    LET $geraakt = (SELECT VALUE source FROM source_version WHERE content_hash = $hash
+        AND source.classification = 'extern' AND source.current_version = id);
+    FOR $b IN $geraakt {
+        UPDATE $b SET classification = 'intern' RETURN NONE;
+        CREATE beheer_melding CONTENT {
+            soort: 'inhoud_intern',
+            melding: 'Dezelfde inhoud is intern binnengekomen; bron intern gemaakt',
+            source: $b
+        } RETURN NONE;
+    };
+    RETURN array::len($geraakt);
+};
+
+DEFINE EVENT OVERWRITE inhoud_intern_versie ON source_version
+    WHEN $after.classification = 'intern' AND ($event = 'CREATE' OR $before.classification != 'intern')
+    THEN { fn::inhoud_intern($after.content_hash); };
+
+DEFINE EVENT OVERWRITE inhoud_intern_item ON intake_item
+    WHEN $event = 'UPDATE' AND $before.decision = NONE AND $after.decision.classification = 'intern'
+    THEN { fn::inhoud_intern(string::replace($after.content_hash, 'sha256:', '')); };
+
+RETURN NONE;

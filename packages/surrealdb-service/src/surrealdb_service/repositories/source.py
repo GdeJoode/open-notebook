@@ -6,9 +6,9 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
-
 from shared.models import Asset, Chunk, Source, SourceEmbedding, SourceInsight
 from shared.models.classification import ClassificationScope, classifications_for
+
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import (
     ClassificationConflictError,
@@ -22,6 +22,7 @@ from surrealdb_service.repositories.base import (
     eigen_record_id,
     lees_met_bereik,
 )
+from surrealdb_service.repositories.source_version import NIEUWE_VERSIE
 
 # The ``processing_stage`` filter shared by the sources list (``?stage=``) and
 # the Werkbak (WB.1), so both count the same rows. The field is a strict string
@@ -253,23 +254,15 @@ class SourceRepository(BaseRepository[Source]):
 
         ``bron``, ``versie`` en de ``id`` van elk fragment en elke knoop zijn
         record-id's die de aanroeper vooraf kiest, zodat een herhaald verzoek
-        dezelfde id's terugvindt. Het versienummer en de voorganger volgen uit
-        de database; de bron wijst daarna naar de nieuwe versie. Faalt één stap
-        (een unieke index, een ``ASSERT`` op classificatie of run), dan
-        verandert niets.
+        dezelfde id's terugvindt. Het versienummer en de voorganger komen uit de
+        teller op de bron (:data:`NIEUWE_VERSIE`); de bron wijst daarna naar de
+        nieuwe versie. Faalt één stap (een gelijktijdige versie, een unieke
+        index, een ``ASSERT`` op classificatie of run), dan verandert niets.
         """
         delen = ["BEGIN TRANSACTION;"]
         if bron_data is not None:
             delen.append("CREATE $bron CONTENT $bron_data RETURN NONE;")
-        delen.append(
-            "LET $data = object::from_entries(array::concat(object::entries($versie_data), ["
-            " ['source', $bron],"
-            " ['version_no', array::len((SELECT VALUE id FROM source_version WHERE source = $bron)) + 1],"
-            " ['predecessor', (SELECT VALUE current_version FROM ONLY $bron)]"
-            "]));"
-        )
-        delen.append("CREATE $versie CONTENT $data RETURN NONE;")
-        delen.append("UPDATE $bron SET current_version = $versie RETURN NONE;")
+        delen.append(NIEUWE_VERSIE)
         params: Dict[str, Any] = {
             "bron": bron, "versie": versie, "versie_data": versie_data,
         }
@@ -308,13 +301,20 @@ class SourceRepository(BaseRepository[Source]):
         return sorted(rows or [])
 
     async def inhoud_intern_bekend(self, content_hash: str) -> bool:
-        """Is deze ruwe inhoud (64 hex) al intern bekend: een interne bronversie,
-        of een wachtrij-item dat intern is of nog geen besluit heeft? (F2-14)"""
+        """Is deze ruwe inhoud (64 hex) al intern bekend? (F2-14)
+
+        Een interne bronversie, een wachtrij-item dat intern is of nog geen
+        besluit heeft, of een bestand van een batch die niet effectief extern
+        is (onbevestigd extern geldt als intern).
+        """
         rows = await execute_query(
             "RETURN array::len((SELECT VALUE id FROM source_version"
             " WHERE content_hash = $h AND classification = 'intern' LIMIT 1))"
             " + array::len((SELECT VALUE id FROM intake_item WHERE content_hash = $item"
-            " AND (decision = NONE OR decision.classification != 'extern') LIMIT 1))",
+            " AND (decision = NONE OR decision.classification != 'extern') LIMIT 1))"
+            " + array::len((SELECT VALUE id FROM intake_batch"
+            " WHERE file_hashes.*.content_hash CONTAINS $item"
+            " AND (classification != 'extern' OR classification_confirmed_by = NONE) LIMIT 1))",
             {"h": content_hash, "item": f"sha256:{content_hash}"},
             self.config,
         )

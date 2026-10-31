@@ -586,7 +586,9 @@ async def test_down_draait_terug(live_surrealdb) -> None:
             "self_ref": "#/texts/0", "sequence": 0,
             "source_version": ensure_record_id(versie), "run": ensure_record_id(r)}})
     try:
-        # Zoals de migratieloader: zonder de herclassificatievlag.
+        # Zoals de migratieloader: eerst de latere migratie met een event op
+        # `source_version` (96, F2-14), dan 90; zonder de herclassificatievlag.
+        await execute_transaction(_migratie(96, down=True), config=live_surrealdb)
         await execute_transaction(_migratie(90, down=True), config=live_surrealdb)
         await execute_transaction(_migratie(90, down=True), config=live_surrealdb)
         db = await _q(live_surrealdb, "INFO FOR DB")
@@ -630,3 +632,4 @@ async def test_down_draait_terug(live_surrealdb) -> None:
         assert str((await _lees(live_surrealdb, frag))["source_version"]) == versie
     finally:
         await _opnieuw_89_en_90(live_surrealdb)
+        await execute_transaction(_migratie(96), config=live_surrealdb)

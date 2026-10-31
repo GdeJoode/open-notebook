@@ -1,0 +1,14 @@
+-- ============================================================================
+-- Migratie 96 terug (F2-14). Events, functie en index gaan weg; `soort` krijgt
+-- de waarden van migratie 92 plus `inhoud_intern` (bestaande meldingen blijven
+-- geldig); `version_seq` blijft als optioneel veld bestaan (geen herkomst
+-- wissen). Idempotent.
+-- ============================================================================
+
+REMOVE EVENT IF EXISTS inhoud_intern_item ON intake_item;
+REMOVE EVENT IF EXISTS inhoud_intern_versie ON source_version;
+REMOVE FUNCTION IF EXISTS fn::inhoud_intern;
+REMOVE INDEX IF EXISTS idx_intake_batch_file_hash ON intake_batch;
+DEFINE FIELD OVERWRITE version_seq ON source TYPE option<int>;
+
+RETURN NONE;

@@ -7,11 +7,13 @@ met de vorige als ``predecessor``; de bron wijst daarna naar de nieuwe versie.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 from shared.models.source_version import SourceVersion
+
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import (
     ensure_record_id,
@@ -20,19 +22,29 @@ from surrealdb_service.connection import (
 )
 from surrealdb_service.repositories.processing_run import ProcessingRunRepository
 
-# Nieuwe versie en `source.current_version` in één transactie. Het nummer is
-# het aantal versies plus één; versies worden niet verwijderd. Een gelijktijdige
-# tweede registratie faalt op de unieke index en leest dan de bestaande.
-_REGISTREER = """
-BEGIN TRANSACTION;
-LET $data = object::from_entries(array::concat(object::entries($velden), [
-    ['version_no', array::len((SELECT VALUE id FROM source_version WHERE source = $bron)) + 1],
-    ['predecessor', (SELECT VALUE current_version FROM ONLY $bron)]
+#: Een nieuwe versie ``$versie`` (vooraf gekozen id) van ``$bron`` met de velden
+#: ``$versie_data``, binnen een transactie (F2-14, migratie 96). Het nummer komt
+#: uit de teller ``source.version_seq``: de teller en ``current_version`` gaan
+#: alleen mee als de teller nog de gelezen waarde heeft, anders ``THROW`` en
+#: rolt alles terug. Zo krijgen gelijktijdige versies unieke nummers en een
+#: lineaire keten (``predecessor`` is de versie met het vorige nummer).
+NIEUWE_VERSIE = """
+LET $oud = (SELECT VALUE version_seq FROM ONLY $bron) ?? 0;
+LET $vorige = (SELECT VALUE id FROM source_version WHERE source = $bron AND version_no = $oud LIMIT 1)[0];
+LET $data = object::from_entries(array::concat(object::entries($versie_data), [
+    ['source', $bron], ['version_no', $oud + 1], ['predecessor', $vorige]
 ]));
-LET $versie = (CREATE ONLY source_version CONTENT $data RETURN id);
-UPDATE $bron SET current_version = $versie.id RETURN NONE;
-COMMIT TRANSACTION;
+CREATE $versie CONTENT $data RETURN NONE;
+LET $gezet = (UPDATE $bron SET version_seq = $oud + 1, current_version = $versie
+    WHERE (version_seq ?? 0) = $oud RETURN id);
+IF array::len($gezet) = 0 { THROW 'bronversie:gelijktijdig' };
 """
+
+#: Melding van :data:`NIEUWE_VERSIE` bij een gelijktijdige nieuwe versie.
+GELIJKTIJDIG = "bronversie:gelijktijdig"
+
+# Nieuwe versie en `source.current_version` in één transactie.
+_REGISTREER = "BEGIN TRANSACTION;\n" + NIEUWE_VERSIE + "COMMIT TRANSACTION;\n"
 
 
 class SourceVersionRepository:
@@ -82,7 +94,6 @@ class SourceVersionRepository:
         if bestaand is not None:
             return bestaand, False
         velden: Dict[str, Any] = {
-            "source": ensure_record_id(source_id),
             "content_hash": content_hash,
             "created_by_run": ensure_record_id(run_id),
             "current_run": ensure_record_id(run_id),
@@ -94,7 +105,8 @@ class SourceVersionRepository:
         try:
             await execute_transaction(
                 _REGISTREER,
-                {"bron": ensure_record_id(source_id), "velden": velden},
+                {"bron": ensure_record_id(source_id), "versie_data": velden,
+                 "versie": ensure_record_id(f"source_version:{uuid.uuid4().hex}")},
                 self.config,
             )
         except RuntimeError as e:
