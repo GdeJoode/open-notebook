@@ -263,6 +263,9 @@ async def test_trigger_handmatig_alleen_voor_beheerder(env, app, git_flows, monk
         monkeypatch.setattr(agent_auth, "authenticate_request", _beheerder)
         resp = await client.post("/api/v1/runs", json=body)
         assert resp.status_code == 201
+        # De persoon van de sleutel is de actor (migratie 92, F2-06).
+        run = (await client.get(f"/api/v1/runs/{resp.json()['run_id']}")).json()
+        assert run["actor"] == "Testpersoon"
 
 
 async def test_flow_vastgelegd_in_de_body_telt_niet(env, app, git_flows) -> None:

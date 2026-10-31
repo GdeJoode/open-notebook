@@ -18,7 +18,7 @@ K.5 endpoints (fuzzy/embedding candidate dedup + user overlay):
 
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from surrealdb_service.connection import ensure_record_id, execute_query
 
@@ -29,7 +29,7 @@ from app_main.services.entity_resolution import (
     RecanonicalizationService,
     merge_audit,
 )
-from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.agent_auth import RECHT_BEHEERDER, current_key
 from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(prefix="/entity-resolution", tags=["entity-resolution"], dependencies=[RECHT_BEHEERDER])
@@ -226,6 +226,7 @@ async def _validate_clusters(clusters: List[ApplyClusterIn]) -> Dict[str, Dict[s
 @router.post("/apply", response_model=ApplyResponse)
 async def apply_merges(
     body: ApplyRequest,
+    request: Request,
     svc: RecanonicalizationService = Depends(get_recanonicalization_service),
 ) -> ApplyResponse:
     """Apply an explicit list of merge clusters (mutating).
@@ -244,6 +245,7 @@ async def apply_merges(
             status_code=422, detail="At least one cluster id set is required"
         )
     known = await _validate_clusters(body.clusters)
+    persoon = (await current_key(request)).person or ""
 
     results: List[ApplyResultOut] = []
     applied = 0
@@ -268,6 +270,7 @@ async def apply_merges(
                 names={k: v["name"] for k, v in known.items()},
                 types={k: v["type"] for k, v in known.items()},
                 origin=c.origin, method=c.method, score=c.score, evidence=c.evidence,
+                author=persoon,
             )
         results.append(
             ApplyResultOut(

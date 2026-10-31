@@ -1,39 +1,30 @@
-"""Chunk merge/split mutations for the inspect workspace (Track I.D-3).
+"""Handmatig samenvoegen en splitsen als handmatige run (ADR 0005, F2-06).
 
-This service implements two structural edits an operator can make to a
-source's chunk sequence from the inspect workspace:
+Een beheerder kan in de werkbak twee aangrenzende fragmenten samenvoegen of
+een fragment splitsen. Dat wijzigt geen bestaand fragment (ADR 0003, harde eis
+2): de dienst maakt een ``processing_run`` met ``trigger = handmatig`` en de
+persoon van de sleutel als ``actor``, en schrijft voor dezelfde bronversie een
+volledige nieuwe fragmentenset. De fragmenten van de vorige run blijven staan.
+``source_version.current_run`` wijst daarna naar de handmatige run; die is
+beschermd tegen een automatische run (migratie 92).
 
-* **merge** — fold a chunk into its immediate successor (by ``order``),
-  concatenating text + positions and compacting the now-vacant ``order``.
-* **split** — break a chunk at a character offset into two chunks,
-  apportioning the bounding boxes proportionally to the text fraction.
+* Elk nieuw fragment krijgt ``extractor = handmatig`` en de classificatie van de
+  bronversie, of strenger: een fragment dat uit een intern fragment komt, blijft
+  intern (ADR 0001). ``metadata.afgeleid_van`` noemt de fragmenten van de vorige
+  run waaruit het komt.
+* De nieuwe fragmenten en de nieuwe ``current_run`` staan in één transactie.
+  Mislukt die, dan wordt de run ``mislukt`` en verandert er niets aan de
+  fragmenten of de versie.
+* Alleen fragmenten van de huidige versie en run kunnen worden bewerkt.
 
-Atomicity (AC3 / Q-I-D3-1)
---------------------------
-Each mutation runs as a single SurrealQL ``BEGIN ... COMMIT`` transaction
-sent through ``execute_transaction``. SurrealDB applies the block atomically
-server-side: if any statement inside fails, the whole transaction is rolled
-back. ``execute_transaction`` runs the block via ``query_raw`` and inspects
-*every* statement's status, raising on any ``ERR`` — this matters because the
-plain ``query()`` seam returns only the *first* statement's result and would
-otherwise let a failed statement (statements 2-4 here) look like a silent
-no-op. So a rolled-back transaction always propagates as an exception.
-
-We do not read mutated rows back from the transaction's return value —
-callers re-fetch via the chunk repository after the commit succeeds. All
-*validation* (ownership, adjacency, offset bounds) happens in Python before
-the transaction is built, so the common failure modes never reach the
-database at all.
-
-Audit trail (AC4): each op logs a before/after summary via loguru AND — when a
-:class:`ChunkAuditService` is injected (I.H2) — appends a durable ``chunk_edit``
-row after the commit. The audit writer is optional and fail-soft, so the mutator
-still works (loguru-only) when none is wired.
+Audit: naast de run schrijft de dienst, als die is meegegeven, een
+``chunk_edit``-regel via :class:`ChunkAuditService` (fail-soft).
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
 from shared.models import Chunk
@@ -43,12 +34,36 @@ from surrealdb_service.connection import (
     execute_query,
     execute_transaction,
 )
+from surrealdb_service.repositories.processing_run import ProcessingRunRepository
 
 from app_main.services.audit.chunk_audit import ChunkAuditService
+from app_main.services.flow_register import fork_commit
 
 # Text separator inserted between two merged chunks. Two newlines mirror a
 # paragraph break, which is how Docling/MinerU chunks read when adjacent.
 MERGE_SEPARATOR = "\n\n"
+
+#: De pipeline van een handmatige run: code van de fork, geen flow.
+PIPELINE_ID = "chunk_mutator"
+
+#: De extractor van een fragment uit een handmatige run (ADR 0005).
+EXTRACTOR = "handmatig"
+
+#: Velden die een nieuw fragment overneemt van het fragment waaruit het komt.
+_OVERNEMEN = (
+    "text", "order", "physical_page", "printed_page", "chapter",
+    "paragraph_number", "element_type", "positions", "metadata",
+    "section_path", "section_level", "chunk_type", "source_element_count",
+    "is_content",
+)
+
+# De nieuwe fragmenten en de nieuwe huidige run in één transactie.
+_SCHRIJF_SET = (
+    "BEGIN TRANSACTION;\n"
+    "INSERT INTO chunk $fragmenten RETURN NONE;\n"
+    "UPDATE $versie SET current_run = $run RETURN NONE;\n"
+    "COMMIT TRANSACTION;"
+)
 
 
 class ChunkMutationError(Exception):
@@ -109,163 +124,109 @@ def _split_positions(
 
 
 class ChunkMutator:
-    """Service performing atomic merge/split edits on a source's chunks.
-
-    The service is stateless apart from an optional DB config; it reads
-    the current chunk rows, validates the request, then writes the result
-    inside one SurrealQL transaction.
-    """
+    """Dienst voor handmatig samenvoegen en splitsen als handmatige run (F2-06)."""
 
     def __init__(
         self,
         config: Optional[SurrealDBConfig] = None,
         audit: Optional[ChunkAuditService] = None,
+        run_repo: Optional[ProcessingRunRepository] = None,
     ) -> None:
         self.config = config
         self._audit = audit
+        self.run_repo = run_repo or ProcessingRunRepository(config)
 
-    async def _get_chunk(self, chunk_id: str) -> Optional[Chunk]:
+    async def _huidige_set(self, source_id: str) -> Tuple[Dict[str, Any], List[Chunk]]:
+        """De huidige versie van de bron en de fragmenten van haar huidige run."""
         try:
-            record_id = ensure_record_id(chunk_id)
+            bron = ensure_record_id(source_id)
         except Exception:
-            # Malformed id (e.g. no colon) → treat as not found (400), not 500.
-            return None
+            raise ChunkMutationError("Chunk not found for this source") from None
         rows = await execute_query(
-            "SELECT * FROM $id",
-            {"id": record_id},
+            "SELECT current_version AS versie, current_version.classification AS classification"
+            " FROM $bron",
+            {"bron": bron},
             self.config,
         )
-        return Chunk(**rows[0]) if rows else None
-
-    async def _get_ordered_chunks(self, source_id: str) -> List[Chunk]:
-        rows = await execute_query(
-            "SELECT * FROM chunk WHERE source = $source ORDER BY order ASC",
-            {"source": ensure_record_id(source_id)},
+        if not rows or not rows[0].get("versie"):
+            raise ChunkMutationError("Source has no current version")
+        fragmenten = await execute_query(
+            "SELECT * FROM chunk WHERE source = $bron"
+            " AND source_version = $bron.current_version"
+            " AND run = $bron.current_version.current_run ORDER BY order ASC",
+            {"bron": bron},
             self.config,
         )
-        return [Chunk(**row) for row in rows]
+        return rows[0], [Chunk(**r) for r in fragmenten or []]
 
     @staticmethod
-    def _belongs_to(chunk: Chunk, source_id: str) -> bool:
-        return str(chunk.source) == str(source_id)
+    def _index(chunks: Sequence[Chunk], chunk_id: Optional[str]) -> Optional[int]:
+        return next((i for i, c in enumerate(chunks) if str(c.id) == str(chunk_id)), None)
 
     async def merge(
         self,
         source_id: str,
         chunk_id: str,
         target_chunk_id: Optional[str] = None,
+        *,
+        actor: str,
     ) -> Chunk:
-        """Merge ``chunk_id`` with an adjacent chunk into a single chunk.
+        """Voeg ``chunk_id`` samen met een aangrenzend fragment, in een handmatige run.
 
-        Direction (documented): by default the chunk is merged with its
-        immediate successor by ``order`` (the next chunk). A caller may
-        instead pass ``target_chunk_id`` to merge with a specific chunk;
-        the two must be adjacent in ``order``. The lower-``order`` chunk is
-        kept and receives the concatenated text/positions; the higher one
-        is deleted and the trailing ``order`` values are compacted.
+        Standaard met het volgende fragment op ``order``; met ``target_chunk_id``
+        met dat fragment, dat aangrenzend moet zijn. Het nieuwe fragment krijgt
+        de tekst en posities van beide, in volgorde.
 
-        Returns the surviving (merged) chunk.
+        Geeft het nieuwe, samengevoegde fragment terug.
 
         Raises:
-            ChunkMutationError: if the chunk has no adjacent neighbour, the
-                supplied target isn't adjacent, or either chunk doesn't
-                belong to ``source_id``.
+            ChunkMutationError: geen aangrenzend fragment, het doel grenst niet
+                aan, of een fragment hoort niet bij de huidige set van de bron.
         """
-        chunks = await self._get_ordered_chunks(source_id)
-        by_id = {str(c.id): c for c in chunks}
-
-        base = by_id.get(str(chunk_id))
-        if base is None:
+        versie, chunks = await self._huidige_set(source_id)
+        index = self._index(chunks, chunk_id)
+        if index is None:
             raise ChunkMutationError("Chunk not found for this source")
 
-        index = next(
-            i for i, c in enumerate(chunks) if str(c.id) == str(chunk_id)
-        )
-
         if target_chunk_id is not None:
-            target = by_id.get(str(target_chunk_id))
-            if target is None:
-                raise ChunkMutationError(
-                    "Target chunk not found for this source"
-                )
-            target_index = next(
-                i
-                for i, c in enumerate(chunks)
-                if str(c.id) == str(target_chunk_id)
-            )
+            target_index = self._index(chunks, target_chunk_id)
+            if target_index is None:
+                raise ChunkMutationError("Target chunk not found for this source")
             if abs(target_index - index) != 1:
-                raise ChunkMutationError(
-                    "Chunks must be adjacent to merge"
-                )
+                raise ChunkMutationError("Chunks must be adjacent to merge")
         else:
             if index + 1 >= len(chunks):
-                raise ChunkMutationError(
-                    "No following chunk to merge with"
-                )
-            target = chunks[index + 1]
+                raise ChunkMutationError("No following chunk to merge with")
+            target_index = index + 1
 
-        # Keep the lower-order chunk; remove the higher-order one.
-        keep, drop = (
-            (base, target) if base.order <= target.order else (target, base)
+        eerste, tweede = sorted((index, target_index))
+        keep, drop = chunks[eerste], chunks[tweede]
+        samengevoegd = _nieuw(
+            keep,
+            [keep, drop],
+            text=f"{keep.text}{MERGE_SEPARATOR}{drop.text}",
+            positions=list(keep.positions) + list(drop.positions),
+            source_element_count=keep.source_element_count + drop.source_element_count,
+            chunk_type="merged",
         )
-
-        merged_text = f"{keep.text}{MERGE_SEPARATOR}{drop.text}"
-        merged_positions = list(keep.positions) + list(drop.positions)
-
-        keep_id = ensure_record_id(str(keep.id))
-        drop_id = ensure_record_id(str(drop.id))
-
-        # Atomic block: update the survivor, delete the absorbed chunk, then
-        # compact the order of everything that followed the deleted chunk.
-        transaction = (
-            "BEGIN TRANSACTION;\n"
-            "UPDATE $keep_id SET text = $text, positions = $positions, "
-            "source_element_count = source_element_count + "
-            "$drop_elem, chunk_type = 'merged', updated = time::now();\n"
-            "DELETE $drop_id;\n"
-            "UPDATE chunk SET order = order - 1 "
-            "WHERE source = $source AND order > $drop_order;\n"
-            "COMMIT TRANSACTION;"
+        nieuwe_set = (
+            [_nieuw(c, [c]) for c in chunks[:eerste]]
+            + [samengevoegd]
+            + [_nieuw(c, [c]) for c in chunks[tweede + 1:]]
         )
-        await execute_transaction(
-            transaction,
-            {
-                "keep_id": keep_id,
-                "drop_id": drop_id,
-                "text": merged_text,
-                "positions": merged_positions,
-                "drop_elem": drop.source_element_count,
-                "source": ensure_record_id(source_id),
-                "drop_order": drop.order,
-            },
-            self.config,
+        nieuw = await self._handmatige_run(
+            source_id, versie, nieuwe_set, op="merge", actor=actor,
+            bron_ids=[str(keep.id), str(drop.id)],
         )
-
+        result = nieuw[eerste]
         logger.info(
-            "chunk merge: source={} kept={} dropped={} "
-            "len {}+{}->{} positions {}+{}->{}",
-            source_id,
-            keep.id,
-            drop.id,
-            len(keep.text),
-            len(drop.text),
-            len(merged_text),
-            len(keep.positions),
-            len(drop.positions),
-            len(merged_positions),
+            "chunk merge: source={} {}+{} -> {} (run {})",
+            source_id, keep.id, drop.id, result.id, result.run,
         )
-
-        result = await self._get_chunk(str(keep.id))
-        if result is None:  # pragma: no cover - survivor must exist post-commit
-            raise ChunkMutationError("Merged chunk vanished after commit")
-
         if self._audit is not None:
             await self._audit.record(
-                source_id=str(source_id),
-                op="merge",
-                before=[keep, drop],
-                after=[result],
-                chunk_id=str(keep.id),
+                source_id=str(source_id), op="merge", before=[keep, drop],
+                after=[result], chunk_id=str(result.id), actor=actor,
             )
         return result
 
@@ -274,25 +235,25 @@ class ChunkMutator:
         source_id: str,
         chunk_id: str,
         cursor_offset: int,
+        *,
+        actor: str,
     ) -> List[Chunk]:
-        """Split ``chunk_id`` at ``cursor_offset`` into two chunks.
+        """Splits ``chunk_id`` op ``cursor_offset`` in twee, in een handmatige run.
 
-        The original chunk keeps ``text[:cursor_offset]``; a new chunk
-        receives ``text[cursor_offset:]`` and is inserted immediately after
-        (``order + 1``), with all later chunks shifted up by one. Bounding
-        boxes are apportioned proportionally to the text fraction (see
-        ``_split_positions``).
+        Het eerste nieuwe fragment krijgt ``text[:cursor_offset]``, het tweede de
+        rest; de posities worden naar verhouding verdeeld (``_split_positions``).
 
-        Returns ``[original, new]`` after the commit.
+        Geeft de twee nieuwe fragmenten terug.
 
         Raises:
-            ChunkMutationError: if the chunk doesn't belong to the source or
-                the offset is not strictly inside the text (0 or end would
-                produce an empty chunk).
+            ChunkMutationError: het fragment hoort niet bij de huidige set van de
+                bron, of de positie ligt niet binnen de tekst.
         """
-        chunk = await self._get_chunk(chunk_id)
-        if chunk is None or not self._belongs_to(chunk, source_id):
+        versie, chunks = await self._huidige_set(source_id)
+        index = self._index(chunks, chunk_id)
+        if index is None:
             raise ChunkMutationError("Chunk not found for this source")
+        chunk = chunks[index]
 
         text_len = len(chunk.text)
         if cursor_offset <= 0 or cursor_offset >= text_len:
@@ -301,97 +262,107 @@ class ChunkMutator:
                 f"(1..{text_len - 1})"
             )
 
-        first_text = chunk.text[:cursor_offset]
-        second_text = chunk.text[cursor_offset:]
-        fraction = cursor_offset / text_len
         first_positions, second_positions = _split_positions(
-            chunk.positions, fraction
+            chunk.positions, cursor_offset / text_len
         )
-
-        chunk_id_rec = ensure_record_id(str(chunk.id))
-        new_chunk_content: Dict[str, Any] = {
-            "source": ensure_record_id(source_id),
-            "text": second_text,
-            "order": chunk.order + 1,
-            "physical_page": chunk.physical_page,
-            "printed_page": chunk.printed_page,
-            "chapter": chunk.chapter,
-            "paragraph_number": chunk.paragraph_number,
-            "element_type": chunk.element_type,
-            "positions": second_positions,
-            "metadata": {**chunk.metadata, "split_from": str(chunk.id)},
-            "section_path": list(chunk.section_path),
-            "section_level": chunk.section_level,
-            "chunk_type": "split",
-            "source_element_count": 1,
-            "is_content": chunk.is_content,
-        }
-        # Herkomst (migratie 90): de tweede helft hoort bij dezelfde bronversie
-        # en run. Tot F2-06 de handmatige run bouwt (ADR 0005).
-        for veld in ("source_version", "run"):
-            if getattr(chunk, veld, None):
-                new_chunk_content[veld] = ensure_record_id(str(getattr(chunk, veld)))
-        if chunk.extractor:
-            new_chunk_content["extractor"] = chunk.extractor
-
-        # Atomic block: open a slot at order+1 (shift later chunks up),
-        # shrink the original to its first half, create the second half.
-        transaction = (
-            "BEGIN TRANSACTION;\n"
-            "UPDATE chunk SET order = order + 1 "
-            "WHERE source = $source AND order > $order;\n"
-            "UPDATE $chunk_id SET text = $first_text, "
-            "positions = $first_positions, chunk_type = 'split', "
-            "updated = time::now();\n"
-            "CREATE chunk CONTENT $new_chunk;\n"
-            "COMMIT TRANSACTION;"
+        eerste = _nieuw(
+            chunk, [chunk], text=chunk.text[:cursor_offset],
+            positions=first_positions, chunk_type="split",
         )
-        await execute_transaction(
-            transaction,
-            {
-                "source": ensure_record_id(source_id),
-                "order": chunk.order,
-                "chunk_id": chunk_id_rec,
-                "first_text": first_text,
-                "first_positions": first_positions,
-                "new_chunk": new_chunk_content,
-            },
-            self.config,
+        tweede = _nieuw(
+            chunk, [chunk], text=chunk.text[cursor_offset:],
+            positions=second_positions, chunk_type="split", source_element_count=1,
         )
-
+        tweede["metadata"]["split_from"] = str(chunk.id)
+        nieuwe_set = (
+            [_nieuw(c, [c]) for c in chunks[:index]]
+            + [eerste, tweede]
+            + [_nieuw(c, [c]) for c in chunks[index + 1:]]
+        )
+        nieuw = await self._handmatige_run(
+            source_id, versie, nieuwe_set, op="split", actor=actor,
+            bron_ids=[str(chunk.id)],
+        )
+        result = [nieuw[index], nieuw[index + 1]]
         logger.info(
-            "chunk split: source={} chunk={} offset={} "
-            "len {}->{}+{} positions {}->{}+{}",
-            source_id,
-            chunk.id,
-            cursor_offset,
-            text_len,
-            len(first_text),
-            len(second_text),
-            len(chunk.positions),
-            len(first_positions),
-            len(second_positions),
+            "chunk split: source={} chunk={} offset={} -> {} + {} (run {})",
+            source_id, chunk.id, cursor_offset, result[0].id, result[1].id, result[0].run,
         )
-
-        original = await self._get_chunk(str(chunk.id))
-        siblings = await self._get_ordered_chunks(source_id)
-        new_chunk = next(
-            (
-                c
-                for c in siblings
-                if c.order == chunk.order + 1 and str(c.id) != str(chunk.id)
-            ),
-            None,
-        )
-        if original is None or new_chunk is None:  # pragma: no cover
-            raise ChunkMutationError("Split result incomplete after commit")
-
         if self._audit is not None:
             await self._audit.record(
-                source_id=str(source_id),
-                op="split",
-                before=[chunk],
-                after=[original, new_chunk],
-                chunk_id=str(original.id),
+                source_id=str(source_id), op="split", before=[chunk],
+                after=result, chunk_id=str(result[0].id), actor=actor,
             )
-        return [original, new_chunk]
+        return result
+
+    async def _handmatige_run(
+        self,
+        source_id: str,
+        versie: Dict[str, Any],
+        nieuwe_set: List[Dict[str, Any]],
+        *,
+        op: str,
+        actor: str,
+        bron_ids: List[str],
+    ) -> List[Chunk]:
+        """Maak de handmatige run met de nieuwe fragmentenset; geeft de set terug."""
+        if not str(actor or "").strip():
+            raise ChunkMutationError("A manual run needs the person of the key")
+        versie_id = ensure_record_id(str(versie["versie"]))
+        classificatie = "extern" if versie.get("classification") == "extern" else "intern"
+        run = await self.run_repo.create(
+            trigger="handmatig",
+            pipeline_id=PIPELINE_ID,
+            pipeline_version={"git_commit": fork_commit(), "flow_hash": None},
+            input_classification=classificatie,
+            flow_vastgelegd=True,
+            actor=actor,
+            log=[{"at": datetime.now(timezone.utc), "step": op, "status": "bezig",
+                  "message": f"{op}: {', '.join(bron_ids)}"}],
+        )
+        run_id = ensure_record_id(str(run.id))
+        bron = ensure_record_id(source_id)
+        fragmenten = []
+        for volgorde, data in enumerate(nieuwe_set):
+            intern = data.pop("_intern") or classificatie == "intern"
+            fragmenten.append({
+                **data, "order": volgorde, "source": bron, "source_version": versie_id,
+                "run": run_id, "extractor": EXTRACTOR,
+                "classification": "intern" if intern else "extern",
+            })
+        try:
+            await execute_transaction(
+                _SCHRIJF_SET,
+                {"fragmenten": fragmenten, "versie": versie_id, "run": run_id},
+                self.config,
+            )
+        except Exception as e:
+            await self.run_repo.close(str(run.id), status="mislukt", error=type(e).__name__)
+            raise
+        await self.run_repo.close(str(run.id), status="geslaagd")
+        rows = await execute_query(
+            "SELECT * FROM chunk WHERE run = $run ORDER BY order ASC",
+            {"run": run_id},
+            self.config,
+        )
+        nieuw = [Chunk(**r) for r in rows or []]
+        if len(nieuw) != len(fragmenten):  # pragma: no cover - de transactie slaagde
+            raise ChunkMutationError("Manual run result incomplete after commit")
+        return nieuw
+
+
+def _nieuw(basis: Chunk, uit: Sequence[Chunk], **wijziging: Any) -> Dict[str, Any]:
+    """Een nieuw fragment op basis van ``basis``, afgeleid van ``uit``.
+
+    ``_intern`` geeft aan of een van de oorspronkelijke fragmenten intern is; het
+    nieuwe fragment wordt dan ook intern (nooit losser, ADR 0001).
+    """
+    data: Dict[str, Any] = {
+        veld: getattr(basis, veld) for veld in _OVERNEMEN if getattr(basis, veld) is not None
+    }
+    data["metadata"] = {**basis.metadata, "afgeleid_van": [str(c.id) for c in uit]}
+    data["section_path"] = list(basis.section_path)
+    data["positions"] = [list(p) for p in basis.positions]
+    data.update(wijziging)
+    data["_intern"] = any(c.classification != "extern" for c in uit)
+    return data

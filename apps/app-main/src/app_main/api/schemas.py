@@ -709,6 +709,7 @@ class RunResponse(BaseModel):
     attempts: int = 0
     source_map_rule_id: Optional[str] = None
     source_map_rule_rev: Optional[int] = None
+    actor: Optional[str] = None
 
 
 class SourceResponse(BaseModel):

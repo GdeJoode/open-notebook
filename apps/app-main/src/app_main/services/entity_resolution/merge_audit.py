@@ -14,7 +14,9 @@ threshold decided. This writes one row per merged pair.
   undo a merge, so ``ResolutionLogService.update_status`` refuses to change a
   row with a ``winner_id``;
 * ``confidence`` is the proposal's score; a plan cluster has none and gets the
-  table's default 0.0 rather than an invented 1.0.
+  table's default 0.0 rather than an invented 1.0;
+* ``author`` (migratie 92, F2-06) is wie besloot: de persoon van de sleutel
+  ``beheerder``, of de automatische route (``systeem:<route>``).
 
 Best-effort: the merge has been applied by the time this runs; failing to log it
 is reported, never raised.
@@ -43,6 +45,7 @@ async def record_merges(
     method: Optional[str] = None,
     score: Optional[float] = None,
     evidence: Optional[str] = None,
+    author: str,
     config: Optional[SurrealDBConfig] = None,
 ) -> int:
     """One ``resolution_log`` row per merged loser; returns how many were written.
@@ -68,6 +71,7 @@ async def record_merges(
                     "match_method": f"{origin}:{method or 'unspecified'}",
                     "match_reasoning": evidence or "",
                     "status": "accepted",
+                    "author": author,
                 }},
                 config,
             )

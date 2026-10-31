@@ -78,9 +78,12 @@ class ResolutionLogService:
         return result[0] if result else None
 
     async def update_status(
-        self, candidate_id: str, status: str
+        self, candidate_id: str, status: str, *, author: str
     ) -> dict[str, Any] | None:
         """Accept or reject a resolution log entry.
+
+        ``author`` (F2-06) is the person who decided; it replaces the pipeline
+        as author of the row.
 
         Raises :class:`MergeRecordImmutable` for the record of an applied merge
         (``winner_id`` set, PC.5b): rejecting it would not undo the merge.
@@ -91,19 +94,20 @@ class ResolutionLogService:
         if row.get("winner_id"):
             raise MergeRecordImmutable(candidate_id)
         result = await execute_query(
-            "UPDATE $id SET status = $status, reviewed_at = time::now() RETURN AFTER",
-            {"id": ensure_record_id(candidate_id), "status": status},
+            "UPDATE $id SET status = $status, author = $author, reviewed_at = time::now()"
+            " RETURN AFTER",
+            {"id": ensure_record_id(candidate_id), "status": status, "author": author},
         )
         return result[0] if result else None
 
     async def bulk_update_status(
-        self, candidate_ids: list[str], status: str
+        self, candidate_ids: list[str], status: str, *, author: str
     ) -> int:
         """Bulk accept/reject resolution log entries."""
         updated = 0
         for cid in candidate_ids:
             try:
-                result = await self.update_status(cid, status)
+                result = await self.update_status(cid, status, author=author)
             except MergeRecordImmutable:
                 continue  # a merge record is not a decision to revisit
             if result:

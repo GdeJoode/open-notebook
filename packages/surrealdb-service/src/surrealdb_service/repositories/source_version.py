@@ -7,8 +7,10 @@ met de vorige als ``predecessor``; de bron wijst daarna naar de nieuwe versie.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from loguru import logger
 from shared.models.source_version import SourceVersion
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import (
@@ -16,6 +18,7 @@ from surrealdb_service.connection import (
     execute_query,
     execute_transaction,
 )
+from surrealdb_service.repositories.processing_run import ProcessingRunRepository
 
 # Nieuwe versie en `source.current_version` in één transactie. Het nummer is
 # het aantal versies plus één; versies worden niet verwijderd. Een gelijktijdige
@@ -104,9 +107,50 @@ class SourceVersionRepository:
             raise RuntimeError("bronversie niet teruggevonden")
         return nieuw, True
 
-    async def set_current_run(self, version_id: str, run_id: str) -> None:
-        await execute_query(
-            "UPDATE $id SET current_run = $run RETURN NONE",
-            {"id": ensure_record_id(version_id), "run": ensure_record_id(run_id)},
+    async def set_current_run(self, version_id: str, run_id: str) -> bool:
+        """Maak ``run_id`` de huidige run van de versie; ``False`` als dat niet mag.
+
+        Een handmatige run is beschermd (ADR 0003, migratie 92): een run met een
+        andere trigger verzet ``current_run`` niet zolang die naar een
+        handmatige run wijst. De run krijgt dan een regel in zijn logboek en de
+        beheerder een melding in ``beheer_melding``; alleen de beheerder kiest
+        welke run de huidige wordt.
+        """
+        versie = ensure_record_id(version_id)
+        run = ensure_record_id(run_id)
+        rows = await execute_query(
+            "UPDATE $id SET current_run = $run WHERE current_run = $run"
+            " OR current_run.trigger != 'handmatig' OR $run.trigger = 'handmatig'"
+            " RETURN id",
+            {"id": versie, "run": run},
             self.config,
         )
+        if rows:
+            return True
+        huidig = await execute_query(
+            "SELECT source, current_run FROM $id", {"id": versie}, self.config
+        )
+        if not huidig:
+            raise ValueError(f"Bronversie niet gevonden: {version_id}")
+        melding = "De huidige run is handmatig; current_run is niet verzet"
+        await ProcessingRunRepository(self.config).append_log(run_id, [{
+            "at": datetime.now(timezone.utc), "step": "huidige_run",
+            "status": "beschermd", "message": melding,
+        }])
+        await execute_query(
+            "CREATE beheer_melding CONTENT $d RETURN NONE",
+            {"d": {
+                "soort": "handmatige_run_beschermd",
+                "melding": melding,
+                "source": ensure_record_id(str(huidig[0]["source"])),
+                "source_version": versie,
+                "run": run,
+                "current_run": ensure_record_id(str(huidig[0]["current_run"])),
+            }},
+            self.config,
+        )
+        logger.warning(
+            "Run {run} verzet de handmatige run van {versie} niet; melding voor de beheerder",
+            run=run_id, versie=version_id,
+        )
+        return False

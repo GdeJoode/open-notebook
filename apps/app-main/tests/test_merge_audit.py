@@ -26,7 +26,7 @@ async def test_each_merged_pair_is_one_readable_row(live_surrealdb: SurrealDBCon
                "entity:l2": "Economische zaken"},
         types={"entity:w": "government_organization", "entity:l1": "government_organization"},
         origin="curator_approved", method="fold_equal", score=0.97,
-        evidence="type_suffix: economische zaken", config=live_surrealdb,
+        evidence="type_suffix: economische zaken", author="Testpersoon", config=live_surrealdb,
     )
     assert n == 2
     rows = await execute_query(
@@ -50,7 +50,7 @@ async def test_a_plan_cluster_has_no_invented_confidence(live_surrealdb: Surreal
     await record_merges(
         winner_id="entity:wp", merged_loser_ids=["entity:lp"],
         names={"entity:wp": f"P{tag}"}, types={},
-        origin="curator_approved", method="recanonicalization_plan", config=live_surrealdb,
+        origin="curator_approved", method="recanonicalization_plan", author="Testpersoon", config=live_surrealdb,
     )
     [row] = await execute_query(
         "SELECT confidence FROM resolution_log WHERE entity_a_text = $a;",
@@ -72,7 +72,7 @@ async def test_the_existing_reader_lists_them(live_surrealdb: SurrealDBConfig, m
     await record_merges(
         winner_id="entity:w2", merged_loser_ids=["entity:l3"],
         names={"entity:w2": "W", "entity:l3": "L"}, types={},
-        origin="auto_merge", method="fold_equal", config=live_surrealdb,
+        origin="auto_merge", method="fold_equal", author="Testpersoon", config=live_surrealdb,
     )
     items, total = await mod.ResolutionLogService().list_candidates(
         match_method="auto_merge:fold_equal")
@@ -97,7 +97,7 @@ async def test_the_whole_reader_works_on_real_rows(live_surrealdb: SurrealDBConf
     await record_merges(
         winner_id="entity:w3", merged_loser_ids=["entity:l4"],
         names={"entity:w3": f"W{tag}", "entity:l4": "L4"}, types={},
-        origin="curator_approved", method=f"m{tag}", config=live_surrealdb,
+        origin="curator_approved", method=f"m{tag}", author="Testpersoon", config=live_surrealdb,
     )
     svc = mod.ResolutionLogService()
     items, total = await svc.list_candidates(match_method=f"curator_approved:m{tag}")
@@ -106,18 +106,19 @@ async def test_the_whole_reader_works_on_real_rows(live_surrealdb: SurrealDBConf
     assert (await svc.get_candidate(rid))["entity_b_text"] == "L4"
     # A merge record cannot be re-decided: rejecting it would not undo the merge.
     with pytest.raises(mod.MergeRecordImmutable):
-        await svc.update_status(rid, "rejected")
-    assert await svc.bulk_update_status([rid], "rejected") == 0
+        await svc.update_status(rid, "rejected", author="Testpersoon")
+    assert await svc.bulk_update_status([rid], "rejected", author="Testpersoon") == 0
     assert (await svc.get_candidate(rid))["status"] == "accepted"
     # A matcher row (no winner_id) still can.
     [m] = await execute_query(
         "CREATE resolution_log CONTENT {entity_a_text: $a, entity_b_text: 'B', "
-        "match_method: $m, status: 'pending'};",
+        "match_method: $m, status: 'pending', author: 'systeem:test'};",
         {"a": f"M{tag}", "m": f"matcher{tag}"}, live_surrealdb,
     )
     mid = str(m["id"])
-    assert (await svc.update_status(mid, "rejected"))["status"] == "rejected"
-    assert await svc.bulk_update_status([mid, rid], "accepted") == 1
+    beslist = await svc.update_status(mid, "rejected", author="Testpersoon")
+    assert (beslist["status"], beslist["author"]) == ("rejected", "Testpersoon")
+    assert await svc.bulk_update_status([mid, rid], "accepted", author="Testpersoon") == 1
     assert f"curator_approved:m{tag}" in await svc.get_methods()
     stats = await svc.get_stats()
     assert stats["total"] >= 1 and stats["accepted"] >= 1
@@ -131,7 +132,7 @@ async def test_the_status_route_refuses_a_merge_record():
     from fastapi.testclient import TestClient
 
     class _Svc:
-        async def update_status(self, entry_id, status):
+        async def update_status(self, entry_id, status, *, author):
             raise MergeRecordImmutable(entry_id)
 
     app = FastAPI()

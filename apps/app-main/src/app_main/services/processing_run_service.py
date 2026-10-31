@@ -99,8 +99,12 @@ class ProcessingRunService:
         flow_hash: Optional[str],
         source_map_rule_id: Optional[str] = None,
         label_schema: Optional[Dict[str, Any]] = None,
+        actor: Optional[str] = None,
     ) -> ProcessingRun:
-        """Maak een run; ``FlowNotRegisteredError`` als de flow niet mag draaien."""
+        """Maak een run; ``FlowNotRegisteredError`` als de flow niet mag draaien.
+
+        ``actor`` is verplicht bij trigger ``handmatig`` (migratie 92).
+        """
         invoer, rev = await self._invoer(source_map_rule_id)
         vastgelegd = self.flow_register.is_vastgelegd(pipeline_id, git_commit, flow_hash)
         velden: Dict[str, Any] = dict(
@@ -112,6 +116,7 @@ class ProcessingRunService:
             source_map_rule_rev=rev,
             label_schema=label_schema,
             flow_vastgelegd=vastgelegd,
+            actor=actor,
         )
         if vastgelegd:
             return await self.run_repo.create(**velden, log=[_regel("flow", "vastgelegd")])

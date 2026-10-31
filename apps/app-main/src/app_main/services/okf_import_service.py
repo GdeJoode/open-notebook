@@ -840,6 +840,7 @@ class OkfImportService:
                         names=names, types=types, origin=merge_audit.AUTO_MERGE,
                         method=candidate.method, score=candidate.score,
                         evidence=candidate.evidence or None,
+                        author="systeem:okf_import",
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(

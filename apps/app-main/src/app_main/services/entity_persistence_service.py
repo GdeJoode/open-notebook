@@ -480,6 +480,7 @@ class EntityPersistenceService:
                         matched_by_model = $matched_by_model,
                         status = $status,
                         source_id = $source_id,
+                        author = $author,
                         match_timestamp = time::now()
                     """,
                     {
@@ -499,6 +500,9 @@ class EntityPersistenceService:
                         "matched_by_model": c.get("matched_by_model"),
                         "status": c.get("status", "pending"),
                         "source_id": source_id,
+                        # F2-06: een kandidaat van de pijplijn; de beheerder
+                        # wordt auteur als hij erover beslist.
+                        "author": "systeem:entity_persistence",
                     },
                 )
                 stored += 1

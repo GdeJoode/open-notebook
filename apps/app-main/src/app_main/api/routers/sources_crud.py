@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 from shared.models.classification import ClassificationScope
 from shared.retrieval import FusionWeights, get_preset
@@ -10,7 +10,12 @@ from shared.types.enums import ProcessingStage
 from surrealdb_service.connection import DatabaseUnavailableError
 from surrealdb_service.repositories.source import ChunkRepository
 
-from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN, current_scope
+from app_main.api.agent_auth import (
+    RECHT_BEHEERDER,
+    RECHT_LEZEN_EXTERN,
+    current_key,
+    current_scope,
+)
 from app_main.api.fouten import fout_zonder_inhoud
 from app_main.api.routers.sources_files import _is_source_file_available
 from app_main.api.schemas import (
@@ -973,14 +978,16 @@ async def merge_chunk(
     source_id: str,
     chunk_id: str,
     body: ChunkMergeRequest,
+    request: Request,
     mutator: ChunkMutator = Depends(get_chunk_mutator),
     source_svc: SourceService = Depends(get_source_service),
 ):
-    """Merge a chunk with an adjacent chunk (Track I.D-3).
+    """Merge a chunk with an adjacent chunk, as a manual run (ADR 0005, F2-06).
 
     Defaults to merging with the next chunk by ``order``; an explicit
-    adjacent ``target_chunk_id`` may be supplied in the body. The operation
-    is atomic (SurrealQL transaction).
+    adjacent ``target_chunk_id`` may be supplied in the body. The result is a
+    new run (``trigger = handmatig``, the key's person as actor) with a new
+    chunk set; the chunks of the previous run stay.
     """
     try:
         source = await source_svc.get(source_id)
@@ -988,7 +995,8 @@ async def merge_chunk(
             raise HTTPException(status_code=404, detail="Source not found")
 
         merged = await mutator.merge(
-            str(source.id), chunk_id, body.target_chunk_id
+            str(source.id), chunk_id, body.target_chunk_id,
+            actor=(await current_key(request)).person or "",
         )
         return merged.model_dump()
 
@@ -1006,14 +1014,15 @@ async def split_chunk(
     source_id: str,
     chunk_id: str,
     body: ChunkSplitRequest,
+    request: Request,
     mutator: ChunkMutator = Depends(get_chunk_mutator),
     source_svc: SourceService = Depends(get_source_service),
 ):
-    """Split a chunk at a character offset into two chunks (Track I.D-3).
+    """Split a chunk at a character offset, as a manual run (ADR 0005, F2-06).
 
-    The original keeps the text before the offset; a new chunk takes the
-    remainder and is inserted right after. The operation is atomic
-    (SurrealQL transaction).
+    The first new chunk takes the text before the offset, the second the
+    remainder. Like a merge, this is a new run with a new chunk set; the
+    chunks of the previous run stay.
     """
     try:
         source = await source_svc.get(source_id)
@@ -1021,7 +1030,8 @@ async def split_chunk(
             raise HTTPException(status_code=404, detail="Source not found")
 
         result = await mutator.split(
-            str(source.id), chunk_id, body.cursorOffset
+            str(source.id), chunk_id, body.cursorOffset,
+            actor=(await current_key(request)).person or "",
         )
         return {"chunks": [c.model_dump() for c in result]}
 

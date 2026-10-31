@@ -45,9 +45,14 @@ async def create_run(
     request: Request,
     service: ProcessingRunService = Depends(get_processing_run_service),
 ):
-    # `handmatig` is alleen voor correcties door de beheerder (ADR 0005).
-    if body.trigger == "handmatig" and (await current_key(request)).permission != Right.BEHEERDER:
-        raise HTTPException(status_code=403, detail="Trigger handmatig vraagt een beheerder")
+    # `handmatig` is alleen voor correcties door de beheerder (ADR 0005), met
+    # de persoon van de sleutel als actor (migratie 92).
+    actor = None
+    if body.trigger == "handmatig":
+        key = await current_key(request)
+        if key.permission != Right.BEHEERDER:
+            raise HTTPException(status_code=403, detail="Trigger handmatig vraagt een beheerder")
+        actor = key.person
     try:
         run = await service.start(
             trigger=body.trigger,
@@ -56,6 +61,7 @@ async def create_run(
             flow_hash=body.pipeline_version.flow_hash,
             source_map_rule_id=body.source_map_rule_id,
             label_schema=body.label_schema,
+            actor=actor,
         )
     except FlowNotRegisteredError as e:
         return JSONResponse(

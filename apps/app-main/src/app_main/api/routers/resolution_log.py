@@ -2,14 +2,14 @@
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app_main.services.resolution_log_service import (
     MergeRecordImmutable,
     ResolutionLogService,
 )
-from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.agent_auth import RECHT_BEHEERDER, current_key
 
 router = APIRouter(prefix="/resolution-log", tags=["resolution-log"], dependencies=[RECHT_BEHEERDER])
 
@@ -38,6 +38,7 @@ class ResolutionLogEntry(BaseModel):
     status: str = "pending"
     reviewed_at: Optional[str] = None
     source_id: Optional[str] = None
+    author: Optional[str] = None
 
 
 class BulkStatusUpdate(BaseModel):
@@ -98,6 +99,7 @@ async def get_entry(
 @router.patch("/{entry_id:path}/status")
 async def update_entry_status(
     entry_id: str,
+    request: Request,
     status: str = Query(..., description="New status: accepted or rejected"),
     svc: ResolutionLogService = Depends(get_resolution_log_service),
 ):
@@ -105,7 +107,9 @@ async def update_entry_status(
     if status not in ("accepted", "rejected"):
         raise HTTPException(status_code=422, detail="Status must be 'accepted' or 'rejected'")
     try:
-        result = await svc.update_status(entry_id, status)
+        result = await svc.update_status(
+            entry_id, status, author=(await current_key(request)).person or ""
+        )
     except MergeRecordImmutable:
         raise HTTPException(
             status_code=409,
@@ -119,10 +123,13 @@ async def update_entry_status(
 @router.post("/bulk-status")
 async def bulk_update_status(
     body: BulkStatusUpdate,
+    request: Request,
     svc: ResolutionLogService = Depends(get_resolution_log_service),
 ):
     """Bulk accept/reject resolution log entries."""
     if body.status not in ("accepted", "rejected"):
         raise HTTPException(status_code=422, detail="Status must be 'accepted' or 'rejected'")
-    updated = await svc.bulk_update_status(body.ids, body.status)
+    updated = await svc.bulk_update_status(
+        body.ids, body.status, author=(await current_key(request)).person or ""
+    )
     return {"updated": updated}

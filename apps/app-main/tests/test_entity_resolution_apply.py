@@ -81,6 +81,7 @@ def test_a_valid_curator_merge_is_applied_and_logged(env):
     assert r.status_code == 200 and r.json()["applied"] == 1
     [entry] = logged
     assert entry["origin"] == "curator_approved" and entry["method"] == "fold_equal"
+    assert entry["author"] == "Testpersoon"
     assert list(entry["merged_loser_ids"]) == ["entity:ez2"]
     assert entry["names"]["entity:ez"] == "Economische Zaken"
 
