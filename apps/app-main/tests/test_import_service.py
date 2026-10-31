@@ -125,7 +125,10 @@ async def _omgeving(live_surrealdb, monkeypatch, app, git_flows, tmp_path):
     for dep in (get_processing_run_service, get_import_service, get_intake_service):
         app.dependency_overrides.pop(dep, None)
     await conn._pool.close_all()
-    conn._pool = original or conn.ConnectionPool(config=live_surrealdb)
+    # De vorige pool terug, of geen: een nieuwe pool naar deze database (bij
+    # ``env_rocksdb`` de rocksdb-container) zou de volgende tests stil naar een
+    # andere database laten schrijven.
+    conn._pool = original
 
 
 def _client(app) -> httpx.AsyncClient:
