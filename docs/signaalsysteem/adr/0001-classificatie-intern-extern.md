@@ -1,7 +1,7 @@
 # ADR 0001: Classificatie intern/extern, standaard intern, met overerving
 
 - **Status:** besloten
-- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 na de review (rechten `pijplijn` en `beheerder`, afgeleide classificatie); 2026-10-31 uitwerking in F2-03 (twee punten voorgesteld)
+- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 na de review (rechten `pijplijn` en `beheerder`, afgeleide classificatie); 2026-10-31 uitwerking in F2-03 (B25 besloten, Geert 31-10)
 - **Raakt FO-paragraaf:** 5 (bronkaartregel), 6, 9 (beleidsregels), 14 (herclassificatie)
 - **Lost op:** verschilanalyse conflict 3 en 4, open vraag 6
 - **Gewijzigd door:** ADR 0019 (classificatie en pipelinestart per innameroute)
@@ -86,7 +86,7 @@ De bouw (`migrations/89.surrealql`) wijkt op de volgende punten af van het voors
 - **Logboek.** `classification_log` kan alleen aangevuld worden; een event weigert wijzigen en verwijderen. `89_down` wist het logboek niet.
 - **Persoon.** Het logboek controleert de persoon niet tegen de sleutel. Aanvaard, zolang alleen de fork in de database schrijft.
 
-**Voorgesteld, Geert beslist** (plan van aanpak §8.1, B25):
+**Besloten door Geert, 31-10, volgens voorstel** (plan van aanpak §8.1, B25):
 
 - **Relatie telt haar entiteiten mee.** Een relatie telt naast haar vermeldingen ook de classificatie van haar twee entiteiten mee. Dat is strenger dan het voorstel hierboven.
   - Voor: geen extern zichtbare relatie tussen entiteiten waarvan er één intern is.

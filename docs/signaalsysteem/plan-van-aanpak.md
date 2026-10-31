@@ -73,7 +73,7 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Hangt af van:* F2-01, F2-26.
 - *Ook:* herstel van de bestaande parsefout in `migrations/5_down.surrealql` regel 2 (`SCHEMAFULL` weg uit `REMOVE TABLE`), gevonden in P10 (ADR 0021).
 - *Bestanden:* `migrations/5_down.surrealql`; `migrations/89.surrealql` en `_down`; `packages/shared/src/shared/models/source.py`; `apps/app-main/src/app_main/api/schemas.py`; `packages/surrealdb-service/src/surrealdb_service/repositories/source.py`, `notebook.py`, `entity.py`; `apps/app-main/src/app_main/services/entity_persistence_service.py` (vermeldingen); nieuw `apps/app-main/src/app_main/services/classification_service.py`, nieuw `api/routers/classification.py`; `dependencies.py`.
-- *ADR:* 0001 (bouwkeuzes en twee voorgestelde punten in "Uitwerking in F2-03"; B25), 0019, 0002 B.
+- *ADR:* 0001 ("Uitwerking in F2-03"; B25 besloten), 0019, 0002 B.
 - *Stopconditie:* `test_migration_89_classification.py`: per tabel het veld met standaard `intern`; de test schrijft een waarde en leest die terug, omdat een SCHEMAFULL-tabel onder v2.7.0 een onbekend veld stil weglaat (P4); een record zonder waarde is `intern`; `_down` zet `private = true` op alle bronnen. `apps/app-main/tests/test_classification_service.py`: import of poortwachter kan intern niet naar extern zetten (409); herclassificatie alleen met `beheerder` en reden, werkt fragmenten, embeddings en `doc_node` in één transactie bij en schrijft precies één logregel met persoon; er is geen pad om een logregel te wijzigen of te verwijderen. `apps/app-main/tests/test_afgeleide_classificatie.py`: een entiteit, alias, relatie en triage-item met één interne vermelding zijn `intern`; zonder vermelding `intern`; na herclassificatie van de enige interne bron worden ze opnieuw berekend. `test_rechten_pijplijn.py` uitgebreid: `pijplijn` krijgt 403 op herclassificatie.
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
@@ -1075,7 +1075,7 @@ Vastgelegd, niet opgelost.
 | B19 | Het extra recht `ophalen` (ADR 0002 B, 0022 B): **besloten** (Geert, 30-10) volgens voorstel; het recht komt in de migratie van F2-01. | — | — (F2-01) |
 | B20 | Gateway strenger dan gevraagd (ADR 0022 C, F): **besloten** (Geert, 30-10) voor fase 2 tot en met 4; voor fase 5 besluiten samen met B12 (C8). | — | — (F2-12; F5-03, F5-07) |
 | B21 | `DOCLING_SERVE_MAX_SYNC_WAIT`: **besloten** (Geert, 30-10), 3 600 s. | — | — (F2-11, F2-17) |
-| B25 | Twee voorgestelde punten uit ADR 0001 "Uitwerking in F2-03": (a) een relatie telt naast haar vermeldingen ook de classificatie van haar twee entiteiten mee, strenger dan het oorspronkelijke ADR 0001; (b) `note` en `notebook` kunnen nu niet van intern naar extern, omdat er geen herclassificatiepad voor is. | (a) Relatie strenger houden. (b) Herclassificatie van notebooks en notities via F2-30 (B22). | F2-30 |
+| B25 | ADR 0001 "Uitwerking in F2-03": **besloten** (Geert, 31-10) volgens voorstel: (a) een relatie is intern zodra één van haar twee entiteiten intern is; (b) herclassificatie van notebooks en notities in F2-30. | — | — (F2-30) |
 
 ### 8.2 Later te beslissen
 
