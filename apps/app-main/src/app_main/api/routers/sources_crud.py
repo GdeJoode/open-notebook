@@ -9,6 +9,7 @@ from shared.types.enums import ProcessingStage
 from surrealdb_service.connection import DatabaseUnavailableError
 from surrealdb_service.repositories.source import ChunkRepository
 
+from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN
 from app_main.api.routers.sources_files import _is_source_file_available
 from app_main.api.schemas import (
     AssetModel,
@@ -22,8 +23,8 @@ from app_main.api.schemas import (
     RelatedSourceKGResponse,
     RelatedSourceResponse,
     SignalProvenanceResponse,
-    SourceInsightResponse,
     SourceCountsResponse,
+    SourceInsightResponse,
     SourceListResponse,
     SourceResponse,
     SourceStatusResponse,
@@ -40,19 +41,18 @@ from app_main.dependencies import (
     get_source_service,
     get_transformation_service,
 )
-from app_main.services.audit.chunk_audit import ChunkAuditService
-from app_main.services.hybrid_retrieval_service import HybridRetrievalService
-from app_main.services.kg_retrieval_service import KGRetrievalService
 from app_main.exceptions import InvalidInputError
+from app_main.services.audit.chunk_audit import ChunkAuditService
 from app_main.services.chunking.chunk_mutator import (
     ChunkMutationError,
     ChunkMutator,
 )
+from app_main.services.hybrid_retrieval_service import HybridRetrievalService
+from app_main.services.kg_retrieval_service import KGRetrievalService
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
 from app_main.services.stopped_sources import NEEDS_YOU_STAGES, stopped_sources
 from app_main.services.transformation_service import TransformationService
-from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN
 
 router = APIRouter()
 
@@ -1041,45 +1041,21 @@ async def delete_chunk(
 async def create_chunk(
     source_id: str,
     body: ChunkCreate,
-    chunk_repo: ChunkRepository = Depends(get_chunk_repo),
     source_svc: SourceService = Depends(get_source_service),
 ):
-    """Create a new manual chunk for a source."""
-    try:
-        source = await source_svc.get(source_id)
-        if not source:
-            raise HTTPException(status_code=404, detail="Source not found")
+    """Een handmatig fragment toevoegen.
 
-        # Compute next order value
-        from surrealdb_service.connection import ensure_record_id
-        existing = await chunk_repo.get_by_source(str(source.id))
-        max_order = max((c.order for c in existing), default=-1)
-
-        chunk_data = {
-            "source": ensure_record_id(str(source.id)),
-            "text": body.text,
-            "element_type": body.element_type,
-            "physical_page": body.physical_page,
-            "printed_page": body.physical_page + 1,
-            "positions": body.positions,
-            "is_content": body.is_content,
-            "chapter": body.chapter,
-            "order": max_order + 1,
-            "chunk_type": "manual",
-            "source_element_count": 1,
-            "section_path": [],
-            "section_level": 0,
-            "metadata": {**body.metadata, "manual": True},
-        }
-
-        created = await chunk_repo.create(chunk_data)
-        return created.model_dump()
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error creating chunk for source {source_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error creating chunk: {str(e)}")
+    Sinds F2-04 (migratie 90) hoort elk fragment bij een bronversie en een
+    lopende run. Een handmatig fragment vraagt een handmatige run (ADR 0005);
+    die komt met F2-29. Tot dan geeft deze route 409.
+    """
+    source = await source_svc.get(source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+    raise HTTPException(
+        status_code=409,
+        detail="Een fragment toevoegen vraagt een handmatige run; die volgt in F2-29",
+    )
 
 
 @router.post("/{source_id}/chunks/{chunk_id:path}/merge", dependencies=[RECHT_BEHEERDER])

@@ -1132,11 +1132,27 @@ class TestProcessSource:
             and c["extractor"] for c in prepared
         )
         version_repo.register.assert_awaited_once()
+        # De eerste verwerking heet `inname` (ADR 0005: `handmatig` is voor correcties).
+        assert run_repo.create.await_args.kwargs["trigger"] == "inname"
         version_repo.set_current_run.assert_awaited_once_with(
             "source_version:v1", "processing_run:r1"
         )
         run_repo.close.assert_awaited_once()
         assert run_repo.close.await_args.kwargs["status"] == "geslaagd"
+
+    @pytest.mark.asyncio
+    async def test_failed_extraction_closes_the_run_as_failed(
+        self, processor, source_repo, run_repo
+    ):
+        processor.extractor.extract = AsyncMock(side_effect=RuntimeError("parser"))
+        with pytest.raises(RuntimeError):
+            await processor.process_source(
+                source_id="source:test1", content_state={"content": "Hello world"}
+            )
+        run_repo.create.assert_awaited_once()
+        assert run_repo.close.await_args.kwargs["status"] == "mislukt"
+        # De bron wordt pas na de run en na een geslaagde extractie bijgewerkt.
+        source_repo.update.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_failed_chunk_write_closes_the_run_as_failed(
@@ -1182,7 +1198,7 @@ class TestProcessSource:
 
     @pytest.mark.asyncio
     async def test_structure_graph_failure_does_not_fail_ingestion(
-        self, processor, chunk_repo, graph_builder
+        self, processor, chunk_repo, graph_builder, run_repo
     ):
         """A graph-build error is swallowed — ingestion still succeeds (I.F)."""
         chunk_repo.bulk_create = AsyncMock(
@@ -1208,6 +1224,10 @@ class TestProcessSource:
         # Ingestion completes despite the graph failure.
         assert result["chunk_count"] == 1
         graph_builder.build.assert_awaited_once()
+        # F2-04: de fout staat in het runlogboek, zonder inhoud.
+        [regel] = run_repo.close.await_args.kwargs["log"]
+        assert regel["step"] == "structuur" and regel["status"] == "mislukt"
+        assert "DB down" not in regel["message"]
 
     @pytest.mark.asyncio
     async def test_no_structure_graph_when_no_chunks(

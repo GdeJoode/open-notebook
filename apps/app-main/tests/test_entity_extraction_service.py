@@ -3079,3 +3079,14 @@ class TestTheTypingVocabularyReachesPersist:
         assert {"general", "regiodeal", "schema_core", "policy"} <= {
             o.metadata.name for o in schemas
         }
+
+
+@pytest.mark.asyncio
+async def test_vermelding_krijgt_de_huidige_run_van_de_bron() -> None:
+    """F2-04: de extractie geeft de run door aan de vermeldingen."""
+    repo = AsyncMock()
+    repo.get_current_run = AsyncMock(return_value="processing_run:r1")
+    svc = EntityExtractionService(source_repo=repo)
+    assert await svc._huidige_run("source:s1") == "processing_run:r1"
+    repo.get_current_run = AsyncMock(return_value=None)
+    assert await svc._huidige_run("source:s1") is None

@@ -17,6 +17,7 @@ Replaces SourceProcessingService after the Phase 3 god-split.
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -126,7 +127,19 @@ class SourceProcessor:
             )
             content_settings = ContentSettings(**settings_data)
 
-        # 3. Route to extraction method
+        # 3. Run (F2-04, ADR 0003): elke verwerking is een run, ook een die
+        # mislukt. De eerste verwerking heet `inname`; `handmatig` is alleen
+        # voor correcties door de beheerder (ADR 0005). De pipeline is code van
+        # de fork zelf, geen flow; die staat in Git (`flow_vastgelegd`).
+        run = await self.run_repo.create(
+            trigger="herverwerking" if source.current_version else "inname",
+            pipeline_id=PIPELINE_ID,
+            input_classification=source.classification or "onbekend",
+            flow_vastgelegd=True,
+        )
+        run_id = str(run.id)
+
+        # 4. Route to extraction method
         method = "file" if "file_path" in content_state else (
             "url" if "url" in content_state else "text"
         )
@@ -138,23 +151,18 @@ class SourceProcessor:
         except Exception as e:
             log_stream.emit(source_id, f"Extraction failed: {e}", "ERROR")
             log_stream.close(source_id)
+            await self.run_repo.close(run_id, status="mislukt", error=type(e).__name__)
             raise
 
         log_stream.emit(source_id, "Extraction completed successfully")
 
-        # 4. Update source record
-        log_stream.emit(source_id, "Updating source record...")
-        source = await self._update_source(source, extracted)
-
-        # 5. Run en bronversie (F2-04, ADR 0003). Een nieuwe run met nieuwe
-        # fragmenten; de fragmenten van eerdere runs blijven staan.
-        run = await self.run_repo.create(
-            trigger="herverwerking" if source.current_version else "handmatig",
-            pipeline_id=PIPELINE_ID,
-            input_classification=source.classification or "onbekend",
-        )
-        run_id = str(run.id)
         try:
+            # 5. Update source record
+            log_stream.emit(source_id, "Updating source record...")
+            source = await self._update_source(source, extracted)
+
+            # 6. Bronversie: een nieuwe run met nieuwe fragmenten; de
+            # fragmenten van eerdere runs blijven staan.
             versie, nieuwe_versie = await self.version_repo.register(
                 source_id,
                 _inhoudshash(content_state, extracted),
@@ -163,7 +171,7 @@ class SourceProcessor:
             )
             versie_id = str(versie.id)
 
-            # 6. Write chunks for this version and run.
+            # 7. Write chunks for this version and run.
             chunk_count = 0
             created_chunks: List[Any] = []
             if extracted.chunks:
@@ -182,17 +190,22 @@ class SourceProcessor:
             await self.run_repo.close(run_id, status="mislukt", error=type(e).__name__)
             raise
 
-        # 7. Build the document structure graph (Phase I.F). Best-effort: a
+        # 8. Build the document structure graph (Phase I.F). Best-effort: a
         # graph-build failure must NOT fail the whole ingestion — the chunks are
         # already persisted and every other downstream feature works without the
-        # structure graph. Log and continue.
+        # structure graph. Log it in the run and continue.
+        regels: List[Dict[str, Any]] = []
         if created_chunks:
-            await self._build_structure_graph(
+            fout = await self._build_structure_graph(
                 source_id, created_chunks, source_version=versie_id, run=run_id
             )
+            if fout:
+                regels.append({"at": datetime.now(timezone.utc), "step": "structuur",
+                               "status": "mislukt", "message": fout})
         await self.run_repo.close(
             run_id,
             status="geslaagd" if (chunk_count or nieuwe_versie) else "niets_nieuws",
+            log=regels,
         )
 
         log_stream.emit(
@@ -213,7 +226,7 @@ class SourceProcessor:
         *,
         source_version: str,
         run: str,
-    ) -> None:
+    ) -> Optional[str]:
         """Build the document structure graph for a source (Phase I.F).
 
         Best-effort hook: converts the freshly-persisted ``Chunk`` rows into the
@@ -246,6 +259,9 @@ class SourceProcessor:
                 f"Structure-graph build failed for {source_id} "
                 f"(ingestion continues): {e}"
             )
+            # Voor het runlogboek: alleen het soort fout, geen inhoud.
+            return f"Structuur niet opgebouwd: {type(e).__name__}"
+        return None
 
     async def _update_source(
         self,
