@@ -14,7 +14,7 @@ from app_main.exceptions import InvalidInputError
 from app_main.services.model_service import ModelService
 from app_main.services.search_service import SearchService
 from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN, current_scope
-from app_main.api.fouten import fout_zonder_inhoud
+from app_main.api.fouten import fout_zonder_inhoud, log_fout, melding_met_id
 
 router = APIRouter(tags=["search"])
 
@@ -153,7 +153,8 @@ async def stream_ask_response(
 
     except Exception as e:
         logger.error(f"Error in ask streaming: {e}")
-        error_data = {"type": "error", "message": str(e)}
+        fout_id = log_fout(e, "Vraag beantwoorden mislukt")
+        error_data = {"type": "error", "message": melding_met_id("Vraag beantwoorden mislukt", fout_id)}
         yield f"data: {json.dumps(error_data)}\n\n"
 
 

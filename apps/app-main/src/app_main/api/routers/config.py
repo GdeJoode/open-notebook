@@ -11,6 +11,7 @@ from loguru import logger
 
 from surrealdb_service.connection import execute_query
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import log_fout, melding_met_id
 
 router = APIRouter(tags=["config"], dependencies=[RECHT_BEHEERDER])
 
@@ -141,7 +142,7 @@ async def check_database_health() -> dict:
                 f"Database health check slow, last probe failed: "
                 f"{_last_probe_error}"
             )
-            return {"status": "offline", "error": _last_probe_error}
+            return {"status": "offline", "error": "Database niet bereikbaar"}
         logger.warning(
             f"Database health check still waiting after "
             f"{HEALTH_CHECK_TIMEOUT} seconds; not reporting offline"
@@ -154,7 +155,8 @@ async def check_database_health() -> dict:
         return {"status": "offline", "error": "Health probe cancelled"}
     except Exception as e:
         logger.warning(f"Database health check failed: {e}")
-        return {"status": "offline", "error": str(e)}
+        fout_id = log_fout(e, "Database niet bereikbaar")
+        return {"status": "offline", "error": melding_met_id("Database niet bereikbaar", fout_id)}
 
 
 @router.get("/config")

@@ -71,7 +71,9 @@ class TestMineruHealthEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["healthy"] is False
-        assert "boom" in (data.get("error") or "")
+        # F2-05: geen uitzonderingstekst in het antwoord, wel een fout-id.
+        assert "boom" not in (data.get("error") or "")
+        assert "fout-id" in data["error"]
 
     def test_returns_healthy_without_version(self):
         client = _make_app()

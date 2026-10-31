@@ -15,7 +15,7 @@ from app_main.dependencies import get_chat_service, get_source_service
 from app_main.services.chat_service import ChatService
 from app_main.services.source_service import SourceService
 from app_main.api.agent_auth import RECHT_BEHEERDER
-from app_main.api.fouten import fout_zonder_inhoud
+from app_main.api.fouten import fout_zonder_inhoud, log_fout, melding_met_id
 
 router = APIRouter(tags=["source-chat"], dependencies=[RECHT_BEHEERDER])
 
@@ -522,7 +522,9 @@ async def stream_source_chat_response(
 
     except Exception as e:
         logger.error(f"Error in source chat streaming: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        fout_id = log_fout(e, "Chat mislukt")
+        fout = {"type": "error", "message": melding_met_id("Chat mislukt", fout_id)}
+        yield f"data: {json.dumps(fout)}\n\n"
 
 
 @router.post(

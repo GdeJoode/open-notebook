@@ -35,17 +35,50 @@ def _namen_in(node: ast.AST) -> set[str]:
     return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and id(n) not in toegestaan}
 
 
+#: Sleutels en trefwoorden waaronder tekst in een antwoord terechtkomt: in
+#: ``detail``, en in ``error`` en ``message`` (statusantwoorden, SSE).
+ANTWOORDSLEUTELS = {"detail", "error", "message"}
+
+#: Aanroepen waarvan de uitkomst geen uitzonderingstekst is, ook al krijgen ze
+#: de uitzondering mee: het fout-id, en de telling die ``_write_to_vault`` aan
+#: zijn uitzondering hangt.
+ZONDER_TEKST = {"log_fout", "nieuw_fout_id", "fout_zonder_inhoud", "_extract_partial_state"}
+
+
 def _detail_waarden(node: ast.AST):
-    """Elke uitdrukking die als ``detail`` in een antwoord terechtkomt."""
+    """Elke uitdrukking die als ``detail``, ``error`` of ``message`` in een
+    antwoord terechtkomt: een trefwoord of een sleutel van een dict."""
     for sub in ast.walk(node):
         if isinstance(sub, ast.Call):
             for kw in sub.keywords:
-                if kw.arg == "detail":
+                if kw.arg in ANTWOORDSLEUTELS:
                     yield sub.lineno, kw.value
         elif isinstance(sub, ast.Dict):
             for key, value in zip(sub.keys, sub.values):
-                if isinstance(key, ast.Constant) and key.value == "detail":
+                if isinstance(key, ast.Constant) and key.value in ANTWOORDSLEUTELS:
                     yield sub.lineno, value
+
+
+def _besmet(stmts: list[ast.stmt], bron: set[str]) -> set[str]:
+    """``bron`` plus de lokale namen waaraan iets met die namen is toegewezen,
+    tot er niets meer bijkomt (``body = {"error": str(exc)}``, daarna
+    ``detail=body``)."""
+    namen = set(bron)
+    while True:
+        erbij = set()
+        for stmt in stmts:
+            for node in ast.walk(stmt):
+                if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and node.value is not None:
+                    waarde = node.value
+                    if (isinstance(waarde, ast.Call) and isinstance(waarde.func, ast.Name)
+                            and waarde.func.id in ZONDER_TEKST):
+                        continue
+                    if namen & _namen_in(waarde):
+                        doelen = node.targets if isinstance(node, ast.Assign) else [node.target]
+                        erbij |= {d.id for d in doelen if isinstance(d, ast.Name)}
+        if erbij <= namen:
+            return namen
+        namen |= erbij
 
 
 def _is_exception_handler(func: ast.AST) -> bool:
@@ -61,21 +94,22 @@ def _overtredingen(pad: Path) -> list[str]:
     rel = pad.relative_to(ROOT).as_posix()
     fouten: list[str] = []
 
-    # 1. `except ... as e:` met `e` in detail.
+    # 1. `except ... as e:` met `e`, of een naam die ervan afgeleid is, in een antwoord.
     for handler in ast.walk(boom):
         if isinstance(handler, ast.ExceptHandler) and handler.name:
+            besmet = _besmet(handler.body, {handler.name})
             for stmt in handler.body:
                 for regel, waarde in _detail_waarden(stmt):
-                    if handler.name in _namen_in(waarde):
-                        fouten.append(f"{rel}:{regel}: '{handler.name}' in detail")
+                    if besmet & _namen_in(waarde):
+                        fouten.append(f"{rel}:{regel}: '{handler.name}' in een antwoord")
 
-    # 2. Een foutafhandelaar van de app met de uitzondering in detail.
+    # 2. Een foutafhandelaar van de app met de uitzondering in een antwoord.
     for func in ast.walk(boom):
         if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_exception_handler(func):
-            uitzondering = {a.arg for a in func.args.args[1:]}
+            besmet = _besmet(func.body, {a.arg for a in func.args.args[1:]})
             for regel, waarde in _detail_waarden(func):
-                if uitzondering & _namen_in(waarde):
-                    fouten.append(f"{rel}:{regel}: uitzondering in detail van {func.name}")
+                if besmet & _namen_in(waarde):
+                    fouten.append(f"{rel}:{regel}: uitzondering in een antwoord van {func.name}")
     return fouten
 
 
@@ -131,6 +165,39 @@ def goed_eigen_melding():
         pass
     except HTTPException as exc:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+def e_via_variabele():
+    try:
+        pass
+    except OSError as exc:
+        body = {"error": str(exc)}
+        tekst = body
+        raise HTTPException(status_code=500, detail=tekst)
+
+def f_status():
+    try:
+        pass
+    except Exception as e:
+        return {"status": "offline", "error": str(e)}
+
+async def g_sse():
+    try:
+        pass
+    except Exception as e:
+        yield json.dumps({"type": "error", "message": str(e)})
+
+def h_trefwoord():
+    try:
+        pass
+    except Exception as exc:
+        return Antwoord(healthy=False, error=str(exc))
+
+def goed_fout_id():
+    try:
+        pass
+    except Exception as e:
+        fout_id = log_fout(e, "Mislukt")
+        return {"error": melding_met_id("Mislukt", fout_id)}
 '''
     pad = ROOT / "tests" / "_tmp_zoektest_detail.py"
     try:
@@ -138,4 +205,5 @@ def goed_eigen_melding():
         fouten = _overtredingen(pad)
     finally:
         pad.unlink(missing_ok=True)
-    assert len(fouten) == 5, fouten
+    # e_via_variabele telt twee keer: de dict en `detail=tekst`.
+    assert len(fouten) == 10, fouten

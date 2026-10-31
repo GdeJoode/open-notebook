@@ -71,7 +71,7 @@ from app_main.services.obsidian_export_service import (
 from app_main.services.okf_export_service import OkfExportService
 from app_main.services.okf_import_service import OkfImportService
 from app_main.api.agent_auth import RECHT_BEHEERDER
-from app_main.api.fouten import fout_zonder_inhoud
+from app_main.api.fouten import fout_zonder_inhoud, log_fout, melding_met_id
 
 router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["exports"], dependencies=[RECHT_BEHEERDER])
 
@@ -261,7 +261,8 @@ async def export_notebook_obsidian(
         # operator problem, not a 400-class user-input problem.
         logger.error("export-obsidian filesystem rejection: {}", exc)
         partial = _extract_partial_state(exc)
-        body: Dict[str, Any] = {"error": str(exc)}
+        fout_id = log_fout(exc, "Export naar de vault mislukt")
+        body: Dict[str, Any] = {"error": melding_met_id("Export naar de vault mislukt", fout_id)}
         body.update(partial)
         raise HTTPException(status_code=500, detail=body) from exc
     except OSError as exc:
@@ -270,7 +271,8 @@ async def export_notebook_obsidian(
         # _write_to_vault via the exception's trailing dict arg.
         logger.error("export-obsidian filesystem failure: {}", exc)
         partial = _extract_partial_state(exc)
-        body = {"error": str(exc)}
+        fout_id = log_fout(exc, "Export naar de vault mislukt")
+        body = {"error": melding_met_id("Export naar de vault mislukt", fout_id)}
         body.update(partial)
         raise HTTPException(status_code=500, detail=body) from exc
 

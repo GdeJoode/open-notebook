@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from app_main.services.mineru_http_client import MineruHttpClient
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import log_fout, melding_met_id
 
 router = APIRouter(prefix="/health", tags=["health"], dependencies=[RECHT_BEHEERDER])
 
@@ -62,4 +63,7 @@ async def mineru_health() -> MineruHealthResponse:
         )
     except Exception as exc:  # noqa: BLE001 — endpoint must never raise
         logger.warning(f"[health/mineru] Unexpected probe failure: {exc}")
-        return MineruHealthResponse(healthy=False, error=str(exc))
+        fout_id = log_fout(exc, "MinerU-controle mislukt")
+        return MineruHealthResponse(
+            healthy=False, error=melding_met_id("MinerU-controle mislukt", fout_id)
+        )

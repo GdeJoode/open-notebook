@@ -78,7 +78,9 @@ class TestCheckDatabaseHealth:
         self._db(monkeypatch, refused)
         health = await self.mod.check_database_health()
         assert health["status"] == "offline"
-        assert "refused" in health["error"]
+        # F2-05: geen uitzonderingstekst in het antwoord.
+        assert health["error"].startswith("Database niet bereikbaar")
+        assert "refused" not in health["error"]
 
     async def test_slow_sign_in_is_online_and_finishes(self, monkeypatch):
         gate = asyncio.Event()
@@ -111,7 +113,7 @@ class TestCheckDatabaseHealth:
         assert (await self.mod.check_database_health())["status"] == "offline"
         health = await self.mod.check_database_health()
         assert health["status"] == "offline"
-        assert "timed out" in health["error"]
+        assert health["error"] == "Database niet bereikbaar"
         # Still offline while that probe keeps hanging, until one succeeds.
         assert (await self.mod.check_database_health())["status"] == "offline"
         gate.set()
