@@ -33,7 +33,7 @@ from surrealdb_service.repositories.entity import EntityRepository
 from surrealdb_service.repositories.notebook import NotebookRepository, NoteRepository
 from surrealdb_service.repositories.processing_run import ProcessingRunRepository
 from surrealdb_service.repositories.search import SearchRepository
-from surrealdb_service.repositories.source import SourceRepository
+from surrealdb_service.repositories.source import ChunkRepository, SourceRepository
 from surrealdb_service.repositories.source_version import SourceVersionRepository
 from surrealdb_service.testing import fixtures as fx
 
@@ -262,6 +262,7 @@ LEESMETHODEN = [
     (SourceRepository, "list_with_metadata"),
     (SourceRepository, "get_text"),
     (SourceRepository, "get_notebook_ids_scoped"),
+    (ChunkRepository, "get_texts"),
     (SourceRepository, "count_related"),
     (NoteRepository, "get_scoped"),
     (NoteRepository, "list_scoped"),
@@ -390,3 +391,24 @@ async def test_externe_index_volgt_herclassificatie(live_surrealdb, data) -> Non
                              reason="Synthetische test", agent_key="agent_keys:t", person="Test")
     assert await in_externe_index() == {f"{woord} openbaar"}
     assert await extern_gevonden()
+
+
+async def test_fragmentteksten_en_huidige_fragmenten(live_surrealdb, data) -> None:
+    """``ChunkRepository.get_texts`` filtert op bereik; ``get_by_source(huidig=True)``
+    geeft alleen de fragmenten van de huidige versie en run (review F2-05)."""
+    bron = await data.bron("extern")
+    v1, r1 = await data.versie(bron)
+    oud = await data.fragment(bron, v1, r1, "oude tekst", None)
+    v2, r2 = await data.versie(bron)
+    nieuw = await data.fragment(bron, v2, r2, "nieuwe tekst", None)
+    intern = await data.fragment(bron, v2, r2, "strenger fragment", None)
+    await data.q("UPDATE type::thing($c) SET classification = 'intern'", {"c": intern})
+    repo = ChunkRepository(live_surrealdb)
+
+    assert await repo.get_texts([oud, nieuw, intern, "bogus"], scope=EXTERN) == {
+        oud: "oude tekst", nieuw: "nieuwe tekst"}
+    assert set(await repo.get_texts([nieuw, intern], scope=ALLES)) == {nieuw, intern}
+    assert await repo.get_texts([nieuw], scope=ClassificationScope.LEEG) == {}
+    huidig = {str(c.id) for c in await repo.get_by_source(bron, huidig=True)}
+    assert huidig == {nieuw, intern}
+    assert {str(c.id) for c in await repo.get_by_source(bron)} == {oud, nieuw, intern}

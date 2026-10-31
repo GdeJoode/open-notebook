@@ -415,7 +415,8 @@ async def test_ongeldige_ids_en_invoer(lezen_extern, gegevens) -> None:
         r = await c.get(pad)
         assert 400 <= r.status_code < 500, (pad, r.status_code)
         _geen_lek(g, r, pad)
-    for body in ({"query": g.woord, "limit": 5000}, {"query": g.woord, "type": "onzin"},
+    for body in ({"query": g.woord, "limit": 5000}, {"query": g.woord, "limit": 0},
+                 {"query": g.woord, "type": "onzin"},
                  {"type": "text"}, {"query": g.kenmerk, "minimum_score": 3},
                  {"query": g.woord, "history": "misschien"}):
         r = await c.post("/api/search", json=body)

@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 import app_main.services.rerank_orchestrator as orch
 from app_main.api.routers.search import router
 from app_main.dependencies import get_model_service, get_search_service
+from surrealdb_service.repositories.source import ChunkRepository
 from app_main.services.reranker_http_client import (
     RerankerHttpClient,
     RerankerServiceError,
@@ -58,13 +59,24 @@ def _make_client(search_svc, model_svc) -> TestClient:
     return TestClient(app)
 
 
-# Fused hybrid results as returned by the repo (content carries passage text).
+# Fused hybrid results as returned by the repo (F2-05): sources with the
+# matching fragment texts in `matches` (vector) or fragment ids in `chunks`
+# (text only); the router reads the latter within the key's scope.
 def _fused():
     return [
-        {"id": "a", "content": "alpha passage", "_combined_score": 0.9},
-        {"id": "b", "content": "beta passage", "_combined_score": 0.6},
-        {"id": "c", "content": "gamma passage", "_combined_score": 0.3},
+        {"id": "a", "matches": ["alpha passage"], "chunks": ["chunk:a"], "_combined_score": 0.9},
+        {"id": "b", "chunks": ["chunk:b"], "_combined_score": 0.6},
+        {"id": "c", "matches": ["gamma passage"], "chunks": ["chunk:c"], "_combined_score": 0.3},
     ]
+
+
+@pytest.fixture(autouse=True)
+def _fragmentteksten(monkeypatch):
+    """Fragmentteksten zonder database; de route vraagt ze met het bereik op."""
+    async def get_texts(self, chunk_ids, *, scope):
+        return {"chunk:b": "beta passage"}
+
+    monkeypatch.setattr(ChunkRepository, "get_texts", get_texts)
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +214,13 @@ class TestRerankServiceDownFallback:
 # ---------------------------------------------------------------------------
 # Orchestrator-level fallback unit test (client injected, no router)
 # ---------------------------------------------------------------------------
+
+
+def test_passage_text_from_matches_then_chunks_then_title():
+    assert orch._passage_text({"matches": ["m1", "m2"], "chunks": ["chunk:x"]}) == "m1\n\nm2"
+    assert orch._passage_text({"chunks": ["chunk:x"]}, {"chunk:x": "t"}) == "t"
+    assert orch._passage_text({"chunks": ["chunk:y"], "title": "T"}, {"chunk:x": "t"}) == "T"
+    assert orch._passage_text({"content": "oud"}) == ""
 
 
 @pytest.mark.asyncio

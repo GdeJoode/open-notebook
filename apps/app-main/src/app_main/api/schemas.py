@@ -110,7 +110,7 @@ class SearchRequest(BaseModel):
     type: Literal["text", "vector", "hybrid"] = Field(
         "text", description="Search type"
     )
-    limit: int = Field(100, description="Maximum number of results", le=1000)
+    limit: int = Field(100, description="Maximum number of results", ge=1, le=1000)
     # F2-05 (ADR 0004): zoeken leest alleen fragmenten. `search_sources` en
     # `search_notes` vervallen; een client die ze stuurt, krijgt geen fout
     # (Pydantic negeert onbekende velden), maar ze hebben geen effect meer.

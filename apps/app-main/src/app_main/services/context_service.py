@@ -144,7 +144,7 @@ class ContextService:
         max_chunks: Optional[int] = None,
         max_tokens: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """Chunk-level context for a single source (Track X.2).
+        """Chunk-level context for a single source (Track X.2), current version only.
 
         Returns the source's content chunks in document order, each carrying
         its provenance (``chunk_id``/``physical_page``/``printed_page``/
@@ -172,7 +172,8 @@ class ContextService:
         )
 
         try:
-            chunks = await self._chunk_repo.get_by_source(full_source_id)
+            # Alleen de fragmenten van de huidige versie en run (F2-05).
+            chunks = await self._chunk_repo.get_by_source(full_source_id, huidig=True)
         except Exception as e:  # provenance is additive — never break the chat
             logger.warning(f"Chunk context lookup failed for {source_id}: {e}")
             return []

@@ -74,10 +74,20 @@ async def search_knowledge_base(
                     rerank_hybrid_results,
                 )
 
+                from surrealdb_service.repositories.source import ChunkRepository
+
+                # De tekst van de getroffen fragmenten, binnen het bereik.
+                fragment_ids = [
+                    str(c)
+                    for r in results[: search_request.rerank_top_n]
+                    for c in r.get("chunks") or []
+                ]
+                chunk_texts = await ChunkRepository().get_texts(fragment_ids, scope=scope)
                 results = await rerank_hybrid_results(
                     query=search_request.query,
                     results=results,
                     top_n=search_request.rerank_top_n,
+                    chunk_texts=chunk_texts,
                 )
         else:
             results = await search_svc.text_search(

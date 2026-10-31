@@ -25,16 +25,25 @@ from app_main.services.reranker_http_client import (
 )
 
 
-def _passage_text(result: Dict[str, Any]) -> str:
+def _passage_text(
+    result: Dict[str, Any], chunk_texts: Optional[Dict[str, str]] = None
+) -> str:
     """Best available text for a result dict to feed the cross-encoder.
 
-    Hybrid results carry ``content`` (chunk / note / insight body) and
-    ``title``; we prefer ``content`` and fall back to ``title`` so every result
-    contributes a non-empty passage where possible.
+    F2-05: search hits are sources with the matching fragments; there is no
+    ``content``. Vector hits carry the fragment texts in ``matches``; text hits
+    carry the fragment ids in ``chunks``, whose texts the caller passes in
+    ``chunk_texts`` (read within the key's scope). Falls back to ``title``.
     """
-    content = result.get("content")
-    if isinstance(content, str) and content.strip():
-        return content
+    matches = [m for m in result.get("matches") or [] if isinstance(m, str) and m.strip()]
+    if matches:
+        return "\n\n".join(matches)
+    teksten = [
+        (chunk_texts or {}).get(str(c)) for c in result.get("chunks") or []
+    ]
+    teksten = [t for t in teksten if isinstance(t, str) and t.strip()]
+    if teksten:
+        return "\n\n".join(teksten)
     title = result.get("title")
     if isinstance(title, str) and title.strip():
         return title
@@ -47,6 +56,7 @@ async def rerank_hybrid_results(
     top_n: int,
     client: Optional[RerankerHttpClient] = None,
     query_embedding: Optional[List[float]] = None,
+    chunk_texts: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     """Rerank the top-N fused results via the reranker service.
 
@@ -59,6 +69,8 @@ async def rerank_hybrid_results(
             fresh :class:`RerankerHttpClient`.
         query_embedding: Optional query vector, only used by the heuristic
             fallback for embedding similarity.
+        chunk_texts: Fragment texts per chunk id for the ``chunks`` of the
+            hits (read within the key's scope by the caller).
 
     Returns:
         The results reordered so the reranked top-N lead (each carrying a
@@ -71,7 +83,7 @@ async def rerank_hybrid_results(
     head = results[:top_n]
     tail = results[top_n:]
 
-    passages = [_passage_text(r) for r in head]
+    passages = [_passage_text(r, chunk_texts) for r in head]
     client = client or RerankerHttpClient()
 
     try:

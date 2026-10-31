@@ -1330,6 +1330,8 @@ class ChunkRepository(BaseRepository[Chunk]):
         self,
         source_id: str,
         page: Optional[int] = None,
+        *,
+        huidig: bool = False,
     ) -> List[Chunk]:
         """
         Get chunks for a source, optionally filtered by page.
@@ -1337,6 +1339,8 @@ class ChunkRepository(BaseRepository[Chunk]):
         Args:
             source_id: Source ID.
             page: Optional physical page number.
+            huidig: Alleen de fragmenten van de huidige bronversie en run
+                (F2-04, F2-05).
 
         Returns:
             List of chunks.
@@ -1347,8 +1351,32 @@ class ChunkRepository(BaseRepository[Chunk]):
         if page is not None:
             where += " AND physical_page=$page"
             params["page"] = page
+        if huidig:
+            where += (
+                " AND source_version = $source_id.current_version"
+                " AND run = $source_id.current_version.current_run"
+            )
 
         return await self.query(where, params, order_by="order ASC")
+
+    async def get_texts(
+        self, chunk_ids: List[str], *, scope: ClassificationScope
+    ) -> Dict[str, str]:
+        """De tekst van de fragmenten binnen ``scope``, per fragment-id (F2-05).
+
+        Voor het herrangschikken van zoekresultaten. Een fragment buiten het
+        bereik of met een ongeldig id ontbreekt in het resultaat.
+        """
+        classifications = classifications_for(scope)
+        ids = [rid for rid in (eigen_record_id(c, "chunk") for c in chunk_ids) if rid is not None]
+        if not ids or not classifications:
+            return {}
+        rows = await execute_query(
+            "SELECT id, text FROM $ids WHERE classification IN $classifications",
+            {"ids": ids, "classifications": classifications},
+            self.config,
+        )
+        return {str(r["id"]): r["text"] for r in rows or [] if isinstance(r.get("text"), str)}
 
     async def delete_by_source(self, source_id: str) -> int:
         """

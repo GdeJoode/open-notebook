@@ -236,4 +236,4 @@ class TestBuildSourceChunks:
     async def test_prefix_added(self):
         svc = _make_service(source=_make_source(), chunks=[_make_chunk()])
         await svc.build_source_chunks("abc")
-        svc._chunk_repo.get_by_source.assert_awaited_once_with("source:abc")
+        svc._chunk_repo.get_by_source.assert_awaited_once_with("source:abc", huidig=True)
