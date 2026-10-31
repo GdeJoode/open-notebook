@@ -36,7 +36,6 @@ pipelines/                      — RAG/processing workflows (composed from pack
 
 services/                       — HTTP services (GPU-heavy, separate processes)
 ├── docling                     — GPU-accelerated document parser
-├── extraction                  — Standalone extraction API
 ├── summarization               — Standalone summarization API
 └── whisperx                    — Speech-to-text
 ```
@@ -368,7 +367,6 @@ tree + manifest.
 | --- | --- | --- |
 | `POST /api/notebooks/{id}/export/okf` | `apps/app-main/src/app_main/services/okf_export_service.py` | Maps the shared projection → an OKF v0.1 Knowledge Bundle (one Markdown concept per entity + `index.md`, standard-markdown links between concepts). Normal notebooks build + zip inline and stream the archive; notebooks over `OKF_ASYNC_ENTITY_THRESHOLD` defer to the job queue (`JobType.EXPORT_OKF`) and return `202` with a pollable `job_id`. The `ExportReport` (incl. the omitted-field ledger) is surfaced in the **`X-OKF-Export-Report`** response header so the zip body stays a clean archive. Byte-stable output (sorted keys, caller-injected timestamp). |
 | `POST /api/notebooks/{id}/import/okf` | `apps/app-main/src/app_main/services/okf_import_service.py` | Multipart-uploaded zip → entities/relations/notes/sources, upserted via deterministic `(name, type)` dedup + the injection-safe RELATE primitive, all provenance-tagged `okf-import` and idempotent under re-import. A malformed bundle *container* is a `422`; a malformed *concept* inside a valid bundle is skipped non-silently and reported in the `200` body — never a half-written graph. `apply_dedup` runs the K.5 propose + K.3 auto-merge pass so an imported entity is matched to the existing graph. |
-| MCP `export_okf` / `import_okf` | `packages/surrealdb-service/src/surrealdb_service/mcp/server.py` | The agent-facing surface (Track OKF.4), following the Track W tool conventions. These are the **one deliberate exception** to surrealdb-service's repo-direct, no-app-main rule: the OKF services are app-main orchestrators, so the tools reach them via a lazy import inside the tool body (`get_okf_export_service` / `get_okf_import_service`) and degrade to a clean `import_error` when app-main is absent, keeping module import app-main-free. |
 | OKF export dialog | `frontend/src/components/notebooks/exports/OkfExportDialog.tsx` + `frontend/src/lib/hooks/use-okf-export.ts` | "Export OKF" in the notebook header opens a zip-only dialog mirroring the Obsidian dialog (shared `ExportFilter` knobs + the live `/export-preview` parity widget). It states the lossy-by-design loss up-front and, after export, itemises the omitted-field ledger parsed from the `X-OKF-Export-Report` header. |
 
 **Lossy-by-design ledger.** Embeddings, chunk-level provenance
@@ -561,37 +559,29 @@ tools, and adds an optional, isolated **reranker** to sharpen hybrid search.
 Most of the machinery already existed (hybrid fusion at the repo layer, an MCP
 server, the repo backings) — Track W exposed it and tied it together.
 
-### The MCP graph-tools layer (one DB, many sessions)
+### The MCP graph-tools layer (removed in F2-02)
 
-The existing `surrealdb-mcp` server
-(`packages/surrealdb-service/src/surrealdb_service/mcp/server.py`, FastMCP,
-stdio) is the shared substrate: every session that attaches it talks to the
-**same** SurrealDB (one database, not per-session state), so notes/citations one
-session writes are immediately visible to another. Track W.3 added five graph
-tools alongside the original low-level ones (`query_database` / `get_record` /
-`list_sources` / `search_similar` / `get_entity_graph`):
+The fork's own MCP servers (`surrealdb-mcp`, `llm-manager-mcp`,
+`file-manager-mcp`) and the standalone `surrealdb-service` REST API were removed
+in F2-02 (signaalsysteem, ADR 0002 D): they read SurrealDB directly, without a
+key or the classification filter. External agents use `open-notebook-mcp` in its
+own container against the API of the fork (F3-10).
 
-| Tool | Backed by | What it does |
-|---|---|---|
-| `search` | `SearchRepository.hybrid_search` / `.text_search` | Ranked chunk/note search. With a caller-supplied `embedding` → full W.1 hybrid (BM25 ⊕ vector RRF); without → lexical BM25 only |
-| `get_node` | `SELECT * FROM type::thing($id)` | Polymorphic fetch of any node (`entity:` / `source:` / `note:` / `notebook:`) |
-| `related` | `GraphRepository.load_all_edges` | Every edge incident on a node — `relation` (entity↔entity) + `mentions` (source→entity) + `cites` (source→source), both directions, uniform `{id, source, target, edge_type, metadata}` shape |
-| `cite` | `SourceRepository.relate_cites` | Write a `source→cites→source` edge, idempotently (re-cite = no-op; self-cite refused) |
-| `add_note` | `NoteRepository.create_with_embedding` + `add_to_notebook` | Write a note and link it into a notebook |
+The query logic the graph tools exposed stays in the repositories:
 
-**Embedding-source contract.** The surrealdb-service package has no embedding
-model on purpose (keeps a heavy dep out of it), so `search` mirrors the existing
-`search_similar` contract: the *caller* supplies any query vector. The embed
-step stays in app-main's local-Ollama pipeline. No `embedding` → lexical BM25.
+| Former tool | Repository method |
+|---|---|
+| `search` | `SearchRepository.hybrid_search` / `.text_search` |
+| `related` | `GraphRepository.load_all_edges` |
+| `cite` | `SourceRepository.relate_cites` |
+| `add_note` | `NoteRepository.create_with_embedding` + `add_to_notebook` |
 
-**Auth.** None — correct for the default `stdio` transport (the only caller is
-the local process). The `sse`/`streamable-http` transports would expose the
-`cite`/`add_note` WRITE tools unauthenticated; gate or add auth before any HTTP
-exposure. See `docs/tracks/W-mcp-graph-memory/OPERATOR_GUIDE.md`.
+The provenance and navigation endpoints that FO 10 asks for are built in the
+API, with a classification scope (F3-09).
 
 ### Two retrieval layers, deliberately separate
 
-The MCP `search` tool is the **chunk/note hybrid search** (W.1): BM25 over
+`SearchRepository.hybrid_search` is the **chunk/note hybrid search** (W.1): BM25 over
 source/note text fused with vector similarity via Reciprocal Rank Fusion
 (`SearchRepository.hybrid_search`, exposed on `/search` `type=hybrid`). It
 answers *"which chunks/notes match this query?"*.
@@ -599,10 +589,10 @@ answers *"which chunks/notes match this query?"*.
 This is **not** the source-level Track R retrieval
 (`/sources/{id}/related-hybrid`, §9 computed layer), which answers *"which whole
 documents are related to this one?"* by fusing content-similarity with
-shared-entity salience. Track W keeps them separate: `related` returns **graph
-edges**, `search` returns **ranked passages**, and Track R returns **related
-documents**. (See §9 for the computed-vs-materialized document story the MCP
-tools read from.)
+shared-entity salience. Track W keeps them separate: `load_all_edges` returns
+**graph edges**, the hybrid search returns **ranked passages**, and Track R
+returns **related documents**. (See §9 for the computed-vs-materialized
+document story.)
 
 ### The reranker service (optional, isolated, default-off)
 
@@ -714,14 +704,12 @@ embedding-similarity mechanism the source layer already used
    (conservative defaults `min_similarity=0.75`, `k=5` — no graph explosion),
    and writes idempotent edges. It lives in **app-main**, not surrealdb-service,
    because the embed step (`EmbeddingService.embed_note`) is app-main's
-   local-Ollama pipeline; surrealdb-service stays embedding-free (its MCP
-   `auto_link_note` tool is the embedding-free sibling that requires a
-   pre-embedded note — the same split as the W.3 `search`/`add_note` tools).
+   local-Ollama pipeline; surrealdb-service stays embedding-free.
 
 **The trigger — two halves (the phased decision):**
 
-- **On-demand (Y.2)** — `POST /notes/{id}/auto-link` and the MCP `auto_link_note`
-  tool drive the orchestrator directly.
+- **On-demand (Y.2)** — `POST /notes/{id}/auto-link` drives the orchestrator
+  directly.
 - **Background (Y.3)** — the job queue. A note can only be ranked by similarity
   once it *has* an embedding, so the **embed job is the trigger**:
   `_handle_embed_single_item` best-effort enqueues a `NOTE_AUTO_LINK` job after a
@@ -766,10 +754,8 @@ distinctly-named source counter family (`source_links_created`,
 `source_skipped_existing`, `source_below_threshold`,
 `source_candidates_considered`, `linked_source_ids`) so the two link types never
 conflate; one `auto_link` call now reports both. Every trigger inherits this for
-free: the endpoint flattens `result.to_dict()`, the job returns
-`**result.to_dict()`, and the MCP `auto_link_note` tool runs the same second
-pass (repo-direct — both source primitives live in surrealdb-service, so the
-embedding-free layer covers sources without an embedding model).
+free: the endpoint flattens `result.to_dict()` and the job returns
+`**result.to_dict()`.
 
 **The cross-type same-space requirement.** Ranking a note against sources only
 means anything if `note.embedding` and `source.embedding` live in the **same
@@ -868,12 +854,7 @@ unit, different shape) and from the triage `VERSTERKT` entity-relation predicate
 
 **On-demand trigger.** The judge is driven by `POST
 /sources/{id}/judge-contradictions` (params `k`, `min_confidence`; route-layer
-validation → 422 on a bad id / out-of-range bounds, 404 on a missing source). An
-MCP `judge_contradiction` tool is **deferred** (documented): the judge needs the
-app-main LLM layer, and the surrealdb-mcp server is a thin repo-direct layer with
-no app-main dependency, so an MCP tool would invert that layering — it is a
-follow-up for once an app-main base URL is cleanly available to that server (see
-the server module docstring).
+validation → 422 on a bad id / out-of-range bounds, 404 on a missing source).
 
 **Cost + the deferred background job.** Judging is O(pairs) of LLM calls, so it is
 **on-demand only** in Z core — automate (a background job over new/edited sources)
@@ -1047,7 +1028,7 @@ always available as the parser/Docling config home.
 - `docs/tracks/U-document-graph/status.md` — Track U retrospective (document graph: `mentions`/`cites`, computed-vs-materialized)
 - `docs/tracks/J-model-routing/OPERATOR_GUIDE.md` — cloud/local routing: env keys, privacy model, fair-use, enable/disable
 - `docs/tracks/W-mcp-graph-memory/status.md` — Track W retrospective (MCP graph-tools shared substrate + hybrid search + reranker)
-- `docs/tracks/W-mcp-graph-memory/OPERATOR_GUIDE.md` — registering the `surrealdb-mcp` server + gated reranker bring-up/smoke/fallback
+- `docs/tracks/W-mcp-graph-memory/OPERATOR_GUIDE.md` — gated reranker bring-up/smoke/fallback (the `surrealdb-mcp` part is obsolete since F2-02)
 - `docs/tracks/X-citations-to-source/status.md` — Track X retrospective (provenance → citation flow + faithfulness guard; membership-not-semantic)
 - `docs/tracks/Y-auto-link/status.md` — Track Y retrospective (note auto-link: embedding → similarity → `related_note`; on-demand + background-job trigger; note↔source extension)
 - `docs/tracks/NS-note-source-autolink/status.md` — Track NS retrospective (note→source auto-link: the second pass over one embedding → `note_about`; cross-type same-space; the `array::len(NONE)` gotcha)

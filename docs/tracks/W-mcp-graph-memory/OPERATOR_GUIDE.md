@@ -1,5 +1,9 @@
 # Operator Guide — Shared graph memory (Track W)
 
+> **Vervallen (F2-02, 31-10-2026).** De server `surrealdb-mcp` en zijn
+> script-ingang bestaan niet meer (signaalsysteem, ADR 0002 D). Onderdeel 1
+> hieronder werkt dus niet meer. Het deel over de reranker geldt nog.
+
 This guide is for the person running an Open Notebook instance. It covers two
 things Track W added:
 
