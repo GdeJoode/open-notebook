@@ -95,3 +95,5 @@ De bouw (`migrations/89.surrealql`) wijkt op de volgende punten af van het voors
 - **Notitie en notebook.** `note` en `notebook` kunnen nu niet van intern naar extern: het schema eist daarvoor `$herclassificatie`, en er is geen herclassificatiepad dat die vlag voor hen zet. Voorstel: het herclassificatie-eindpunt uitbreiden naar notebook en notitie in F2-30 (B22).
 
 **Open:** de graafrelatie `mentions` (bron naar entiteit, `migrations/66.surrealql:58`) heeft nog geen classificatie; zie plan van aanpak F2-04 en F2-05.
+
+**B27 (Geert, 31-10).** Herclassificatie van een bron naar extern zet alle fragmenten op extern. Heeft de bron fragmenten die vóór een eerdere herclassificatie naar intern zelf intern waren, dan ziet de beheerder eerst hun aantal en moet hij bevestigen; zonder bevestiging volgt 409. De eigen classificatie per fragment wordt niet apart bewaard. Bouw in F2-30.
