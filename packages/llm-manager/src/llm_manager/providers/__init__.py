@@ -1,11 +1,10 @@
 """
-LLM provider management and factory.
+Providerregister (metadata, vervalt in F2-09).
 
-This module provides a unified interface for working with different LLM providers
-through the Esperanto library.
+De client naar llama-swap staat in :mod:`llm_manager.providers.factory` en wordt
+alleen gebruikt door :mod:`llm_manager.aanroep` (F2-08).
 """
 
-from llm_manager.providers.factory import ModelFactory, ModelInstance
 from llm_manager.providers.registry import (
     PROVIDER_CONFIGS,
     ProviderConfig,
@@ -15,8 +14,6 @@ from llm_manager.providers.registry import (
 )
 
 __all__ = [
-    "ModelFactory",
-    "ModelInstance",
     "ProviderConfig",
     "PROVIDER_CONFIGS",
     "get_provider_config",

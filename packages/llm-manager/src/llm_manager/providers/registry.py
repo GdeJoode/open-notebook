@@ -93,11 +93,8 @@ PROVIDER_CONFIGS: Dict[str, ProviderConfig] = {
         display_name="Ollama (Local)",
         env_var_prefix="OLLAMA_",
         api_key_env_var="OLLAMA_API_KEY",
-        # The operative Ollama endpoint var across the app + docker-compose +
-        # esperanto's own resolution is OLLAMA_API_BASE; declare that here so the
-        # registry doesn't advertise a dead OLLAMA_BASE_URL (J.6 reconciliation).
-        base_url_env_var="OLLAMA_API_BASE",
-        default_base_url="http://localhost:11434",
+        # Ollama staat niet meer in de keten (F2-08, ADR 0006): geen adres. Alle
+        # modelaanroepen gaan via ModelGate naar llama-swap. Vervalt in F2-09.
         is_local=True,
         supports_vision=True,
         supports_tools=True,

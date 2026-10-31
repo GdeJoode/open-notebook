@@ -8,8 +8,6 @@ model instance management, and usage tracking.
 from llm_manager.config import LLMManagerConfig, get_config, set_config
 from llm_manager.manager import ModelManager, get_model_manager
 from llm_manager.providers import (
-    ModelFactory,
-    ModelInstance,
     ProviderConfig,
     get_provider_config,
     list_providers,
@@ -25,8 +23,6 @@ __all__ = [
     "ModelManager",
     "get_model_manager",
     # Providers
-    "ModelFactory",
-    "ModelInstance",
     "ProviderConfig",
     "get_provider_config",
     "list_providers",

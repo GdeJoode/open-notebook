@@ -28,43 +28,6 @@ class TestModelManager:
         assert manager1 is not manager2
         ModelManager.reset_instance()
 
-    def test_cache_key_generation(self, model_manager):
-        """Test cache key generation."""
-        key1 = model_manager._get_cache_key("model1", {})
-        key2 = model_manager._get_cache_key("model1", {"temperature": 0.7})
-        key3 = model_manager._get_cache_key("model2", {})
-
-        assert key1 != key2
-        assert key1 != key3
-        assert "model1" in key1
-        assert "model2" in key3
-
-    def test_cache_validity(self, model_manager):
-        """Test cache validity checking."""
-        cache_key = "test_key"
-
-        # Not in cache
-        assert model_manager._is_cache_valid(cache_key) is False
-
-        # Add to cache
-        model_manager._cache_timestamps[cache_key] = time.time()
-        assert model_manager._is_cache_valid(cache_key) is True
-
-        # Expired cache
-        model_manager._cache_timestamps[cache_key] = time.time() - 3700
-        assert model_manager._is_cache_valid(cache_key) is False
-
-    def test_cache_disabled(self, test_config):
-        """Test with cache disabled."""
-        test_config.cache_enabled = False
-        ModelManager.reset_instance()
-        manager = ModelManager(test_config)
-
-        cache_key = "test_key"
-        manager._cache_timestamps[cache_key] = time.time()
-        assert manager._is_cache_valid(cache_key) is False
-        ModelManager.reset_instance()
-
     def test_clear_cache(self, model_manager):
         """Test cache clearing."""
         model_manager._model_cache["key1"] = "model1"

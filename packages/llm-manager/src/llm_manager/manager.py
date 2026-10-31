@@ -1,30 +1,24 @@
 """
-Model manager for centralized model instance management.
+Model manager: standaardmodellen en cache-statistiek.
+
+Modellen opbouwen en aanroepen gebeurt hier niet meer: dat loopt alleen via
+:mod:`llm_manager.aanroep` en :class:`llm_manager.gate.ModelGate` naar llama-swap
+(F2-08, ADR 0006). De standaardmodellen in de database vervallen in F2-09.
 """
 
 import time
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
-from esperanto import EmbeddingModel, LanguageModel, SpeechToTextModel, TextToSpeechModel
 from loguru import logger
 
 from llm_manager.config import LLMManagerConfig, get_config
-from llm_manager.providers.factory import ModelFactory, ModelInstance
-from shared.models import DefaultModels, Model
+from shared.models import DefaultModels
 
 
 class ModelManager:
     """
-    Centralized manager for AI model instances.
-
-    Provides:
-    - Model instance caching
-    - Default model resolution
-    - Lazy loading of models
-    - Cache invalidation
-
-    Note: This is a standalone manager that requires model and defaults
-    to be passed in. For database-backed usage, use with repositories.
+    Houdt de standaardmodellen bij. De cache blijft leeg sinds F2-08: er worden
+    hier geen modellen meer opgebouwd. Vervalt in F2-09.
     """
 
     _instance: Optional["ModelManager"] = None
@@ -39,83 +33,10 @@ class ModelManager:
             return
         self._initialized = True
         self.config = config or get_config()
-        self._model_cache: Dict[str, ModelInstance] = {}
+        self._model_cache: Dict[str, Any] = {}
         self._cache_timestamps: Dict[str, float] = {}
         self._defaults: Optional[DefaultModels] = None
         logger.info("ModelManager initialized")
-
-    def _get_cache_key(self, model_id: str, kwargs: Dict[str, Any]) -> str:
-        """Generate cache key from model ID and kwargs."""
-        return f"{model_id}:{str(sorted(kwargs.items()))}"
-
-    def _is_cache_valid(self, cache_key: str) -> bool:
-        """Check if cached entry is still valid."""
-        if not self.config.cache_enabled:
-            return False
-        if cache_key not in self._cache_timestamps:
-            return False
-        age = time.time() - self._cache_timestamps[cache_key]
-        return age < self.config.cache_ttl_seconds
-
-    def get_model_from_config(
-        self,
-        model: Model,
-        **kwargs: Any,
-    ) -> ModelInstance:
-        """
-        Get or create a model instance from a Model configuration.
-
-        Args:
-            model: Model configuration.
-            **kwargs: Additional configuration options.
-
-        Returns:
-            Model instance.
-        """
-        if not model.id:
-            # No caching for models without ID
-            return ModelFactory.create_model(model, kwargs)
-
-        cache_key = self._get_cache_key(model.id, kwargs)
-
-        if self._is_cache_valid(cache_key):
-            logger.debug(f"Cache hit for model: {model.id}")
-            return self._model_cache[cache_key]
-
-        logger.debug(f"Creating new model instance: {model.id}")
-        instance = ModelFactory.create_model(model, kwargs)
-
-        if self.config.cache_enabled:
-            self._model_cache[cache_key] = instance
-            self._cache_timestamps[cache_key] = time.time()
-
-        return instance
-
-    def create_model_direct(
-        self,
-        model_name: str,
-        provider: str,
-        model_type: str,
-        **kwargs: Any,
-    ) -> ModelInstance:
-        """
-        Create a model instance directly without database lookup.
-
-        Args:
-            model_name: Name of the model.
-            provider: Provider name.
-            model_type: Type of model (language, embedding, etc.).
-            **kwargs: Additional configuration options.
-
-        Returns:
-            Model instance.
-        """
-        return ModelFactory.create_by_type(
-            model_type=model_type,  # type: ignore
-            model_name=model_name,
-            provider=provider,
-            config=kwargs,
-        )
 
     def set_defaults(self, defaults: DefaultModels) -> None:
         """

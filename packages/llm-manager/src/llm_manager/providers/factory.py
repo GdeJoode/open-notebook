@@ -1,267 +1,69 @@
+"""De client naar llama-swap: OpenAI-compatibel, één vast adres (F2-08, ADR 0006).
+
+Alle modellen in de fork draaien achter llama-swap (``http://llama-swap:8080/v1``).
+Er is geen ander adres, geen terugval naar Ollama of een cloudaanbieder, en het
+adres komt niet uit de omgeving. Alleen :mod:`llm_manager.aanroep` gebruikt deze
+client, en altijd via :class:`llm_manager.gate.ModelGate`
+(``tests/test_geen_ollama_eindpunten.py``).
+
+De client gebruikt httpx en niet Esperanto: Esperanto verpakt een HTTP-fout als
+``RuntimeError`` met de antwoordtekst erin. Dan ziet de poort de status 502 niet
+(ADR 0009: opnieuw proberen) en kan tekst van het model in een log belanden.
+:class:`LlamaSwapFout` draagt alleen de status en het fouttype.
 """
-Model factory for creating AI model instances.
-"""
 
-import os
-from typing import Any, Dict, Optional, Tuple, Union
+from __future__ import annotations
 
-from esperanto import (
-    AIFactory,
-    EmbeddingModel,
-    LanguageModel,
-    SpeechToTextModel,
-    TextToSpeechModel,
-)
-from loguru import logger
-from shared.models import Model, ModelTypeStr
+from typing import Any, Dict, List, Optional
 
-ModelInstance = Union[LanguageModel, EmbeddingModel, SpeechToTextModel, TextToSpeechModel]
+import httpx
+
+#: Het enige adres voor modelaanroepen uit de fork.
+LLAMA_SWAP_URL = "http://llama-swap:8080/v1"
+
+#: Ruim: llama-swap laadt een model bij de eerste aanvraag (ADR 0009).
+STANDAARD_TIMEOUT = httpx.Timeout(600.0, connect=10.0)
 
 
-def _resolve_provider_endpoint(
-    provider: str, config: Dict[str, Any]
-) -> Tuple[str, Dict[str, Any]]:
-    """Resolve the esperanto provider name + endpoint config for ``provider``.
+class LlamaSwapFout(RuntimeError):
+    """llama-swap gaf een HTTP-fout. Zonder antwoordtekst; die kan inhoud bevatten."""
 
-    Most providers pass through unchanged. Cloud providers that are
-    OpenAI-compatible but have no native esperanto provider (NVIDIA NIM, Track
-    J.4) are mapped to esperanto's ``openai-compatible`` LanguageModel with the
-    provider's ``default_base_url`` + API key threaded into the config so a
-    single ``model`` row carrying ``provider="nvidia"`` reaches the NIM
-    endpoint. A caller-supplied ``base_url`` / ``api_key`` in ``config`` always
-    wins over the registry defaults.
-    """
-    from llm_manager.providers.registry import get_provider_config
-
-    cfg = get_provider_config(provider)
-    if cfg is None or cfg.is_local:
-        return provider, config
-
-    # Providers esperanto supports natively keep their name; only those without
-    # a native esperanto LLM provider but a known OpenAI-compatible endpoint are
-    # remapped. NVIDIA NIM is the J.4 case; Ollama Cloud (ollama.com/v1) is the
-    # same shape (OpenAI-compatible bearer endpoint, no native esperanto provider).
-    _OPENAI_COMPATIBLE = {"nvidia", "ollama-cloud"}
-    if provider.lower() not in _OPENAI_COMPATIBLE:
-        return provider, config
-
-    resolved = dict(config)
-    base_url = resolved.get("base_url")
-    if not base_url and cfg.base_url_env_var:
-        base_url = os.environ.get(cfg.base_url_env_var)
-    if not base_url:
-        base_url = cfg.default_base_url
-    if base_url:
-        resolved["base_url"] = base_url
-
-    if not resolved.get("api_key"):
-        api_key = os.environ.get(cfg.api_key_env_var)
-        if api_key:
-            resolved["api_key"] = api_key
-
-    return "openai-compatible", resolved
+    def __init__(self, status_code: int, soort: Optional[str] = None) -> None:
+        super().__init__(f"llama-swap gaf HTTP {status_code}" + (f" ({soort})" if soort else ""))
+        self.status_code = status_code
+        #: Het fouttype van llama-server (``error.type``), een korte code.
+        self.soort = soort
 
 
-class ModelFactory:
-    """
-    Factory for creating AI model instances using Esperanto.
-    """
+def _fouttype(antwoord: httpx.Response) -> Optional[str]:
+    try:
+        fout = antwoord.json().get("error")
+    except ValueError:
+        return None
+    soort = fout.get("type") if isinstance(fout, dict) else None
+    return soort if isinstance(soort, str) and soort.isidentifier() else None
 
-    @staticmethod
-    def create_model(
-        model: Model,
-        config: Optional[Dict[str, Any]] = None,
-    ) -> ModelInstance:
-        """
-        Create a model instance from a Model configuration.
 
-        Args:
-            model: Model configuration from database.
-            config: Additional configuration options.
+class LlamaSwapClient:
+    """POST naar ``/v1/chat/completions`` en ``/v1/embeddings`` van llama-swap."""
 
-        Returns:
-            Initialized model instance.
+    def __init__(self, *, transport: Optional[httpx.AsyncBaseTransport] = None,
+                 timeout: httpx.Timeout = STANDAARD_TIMEOUT) -> None:
+        # ``transport`` is er voor tests (httpx.MockTransport); het adres ligt vast.
+        self._transport = transport
+        self._timeout = timeout
 
-        Raises:
-            ValueError: If model type is invalid.
-        """
-        config = config or {}
-        model_type = model.type
+    async def _post(self, pad: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        async with httpx.AsyncClient(base_url=LLAMA_SWAP_URL, transport=self._transport,
+                                     timeout=self._timeout, trust_env=False) as client:
+            antwoord = await client.post(f"{LLAMA_SWAP_URL}{pad}", json=payload)
+        if antwoord.status_code >= 400:
+            raise LlamaSwapFout(antwoord.status_code, _fouttype(antwoord))
+        return antwoord.json()
 
-        # Honor the model's configured output-token ceiling. Without this,
-        # OpenAI-compatible endpoints (e.g. NVIDIA NIM, Track J) fall back to
-        # esperanto's small default max_tokens and truncate dense JSON
-        # extraction output mid-string. Local providers (Ollama) stream until
-        # done so they were unaffected. A caller-supplied max_tokens wins.
-        if model.max_output_tokens and "max_tokens" not in config:
-            config["max_tokens"] = model.max_output_tokens
+    async def chat(self, model: str, messages: List[Dict[str, Any]], **opties: Any) -> Dict[str, Any]:
+        return await self._post("/chat/completions",
+                                {"model": model, "messages": messages, "stream": False, **opties})
 
-        if model_type == "language":
-            return ModelFactory.create_language_model(
-                model_name=model.name,
-                provider=model.provider,
-                config=config,
-            )
-        elif model_type == "embedding":
-            return ModelFactory.create_embedding_model(
-                model_name=model.name,
-                provider=model.provider,
-                config=config,
-            )
-        elif model_type == "speech_to_text":
-            return ModelFactory.create_speech_to_text_model(
-                model_name=model.name,
-                provider=model.provider,
-                config=config,
-            )
-        elif model_type == "text_to_speech":
-            return ModelFactory.create_text_to_speech_model(
-                model_name=model.name,
-                provider=model.provider,
-                config=config,
-            )
-        else:
-            raise ValueError(f"Invalid model type: {model_type}")
-
-    @staticmethod
-    def create_language_model(
-        model_name: str,
-        provider: str,
-        config: Optional[Dict[str, Any]] = None,
-    ) -> LanguageModel:
-        """
-        Create a language model instance.
-
-        Args:
-            model_name: Name of the model.
-            provider: Provider name.
-            config: Additional configuration.
-
-        Returns:
-            Language model instance.
-        """
-        config = config or {}
-        esperanto_provider, resolved_config = _resolve_provider_endpoint(
-            provider, config
-        )
-        logger.debug(
-            f"Creating language model: {provider}/{model_name}"
-            + (
-                f" (via esperanto {esperanto_provider})"
-                if esperanto_provider != provider
-                else ""
-            )
-        )
-        return AIFactory.create_language(
-            model_name=model_name,
-            provider=esperanto_provider,
-            config=resolved_config,
-        )
-
-    @staticmethod
-    def create_embedding_model(
-        model_name: str,
-        provider: str,
-        config: Optional[Dict[str, Any]] = None,
-    ) -> EmbeddingModel:
-        """
-        Create an embedding model instance.
-
-        Args:
-            model_name: Name of the model.
-            provider: Provider name.
-            config: Additional configuration.
-
-        Returns:
-            Embedding model instance.
-        """
-        config = config or {}
-        logger.debug(f"Creating embedding model: {provider}/{model_name}")
-        return AIFactory.create_embedding(
-            model_name=model_name,
-            provider=provider,
-            config=config,
-        )
-
-    @staticmethod
-    def create_speech_to_text_model(
-        model_name: str,
-        provider: str,
-        config: Optional[Dict[str, Any]] = None,
-    ) -> SpeechToTextModel:
-        """
-        Create a speech-to-text model instance.
-
-        Args:
-            model_name: Name of the model.
-            provider: Provider name.
-            config: Additional configuration.
-
-        Returns:
-            Speech-to-text model instance.
-        """
-        config = config or {}
-        logger.debug(f"Creating STT model: {provider}/{model_name}")
-        return AIFactory.create_speech_to_text(
-            model_name=model_name,
-            provider=provider,
-            config=config,
-        )
-
-    @staticmethod
-    def create_text_to_speech_model(
-        model_name: str,
-        provider: str,
-        config: Optional[Dict[str, Any]] = None,
-    ) -> TextToSpeechModel:
-        """
-        Create a text-to-speech model instance.
-
-        Args:
-            model_name: Name of the model.
-            provider: Provider name.
-            config: Additional configuration.
-
-        Returns:
-            Text-to-speech model instance.
-        """
-        config = config or {}
-        logger.debug(f"Creating TTS model: {provider}/{model_name}")
-        return AIFactory.create_text_to_speech(
-            model_name=model_name,
-            provider=provider,
-            config=config,
-        )
-
-    @staticmethod
-    def create_by_type(
-        model_type: ModelTypeStr,
-        model_name: str,
-        provider: str,
-        config: Optional[Dict[str, Any]] = None,
-    ) -> ModelInstance:
-        """
-        Create a model instance by type.
-
-        Args:
-            model_type: Type of model to create.
-            model_name: Name of the model.
-            provider: Provider name.
-            config: Additional configuration.
-
-        Returns:
-            Model instance of the specified type.
-
-        Raises:
-            ValueError: If model type is invalid.
-        """
-        if model_type == "language":
-            return ModelFactory.create_language_model(model_name, provider, config)
-        elif model_type == "embedding":
-            return ModelFactory.create_embedding_model(model_name, provider, config)
-        elif model_type == "speech_to_text":
-            return ModelFactory.create_speech_to_text_model(model_name, provider, config)
-        elif model_type == "text_to_speech":
-            return ModelFactory.create_text_to_speech_model(model_name, provider, config)
-        else:
-            raise ValueError(f"Invalid model type: {model_type}")
+    async def embed(self, model: str, teksten: List[str]) -> Dict[str, Any]:
+        return await self._post("/embeddings", {"model": model, "input": teksten})

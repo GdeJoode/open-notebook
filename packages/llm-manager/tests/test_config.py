@@ -56,11 +56,11 @@ class TestLLMManagerConfig:
     def test_local_model_settings(self):
         """Test local model configuration."""
         config = LLMManagerConfig(
-            local_model_base_url="http://localhost:11434",
+            local_model_base_url="http://llama-swap:8080/v1",
             local_model_provider="ollama",
             _env_file=None,
         )
-        assert config.local_model_base_url == "http://localhost:11434"
+        assert config.local_model_base_url == "http://llama-swap:8080/v1"
         assert config.local_model_provider == "ollama"
 
 

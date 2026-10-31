@@ -55,7 +55,8 @@ class TestProviderRegistry:
 
         ollama = get_provider_config("ollama")
         assert ollama.is_local is True
-        assert ollama.default_base_url == "http://localhost:11434"
+        # F2-08: Ollama staat niet meer in de keten; geen adres.
+        assert ollama.default_base_url is None
 
     def test_register_provider(self):
         """Test registering a custom provider."""
@@ -121,7 +122,7 @@ class TestProviderConfigs:
         """Test local provider configurations."""
         ollama = PROVIDER_CONFIGS["ollama"]
         assert ollama.is_local is True
-        assert ollama.default_base_url is not None
+        assert ollama.default_base_url is None
 
         llamacpp = PROVIDER_CONFIGS["llamacpp"]
         assert llamacpp.is_local is True

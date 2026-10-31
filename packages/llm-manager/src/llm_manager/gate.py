@@ -18,7 +18,8 @@ Per aanroep doet :class:`ModelGate`:
    ``ongeldige_naam`` in de regel.
 
 De aanroep zelf is een functie van de aanroeper die het registermodel krijgt;
-zo blijft de poort los van Esperanto of HTTP (F2-08).
+zo blijft de poort los van HTTP. :mod:`llm_manager.aanroep` is de enige
+aanroeper in de fork: chat en embeddings naar llama-swap (F2-08).
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ import asyncio
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Literal, Optional, Protocol, TypeVar
+from typing import Any, Awaitable, Callable, Iterable, Literal, Optional, Protocol, TypeVar
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
@@ -104,6 +105,18 @@ class AuditNietGeschreven(RuntimeError):
 
 def _classificatie(waarde: Optional[str]) -> Classificatie:
     return waarde if waarde in ("intern", "extern") else "onbekend"
+
+
+def classificatie_van(waarden: Iterable[Optional[str]]) -> Classificatie:
+    """De classificatie van invoer uit meer delen (F2-08).
+
+    ``extern`` alleen als elk deel extern is; ``intern`` als een deel intern is;
+    anders (ook bij geen delen) ``onbekend``, dat als intern telt.
+    """
+    klassen = [_classificatie(w) for w in waarden]
+    if klassen and all(k == "extern" for k in klassen):
+        return "extern"
+    return "intern" if "intern" in klassen else "onbekend"
 
 
 def _http_status(fout: BaseException) -> Optional[int]:

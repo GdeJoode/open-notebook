@@ -92,6 +92,10 @@ class ModelRegister(BaseModel):
     def zoek(self, naam: str) -> Optional[RegisterModel]:
         return self._index().get(naam)
 
+    def voor_taak(self, taak: str) -> Optional[RegisterModel]:
+        """Het eerste model in het bestand met deze taak (F2-08); de volgorde telt."""
+        return next((m for m in self.modellen if taak in m.taken), None)
+
     def _index(self) -> Dict[str, RegisterModel]:
         return {m.naam: m for m in self.modellen}
 
