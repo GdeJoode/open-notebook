@@ -299,7 +299,8 @@ def test_every_entity_writer_uses_the_one_identity_rule() -> None:
     assert sources, "walker control: no production sources found"
 
     writers = [p for p in sources if _CREATE.search(p.read_text(encoding="utf-8"))]
-    assert len(writers) >= 4, (
+    # Three since F2-02: the extraction service, the fourth writer, is gone.
+    assert len(writers) >= 3, (
         f"detector control: found only {len(writers)} entity writers "
         f"({[p.name for p in writers]}) — the scan is not seeing them"
     )
@@ -365,7 +366,6 @@ def test_guard_accepts_each_real_writer_as_it_stands() -> None:
     for rel in (
         "packages/surrealdb-service/src/surrealdb_service/repositories/entity.py",
         "apps/app-main/src/app_main/services/vault_sync_service.py",
-        "services/extraction/api.py",
         "packages/semantic-intelligence/scripts/test_pipeline.py",
     ):
         path = REPO_ROOT / rel
@@ -599,7 +599,6 @@ def test_the_guards_still_accept_the_real_writers() -> None:
     for rel in (
         "packages/surrealdb-service/src/surrealdb_service/repositories/entity.py",
         "apps/app-main/src/app_main/services/vault_sync_service.py",
-        "services/extraction/api.py",
         "packages/semantic-intelligence/scripts/test_pipeline.py",
     ):
         path = REPO_ROOT / rel

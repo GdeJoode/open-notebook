@@ -452,7 +452,7 @@ class Ontology(BaseModel):
         merged_extraction_patterns.update(self.extraction_patterns)
 
         # OE.0: keys the model has no field for are carried too, combined the
-        # way their one reader (`services/extraction/api.py`) combines them: a
+        # way their reader, the extraction service (removed in F2-02), did: a
         # list is the parent's followed by the child's without duplicates (the
         # `extraction_rules` of `government` + `deals` + `regiodeal`), a dict is
         # merged with the child winning, anything else is the child's.

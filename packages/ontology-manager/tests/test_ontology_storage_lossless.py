@@ -114,7 +114,7 @@ def test_a_derived_field_is_not_written_twice():
 
 
 def test_inheritance_combines_extra_keys_as_their_reader_does():
-    """Review M4: `services/extraction/api.py` joins the parent's and the child's
+    """Review M4: the extraction service (removed in F2-02) joined the parent's and the child's
     `extraction_rules`; the merge replaced the parent's."""
     parent = Ontology(metadata={"name": "p", "version": "1"},
                       extraction_rules=["a", "b"], settings={"x": 1, "y": 1}, abstract=True)

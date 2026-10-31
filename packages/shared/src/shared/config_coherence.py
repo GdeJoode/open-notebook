@@ -60,8 +60,9 @@ WARN = "warn"
 #: gate on an entry nothing reads is the wrong lever even when it names the right
 #: model.
 #:
-#: Membership requires a named consumer. `extraction` has one at
-#: `services/extraction/api.py`.
+#: Membership requires a named consumer. `extraction` had one in the
+#: extraction service, removed in F2-02 (ADR 0012); this set and
+#: `model_routing.yaml` go with ADR 0006 in F2-09.
 REQUIRED_STEPS = frozenset({"extraction"})
 
 

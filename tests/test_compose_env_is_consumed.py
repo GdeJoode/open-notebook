@@ -38,16 +38,15 @@ _ALLOWED: Dict[str, str] = {
 }
 
 #: Files the scan must NOT read. `docker-compose.yml` is the question, not the
-#: answer. The two guard sources are excluded because they NARRATE the knobs they
-#: were written to catch — `DEFAULT_PRIVACY`, `EXTRACTION_MODEL` and
-#: `EXTRACTION_NUM_CTX` all appear in their comments and allow-lists, so
+#: answer. The guard source is excluded because it NARRATES the knobs it was
+#: written to catch — `DEFAULT_PRIVACY`, `EXTRACTION_MODEL` and
+#: `EXTRACTION_NUM_CTX` all appear in its comments and allow-list, so
 #: re-adding any of the three to compose passed silently. The guard's own
 #: documentation of the defect made the defect invisible to it, which is the
 #: self-reference bug caught for the sentinel, not generalised.
 _SELF_EXCLUDED = frozenset({
     "docker-compose.yml",
     "tests/test_compose_env_is_consumed.py",
-    "services/extraction/tests/test_no_dead_env_constants.py",
 })
 
 _ENV_LINE = re.compile(r"^\s+-\s+([A-Z][A-Z0-9_]*)=", re.M)
@@ -138,9 +137,8 @@ def _referenced_names(names: Set[str]) -> Set[str]:
 
     Only the read contexts above count. That is stricter than "the token appears"
     and still deliberately generous about WHERE — a name read anywhere, including
-    in a test, passes. The strict half is the AST guard in
-    `services/extraction/tests/test_no_dead_env_constants.py`, which asks whether
-    the value read is then used; the two are meant to be read together.
+    in a test, passes. The strict half was an AST guard in the extraction
+    service, removed with it in F2-02.
 
     **What neither can see**: a name that is genuinely read but whose value never
     applies. `DEFAULT_PRIVACY` is exactly that — `model_routing.py` reads it as the

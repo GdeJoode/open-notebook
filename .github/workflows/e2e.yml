@@ -4,7 +4,7 @@ name: E2E (Playwright)
 # touches the frontend, the FastAPI app, or any backing service.
 #
 # We intentionally only bring up the GPU-free services (surrealdb + open_notebook)
-# — GPU services (docling, mineru, whisperx, extraction, summarization) cannot run
+# — GPU services (docling, mineru, whisperx, summarization) cannot run
 # on standard GitHub-hosted runners. Specs that exercise GPU-dependent flows must
 # mock the relevant clients at the API boundary or be marked with a CI-skip annotation.
 

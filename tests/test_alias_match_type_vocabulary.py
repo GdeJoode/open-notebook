@@ -178,7 +178,6 @@ def test_walker_control_reaches_the_known_writers() -> None:
         "apps/app-main/src/app_main/services/vault_sync_service.py",
         "pipelines/entity-filtering/src/entity_filtering/deduplication/"
         "canonical_entities.py",
-        "services/extraction/api.py",
     ):
         assert expected in seen, f"walker never reached {expected}"
 
