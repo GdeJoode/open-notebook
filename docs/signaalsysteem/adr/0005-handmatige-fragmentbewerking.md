@@ -49,4 +49,5 @@ Optie 2, besloten door Geert op 2026-10-29: handmatig samenvoegen en splitsen bl
 
 - `ChunkMutator` wordt omgebouwd tot een dienst die een handmatige run en een nieuwe fragmentenset maakt, voor samenvoegen, splitsen, wijzigen, verwijderen en toevoegen. De regel die handmatige runs beschermt, staat in ADR 0003.
 - **Tests (stopcondities):** na elke handmatige bewerking is het aantal fragmenten van de vorige run ongewijzigd en hun tekst gelijk; een test dat geen route een `chunk`-record wijzigt of verwijdert (uitbreiding van de routetest uit ADR 0010); een test dat een vervallen bron niet in een zoekresultaat staat, maar haar fragmenten wel in de database.
+- **Restrisico (F2-06, 31-10):** een handmatige run maakt nog geen embeddings. Na samenvoegen of splitsen vindt vectorzoeken de bron daarom niet meer, tot er embeddings voor de nieuwe run zijn. F2-29 lost dat op.
 - **Interface:** de schermen voor fragmentbewerking en het verwijderen van een bron roepen de nieuwe routes aan (ADR 0016).

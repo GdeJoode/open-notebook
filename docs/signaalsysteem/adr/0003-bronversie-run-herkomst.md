@@ -1,7 +1,7 @@
 # ADR 0003: Bronversie, verwerkingsrun en herkomst; herverwerking zonder overschrijven
 
 - **Status:** besloten
-- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 na de review (`doc_node`, `source.full_text`, `models` uit `model_call`); 2026-10-31 uitwerking in F2-04 (B26 voorgesteld)
+- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 na de review (`doc_node`, `source.full_text`, `models` uit `model_call`); 2026-10-31 uitwerking in F2-04 (B26 voorgesteld) en in F2-06 (B28 voorgesteld)
 - **Raakt FO-paragraaf:** 2 (principe 5 en 6), 4 (stap 2 en 9), 5 (planning), 8
 - **Lost op:** verschilanalyse conflict 7, open vraag 5 (de vraag of de run een nieuwe tabel wordt) en open vraag 15
 
@@ -144,3 +144,24 @@ De bouw (`migrations/90.surrealql`) wijkt op de volgende punten af van het voors
   - Nu: `register` vindt v1, maar `current_version` blijft v2, en zoeken toont B als actueel.
   - Voorstel: `current_version` gaat terug naar de bestaande versie v1, met een logregel in de run. Er komt geen nieuwe versie, zodat de unieke index op (`source`, `content_hash`) blijft gelden.
   - Alternatief: een nieuwe versie v3 met dezelfde hash als v1. Dat bewaart de volgorde als reeks versies, maar de unieke index vervalt.
+
+## Uitwerking in F2-06 (31-10)
+
+De bouw (`migrations/92.surrealql`) werkt de paragraaf "Handmatige correcties en optimistische vergrendeling" als volgt uit.
+
+**Besloten** (akkoord reviewer, 31-10):
+
+- **`rev`.** De database telt `rev` op bij elke schrijfactie; een meegestuurde waarde telt niet. De controle is één `UPDATE … WHERE rev = $rev` in een transactie. Een verouderde `rev` geeft HTTP 409, net als een schrijfconflict in de opslag.
+- **Handmatige run bij samenvoegen en splitsen.**
+  - Een run met trigger `handmatig` en `actor` = de persoon van de sleutel.
+  - Een volledige nieuwe set fragmenten met `extractor = handmatig` en `metadata.afgeleid_van`. Een nieuw fragment is nooit losser geclassificeerd dan het oorspronkelijke fragment.
+  - De nieuwe set en `current_run` gaan in één transactie, met de controle `WHERE current_run = $verwacht`, zodat gelijktijdige bewerkingen elkaar niet stil overschrijven.
+  - De invoerclassificatie van een handmatige run komt uit de bronversie. Dat is een uitzondering op "Uitwerking in F2-04": bij een correctie hoort geen bronkaartregel.
+- **Bescherming.** `current_run` gaat niet van een handmatige naar een automatische run; de database en de repository dwingen dat af. De automatische run logt `beschermd`, en de beheerder krijgt een melding in `beheer_melding`. Dat is een nieuwe tabel, geen van de zeven wachtrijen uit ADR 0016. Route en scherm volgen in F2-20.
+- **`actor`.** De database eist bij `handmatig` alleen een niet-lege `actor`, niet dat het een beheerder is. Dat is aanvaard zolang alleen de fork schrijft, net als bij `classification_log`.
+- **`/api/entity-resolution/apply`** hoogt `rev` eerst op. Een mislukte samenvoeging laat die ophoging staan.
+
+**Voorgesteld, Geert beslist** (plan van aanpak §8.1, B28): de grens bij `manual_override`.
+
+- Voorstel: een run of een automatisch proces mag op een vastgezette entiteit alleen vermeldingen en herkomst toevoegen: `source_documents`, `grounding` en `mentions`. Al het andere wordt overgeslagen, met een conflictregel in het runlogboek of in `beheer_melding`: naam, type, beschrijving, status, `external_ids`, aliassen, en samenvoegen als winnaar of als verliezer. Reden: vermeldingen zijn herkomst, geen correctie van het besluit van de beheerder.
+- Alternatief: de letterlijke tekst hierboven, waarin een run een vastgezette entiteit helemaal niet wijzigt. Dan gaat de herkomst van nieuwe bronnen verloren.
