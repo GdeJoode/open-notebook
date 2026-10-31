@@ -24,6 +24,7 @@ from app_main.api.schemas import (
     SourceMapRuleResponse,
 )
 from app_main.dependencies import get_source_map_service
+from app_main.services.inname_binding import BindingError
 from app_main.services.intake_service import IntakeConflictError
 from app_main.services.source_map_service import (
     AlBevestigdError,
@@ -70,6 +71,9 @@ def fout_naar_http(e: Exception) -> HTTPException:
     if isinstance(e, AlBevestigdError):
         return HTTPException(status_code=409, detail={
             "code": "al_bevestigd", "melding": "Al extern bevestigd"})
+    if isinstance(e, BindingError):
+        return HTTPException(status_code=409, detail={
+            "code": "niet_gebonden", "melding": "Run, regel, batch of item horen niet bij elkaar"})
     if isinstance(e, IntakeConflictError):
         return HTTPException(status_code=409, detail={
             "code": "verkeerde_status", "melding": "Status staat dit niet toe"})

@@ -10,6 +10,13 @@ De invoer is alleen extern als de bronkaartregel van de run extern is, door een
 beheerder bevestigd en actief, op een openbare route (ADR 0001, 0019, 0020). Zonder regel is de invoer
 onbekend. De run legt id en ``rev`` van zijn regel vast (F2-13).
 
+Binding (F2-14): de run legt de sleutel van de aanmaker vast, en waar dat van
+toepassing is de batch of het wachtrij-item. Met een batch of item komt de
+invoerclassificatie uit de batch of het besluit over het item, en moeten die
+bij de regel horen (:mod:`app_main.services.inname_binding`). Alleen de
+aanmaker werkt de run bij of sluit hem af. Een run die langer dan
+``SIGNAAL_RUN_MAX_MINUTEN`` ``bezig`` staat, sluit de fork als ``mislukt``.
+
 ``PATCH /api/v1/runs/{id}`` sluit een run af. Een afgesloten run geeft 409. Een
 run die ``geslaagd`` meldt maar geen bronversie, fragment of ``doc_node`` maakte,
 eindigt als ``niets_nieuws``. ``models`` neemt de fork niet over van Langflow:
@@ -19,7 +26,7 @@ waarschuwing in het logboek.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from shared.models.processing_run import AFGESLOTEN, ProcessingRun
@@ -29,8 +36,10 @@ from surrealdb_service.repositories.processing_run import (
     source_map_rule_snapshot,
 )
 
+from app_main import config
 from app_main.exceptions import InvalidInputError, NotFoundError
 from app_main.services.flow_register import FlowRegister
+from app_main.services.inname_binding import InnameBinding
 
 
 class FlowNotRegisteredError(Exception):
@@ -43,6 +52,14 @@ class FlowNotRegisteredError(Exception):
 
 class RunClosedError(Exception):
     """De run is al afgesloten (HTTP 409)."""
+
+
+class NietDeAanmakerError(PermissionError):
+    """Alleen de sleutel die de run aanmaakte, werkt hem bij (HTTP 403)."""
+
+
+#: Melding bij een run die te lang ``bezig`` stond.
+VERLOPEN = "Run stond te lang bezig; door de fork afgesloten"
 
 
 def _nu() -> datetime:
@@ -66,9 +83,11 @@ class ProcessingRunService:
         self,
         run_repo: Optional[ProcessingRunRepository] = None,
         flow_register: Optional[FlowRegister] = None,
+        binding: Optional[InnameBinding] = None,
     ) -> None:
         self.run_repo = run_repo or ProcessingRunRepository()
         self._flow_register = flow_register
+        self.binding = binding or InnameBinding()
 
     @property
     def flow_register(self) -> FlowRegister:
@@ -101,12 +120,24 @@ class ProcessingRunService:
         source_map_rule_id: Optional[str] = None,
         label_schema: Optional[Dict[str, Any]] = None,
         actor: Optional[str] = None,
+        created_by_key: Optional[str] = None,
+        intake_batch_id: Optional[str] = None,
+        intake_item_id: Optional[str] = None,
     ) -> ProcessingRun:
         """Maak een run; ``FlowNotRegisteredError`` als de flow niet mag draaien.
 
-        ``actor`` is verplicht bij trigger ``handmatig`` (migratie 92).
+        ``actor`` is verplicht bij trigger ``handmatig`` (migratie 92). Met een
+        batch of item: ``BindingError`` of ``ItemStatusError`` als die niet bij
+        de regel horen of het item niet besloten is.
         """
+        await self.sluit_verlopen_runs()
         invoer, rev = await self._invoer(source_map_rule_id)
+        if intake_batch_id or intake_item_id:
+            binding = await self.binding.bepaal_invoer(
+                rule_id=source_map_rule_id, batch_id=intake_batch_id, item_id=intake_item_id)
+            invoer = binding.classification
+            intake_batch_id = str(binding.batch.id) if binding.batch else None
+            intake_item_id = str(binding.item.id) if binding.item else None
         vastgelegd = self.flow_register.is_vastgelegd(pipeline_id, git_commit, flow_hash)
         velden: Dict[str, Any] = dict(
             trigger=trigger,
@@ -118,6 +149,9 @@ class ProcessingRunService:
             label_schema=label_schema,
             flow_vastgelegd=vastgelegd,
             actor=actor,
+            created_by_key=created_by_key,
+            intake_batch=intake_batch_id,
+            intake_item=intake_item_id,
         )
         if vastgelegd:
             return await self.run_repo.create(**velden, log=[_regel("flow", "vastgelegd")])
@@ -136,6 +170,11 @@ class ProcessingRunService:
         )
         raise FlowNotRegisteredError(str(run.id))
 
+    async def sluit_verlopen_runs(self) -> int:
+        """Sluit runs die te lang ``bezig`` staan als ``mislukt`` (F2-14)."""
+        grens = _nu() - timedelta(minutes=config.get_run_max_minuten())
+        return await self.run_repo.sluit_verlopen(grens, VERLOPEN)
+
     async def get(self, run_id: str) -> ProcessingRun:
         run = await self.run_repo.get(run_id)
         if run is None:
@@ -151,9 +190,13 @@ class ProcessingRunService:
         log: Optional[List[Dict[str, Any]]] = None,
         models: Optional[List[Dict[str, Any]]] = None,
         error: Optional[str] = None,
+        key_id: Optional[str] = None,
     ) -> ProcessingRun:
-        """Werk een lopende run bij of sluit hem af."""
+        """Werk een lopende run bij of sluit hem af; alleen de aanmaker (F2-14)."""
+        await self.sluit_verlopen_runs()
         run = await self.get(run_id)
+        if not run.created_by_key or run.created_by_key != key_id:
+            raise NietDeAanmakerError("Alleen de aanmaker werkt de run bij")
         if run.afgesloten:
             raise RunClosedError("Run is al afgesloten")
         if status is not None and status not in AFGESLOTEN | {"bezig"}:

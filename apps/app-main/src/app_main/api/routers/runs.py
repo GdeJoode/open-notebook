@@ -3,7 +3,7 @@
 * ``POST /api/v1/runs``: maakt een run (``bezig``); 409 als de flow niet in Git
   staat en de invoer intern of onbekend is (de run is dan ``mislukt``).
 * ``PATCH /api/v1/runs/{run_id}``: werkt een lopende run bij of sluit hem af;
-  409 op een afgesloten run.
+  409 op een afgesloten run; 403 voor een andere sleutel dan de aanmaker (F2-14).
 * ``GET /api/v1/runs/{run_id}``: de run.
 
 Recht ``pijplijn`` (en ``beheerder``).
@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from shared.models.agents import Right
 from shared.models.processing_run import ProcessingRun
 
-from app_main.api.agent_auth import current_key, require_right
+from app_main.api.agent_auth import AgentKeyContext, current_key, require_right
 from app_main.api.schemas import (
     RunCreateRequest,
     RunCreateResponse,
@@ -22,8 +22,10 @@ from app_main.api.schemas import (
     RunResponse,
 )
 from app_main.dependencies import get_processing_run_service
+from app_main.services.inname_binding import BindingError, ItemStatusError
 from app_main.services.processing_run_service import (
     FlowNotRegisteredError,
+    NietDeAanmakerError,
     ProcessingRunService,
     RunClosedError,
 )
@@ -48,8 +50,8 @@ async def create_run(
     # `handmatig` is alleen voor correcties door de beheerder (ADR 0005), met
     # de persoon van de sleutel als actor (migratie 92).
     actor = None
+    key = await current_key(request)
     if body.trigger == "handmatig":
-        key = await current_key(request)
         if key.permission != Right.BEHEERDER:
             raise HTTPException(status_code=403, detail="Trigger handmatig vraagt een beheerder")
         actor = key.person
@@ -62,7 +64,17 @@ async def create_run(
             source_map_rule_id=body.source_map_rule_id,
             label_schema=body.label_schema,
             actor=actor,
+            created_by_key=key.key_id,
+            intake_batch_id=body.intake_batch_id,
+            intake_item_id=body.intake_item_id,
         )
+    except BindingError:
+        raise HTTPException(status_code=409, detail={
+            "code": "niet_gebonden", "melding": "Regel, batch of item horen niet bij elkaar"},
+        ) from None
+    except ItemStatusError:
+        raise HTTPException(status_code=409, detail={
+            "code": "verkeerde_status", "melding": "Status staat dit niet toe"}) from None
     except FlowNotRegisteredError as e:
         return JSONResponse(
             status_code=409,
@@ -76,8 +88,10 @@ async def create_run(
 async def update_run(
     run_id: str,
     body: RunPatchRequest,
+    request: Request,
     service: ProcessingRunService = Depends(get_processing_run_service),
 ) -> RunResponse:
+    key: AgentKeyContext = await current_key(request)
     try:
         run = await service.update(
             run_id,
@@ -86,7 +100,10 @@ async def update_run(
             log=[r.model_dump() for r in body.log],
             models=body.models,
             error=body.error,
+            key_id=key.key_id,
         )
+    except NietDeAanmakerError:
+        raise HTTPException(status_code=403, detail="Alleen de aanmaker van de run") from None
     except RunClosedError:
         raise HTTPException(status_code=409, detail="Run is al afgesloten") from None
     return _antwoord(run)

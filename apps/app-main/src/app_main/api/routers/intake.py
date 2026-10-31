@@ -37,13 +37,14 @@ from app_main.api.schemas import (
     IntakeItemResponse,
 )
 from app_main.dependencies import get_intake_service
+from app_main.services.inname_binding import BindingError
 from app_main.services.intake_service import IntakeConflictError, IntakeService
 from app_main.services.source_map_service import AlBevestigdError, VerbodenLocatieError
 
 router = APIRouter(prefix="/v1/intake", tags=["intake"])
 
 _FOUTEN = (RevConflictError, RecordNotFoundError, VerbodenLocatieError, PermissionError,
-           IntakeConflictError, AlBevestigdError)
+           IntakeConflictError, AlBevestigdError, BindingError)
 
 
 def _batch(batch: IntakeBatch) -> IntakeBatchResponse:

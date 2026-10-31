@@ -223,6 +223,95 @@ class SourceRepository(BaseRepository[Source]):
         regel = next(r for r in reversed(results) if r)
         return str(regel[0]["id"] if isinstance(regel, list) else regel["id"])
 
+    # ------------------------------------------------------------------
+    # Import (F2-14, ADR 0010). Alleen voor de ``ImportService``.
+    # ------------------------------------------------------------------
+
+    async def find_by_external_id(self, external_id: str) -> Optional[Source]:
+        """De bron met dit externe id (uniek, migratie 94), anders ``None``."""
+        rows = await execute_query(
+            "SELECT * FROM source WHERE external_id = $e LIMIT 1",
+            {"e": external_id},
+            self.config,
+        )
+        return Source(**rows[0]) if rows else None
+
+    async def schrijf_import(
+        self,
+        *,
+        bron: Any,
+        bron_data: Optional[Dict[str, Any]],
+        versie: Any,
+        versie_data: Dict[str, Any],
+        fragmenten: List[Dict[str, Any]],
+    ) -> None:
+        """Bron (als ``bron_data`` gezet is), bronversie en fragmenten in één transactie.
+
+        ``bron``, ``versie`` en de ``id`` van elk fragment zijn record-id's die
+        de aanroeper vooraf kiest, zodat een herhaald verzoek dezelfde id's
+        terugvindt. Het versienummer en de voorganger volgen uit de database;
+        de bron wijst daarna naar de nieuwe versie. Faalt één stap (een unieke
+        index, een ``ASSERT`` op classificatie of run), dan verandert niets.
+        """
+        delen = ["BEGIN TRANSACTION;"]
+        if bron_data is not None:
+            delen.append("CREATE $bron CONTENT $bron_data RETURN NONE;")
+        delen.append(
+            "LET $data = object::from_entries(array::concat(object::entries($versie_data), ["
+            " ['source', $bron],"
+            " ['version_no', array::len((SELECT VALUE id FROM source_version WHERE source = $bron)) + 1],"
+            " ['predecessor', (SELECT VALUE current_version FROM ONLY $bron)]"
+            "]));"
+        )
+        delen.append("CREATE $versie CONTENT $data RETURN NONE;")
+        delen.append("UPDATE $bron SET current_version = $versie RETURN NONE;")
+        if fragmenten:
+            delen.append("INSERT INTO chunk $fragmenten RETURN NONE;")
+        delen.append("COMMIT TRANSACTION;")
+        params: Dict[str, Any] = {
+            "bron": bron, "versie": versie, "versie_data": versie_data,
+            "fragmenten": fragmenten,
+        }
+        if bron_data is not None:
+            params["bron_data"] = bron_data
+        await execute_transaction("\n".join(delen), params, self.config)
+
+    async def fragmenten_van_run(self, version_id: str, run_id: str) -> List[Dict[str, Any]]:
+        """Id, volgorde en tekst van de fragmenten van een versie en run, op volgorde."""
+        rows = await execute_query(
+            "SELECT id, order, text FROM chunk WHERE source_version = $v AND run = $r"
+            " ORDER BY order ASC",
+            {"v": ensure_record_id(version_id), "r": ensure_record_id(run_id)},
+            self.config,
+        )
+        return rows or []
+
+    async def heeft_structuur(self, source_id: str, run_id: str) -> bool:
+        """Heeft de run al ``doc_node``-records voor deze bron?"""
+        rows = await execute_query(
+            "SELECT VALUE id FROM doc_node WHERE source = $b AND run = $r LIMIT 1",
+            {"b": ensure_record_id(source_id), "r": ensure_record_id(run_id)},
+            self.config,
+        )
+        return bool(rows)
+
+    async def zet_intern(self, source_id: str) -> None:
+        """Maak een externe bron intern (strengste wint, ADR 0001); de database
+        zet versies, fragmenten en alles wat erbij hoort mee (migratie 90)."""
+        await execute_query(
+            "UPDATE $b SET classification = 'intern' WHERE classification = 'extern' RETURN NONE",
+            {"b": ensure_record_id(source_id)},
+            self.config,
+        )
+
+    async def zet_huidige_versie(self, source_id: str, version_id: str) -> None:
+        """Laat de bron naar een bestaande versie wijzen (B26, ADR 0003)."""
+        await execute_query(
+            "UPDATE $b SET current_version = $v RETURN NONE",
+            {"b": ensure_record_id(source_id), "v": ensure_record_id(version_id)},
+            self.config,
+        )
+
     async def add_to_notebook(self, source_id: str, notebook_id: str) -> bool:
         """
         Add a source to a notebook.

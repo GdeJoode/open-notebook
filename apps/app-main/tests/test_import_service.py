@@ -1,0 +1,648 @@
+"""Het importeindpunt ``POST /api/v1/import`` (F2-14, ADR 0010, plan §5.1).
+
+Tegen een echte SurrealDB, met de sleutel ``pijplijn``. Het bronarchief en de
+innamemap zijn tijdelijke mappen; alle testdata is synthetisch.
+
+Stopcondities uit het plan van aanpak:
+
+* hetzelfde verzoek twee keer geeft hetzelfde resultaat; een bekende hash
+  maakt geen nieuwe versie; A -> B -> A volgt B26;
+* 409 bij een lagere classificatie; elk fragment en elke ``doc_node`` heeft
+  ``source_version``, ``run`` en de classificatie van de versie, en elk
+  fragment ``extractor``;
+* de markering van het gegenereerde blok geeft 422 en een logregel;
+* een niet-vastgelegde flow met interne invoer geeft 409;
+* de classificatie komt uit de regel van de werkelijke bron, de batch of het
+  actuele besluit over het item, nooit uit de aanroeper;
+* de inhoudshash van een URL-bron is die van de ruwe inhoud;
+* alleen een run uit ``POST /api/v1/runs`` van dezelfde sleutel; ``PATCH``
+  alleen door de aanmaker; een run die te lang ``bezig`` staat, wordt
+  ``mislukt``; batch en item horen bij de regel en de run.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import uuid
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
+
+import httpx
+import pytest
+import surrealdb_service.config as surreal_config
+import surrealdb_service.connection as conn
+from app_main.api import agent_auth
+from app_main.api.app import create_app
+from app_main.dependencies import (
+    get_import_service,
+    get_intake_service,
+    get_processing_run_service,
+)
+from app_main.services.agents.audit_service import AgentAuditService
+from app_main.services.import_service import ImportService
+from app_main.services.intake_service import IntakeService
+from app_main.services.processing_run_service import VERLOPEN, ProcessingRunService
+from app_main.services.source_map_service import Locatiecontrole
+from shared.models.agents import Right
+
+pytestmark = [pytest.mark.asyncio, pytest.mark.requires_docker]
+
+LANGFLOW = agent_auth.AgentKeyContext(
+    key_id="agent_keys:langflow", agent_id="langflow", permission=Right.PIJPLIJN)
+ANDERE = agent_auth.AgentKeyContext(
+    key_id="agent_keys:andere", agent_id="andere", permission=Right.PIJPLIJN)
+MARKERING = "<!-- signaalsysteem:begin -->"
+
+
+@pytest.fixture(scope="module")
+def app():
+    return create_app()
+
+
+class Omgeving:
+    def __init__(self, monkeypatch, archief, inname, flows) -> None:
+        self.monkeypatch = monkeypatch
+        self.archief = archief
+        self.inname = inname
+        self.flows = flows
+        self.sleutel = LANGFLOW
+
+    def als(self, sleutel) -> None:
+        self.sleutel = sleutel
+
+    def origineel(self, inhoud: bytes) -> tuple[str, str]:
+        naam = f"{uuid.uuid4().hex}.bin"
+        (self.archief / naam).write_bytes(inhoud)
+        return f"bronarchief/{naam}", "sha256:" + hashlib.sha256(inhoud).hexdigest()
+
+
+@pytest.fixture
+async def env(live_surrealdb, monkeypatch, app, git_flows, tmp_path):
+    monkeypatch.setattr(surreal_config, "_config", live_surrealdb)
+    monkeypatch.setattr(AgentAuditService, "record", AsyncMock())
+    archief = tmp_path / "bronarchief"
+    inname = tmp_path / "inname"
+    archief.mkdir()
+    inname.mkdir()
+    omgeving = Omgeving(monkeypatch, archief, inname, git_flows)
+
+    async def _sleutel(_request):
+        return omgeving.sleutel
+
+    monkeypatch.setattr(agent_auth, "authenticate_request", _sleutel)
+    controle = Locatiecontrole(vault_paden=[str(tmp_path / "vault")], exportmap_paden=[],
+                               inname_paden=[str(inname)], inname_urls=[])
+
+    def _runs():
+        return ProcessingRunService(flow_register=git_flows.register)
+
+    app.dependency_overrides[get_processing_run_service] = _runs
+    app.dependency_overrides[get_import_service] = lambda: ImportService(
+        run_service=_runs(), locatiecontrole=controle, bronarchief=str(archief))
+    app.dependency_overrides[get_intake_service] = lambda: IntakeService(locatiecontrole=controle)
+    original = conn._pool
+    conn._pool = conn.ConnectionPool(config=live_surrealdb)
+    yield omgeving
+    for dep in (get_processing_run_service, get_import_service, get_intake_service):
+        app.dependency_overrides.pop(dep, None)
+    await conn._pool.close_all()
+    conn._pool = original or conn.ConnectionPool(config=live_surrealdb)
+
+
+def _client(app) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                             headers={"Authorization": "Bearer ak_test"})
+
+
+async def _q(sql: str, params: dict | None = None):
+    return await conn.execute_query(sql, params or {})
+
+
+async def _een(sql: str, params: dict | None = None):
+    rijen = await _q(sql, params)
+    return rijen[0] if isinstance(rijen, list) else rijen
+
+
+_SOORT = {"api": "api", "website": "website", "watchfolder": "map", "upload": "pdf",
+          "bulkupload": "pdf"}
+_START = {"api": "automatisch", "website": "automatisch", "watchfolder": "wachtrij"}
+
+
+async def _regel(route_type: str = "api", classification: str = "extern", *,
+                 bevestigd: bool = True, location: str = "https://example.org/api") -> str:
+    data = {"name": "Openbare testbron", "route_type": route_type,
+            "source_type": _SOORT[route_type], "location": location,
+            "pipeline_start": _START.get(route_type, "na_bevestiging"),
+            "route": "inname_pdf", "fetch_content": "volledig_document",
+            "classification": classification}
+    if bevestigd and classification == "extern":
+        data.update(classification_confirmed_by="Testpersoon",
+                    classification_confirmed_at=datetime.now(timezone.utc))
+    return str((await _een("CREATE source_map_rule CONTENT $d RETURN id", {"d": data}))["id"])
+
+
+async def _batch(regel: str, files: list[str], classification: str = "extern") -> str:
+    data = {"route": "inname_pdf", "files": files, "classification": classification,
+            "created_by": "Testpersoon", "source_map_rule": conn.ensure_record_id(regel)}
+    if classification == "extern":
+        data.update(classification_confirmed_by="Testpersoon",
+                    classification_confirmed_at=datetime.now(timezone.utc))
+    return str((await _een("CREATE intake_batch CONTENT $d RETURN id", {"d": data}))["id"])
+
+
+async def _item(path: str, content_hash: str, besluit: str | None = "extern",
+                origin: str = "watchfolder") -> str:
+    rij = await _een("CREATE intake_item CONTENT $d RETURN id", {"d": {
+        "origin": origin, "path": path, "content_hash": content_hash,
+        "registered_by": "langflow"}})
+    if besluit:
+        await _q("UPDATE $id SET status = 'besloten', decision = $b", {
+            "id": conn.ensure_record_id(str(rij["id"])),
+            "b": {"route": "inname_pdf", "classification": besluit,
+                  "decided_by": "Testpersoon", "decided_at": datetime.now(timezone.utc)}})
+    return str(rij["id"])
+
+
+async def _start(client, env, *, regel=None, batch=None, item=None, flow_hash=None,
+                 status: int = 201):
+    body = {"trigger": "schema", "pipeline_id": "inname_pdf",
+            "pipeline_version": {"git_commit": env.flows.head,
+                                 "flow_hash": flow_hash or env.flows.hash},
+            "source_map_rule_id": regel, "intake_batch_id": batch, "intake_item_id": item}
+    resp = await client.post("/api/v1/runs", json=body)
+    assert resp.status_code == status, resp.text
+    return resp.json().get("run_id") if status == 201 else resp.json()
+
+
+def _verzoek(run_id, *, original, content_hash, regel=None, batch=None, item=None,
+             external_id=None, location="https://example.org/api/stuk-1", teksten=None,
+             title="Openbaar stuk", **extra) -> dict:
+    teksten = teksten or ["Inleiding van het openbare stuk.", "Tweede alinea."]
+    return {
+        "run_id": run_id, "source_map_rule_id": regel, "batch_id": batch,
+        "intake_item_id": item,
+        "source": {"external_id": external_id or f"stuk-{uuid.uuid4().hex}", "type": "pdf",
+                   "location": location, "title": title},
+        "source_version": {"content_hash": content_hash, "original": original,
+                           "fetched_at": "2026-11-02T09:00:00+01:00"},
+        "extraction": {"extractor": "docling-serve", "version": "v1.38.2"},
+        "structure": {"format": "docling_document", "content": {"texts": []}},
+        "chunks": [
+            {"seq": i, "text": t, "section_path": ["Hoofdstuk 1", "Paragraaf 1.1"],
+             "page": 1, "printed_page": "3", "element_type": "paragraph",
+             "positions": [{"page": 1, "bbox": [0.1, 0.2, 0.3, 0.4]}],
+             "doc_ref": f"#/texts/{i}", "labels": []}
+            for i, t in enumerate(teksten)
+        ],
+        **extra,
+    }
+
+
+async def _run(run_id: str) -> dict:
+    return await _een("SELECT * FROM type::thing($id)", {"id": run_id})
+
+
+async def _versies(bron: str) -> list:
+    return await _q("SELECT * FROM source_version WHERE source = $b ORDER BY version_no",
+                    {"b": conn.ensure_record_id(bron)})
+
+
+# --------------------------------------------------------------------------
+# Idempotent, bekende hash, B26
+# --------------------------------------------------------------------------
+
+
+async def test_hetzelfde_verzoek_geeft_hetzelfde_resultaat(env, app) -> None:
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 openbaar stuk A")
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        verzoek = _verzoek(run, original=original, content_hash=h, regel=regel)
+        eerste = await client.post("/api/v1/import", json=verzoek)
+        tweede = await client.post("/api/v1/import", json=verzoek)
+    assert eerste.status_code == 201, eerste.text
+    assert tweede.status_code == 200, tweede.text
+    assert eerste.json() == tweede.json()
+    body = eerste.json()
+    assert body["status"] == "nieuw" and body["version_no"] == 1
+    assert body["classification"] == "extern" and len(body["chunk_ids"]) == 2
+    assert len(await _versies(body["source_id"])) == 1
+    [aantal] = await _q("SELECT count() AS n FROM chunk WHERE source = $b GROUP ALL",
+                        {"b": conn.ensure_record_id(body["source_id"])})
+    assert aantal["n"] == 2
+
+
+async def test_ander_verzoek_in_dezelfde_run_geeft_409(env, app) -> None:
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 stuk met twee versies van fragmenten")
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        verzoek = _verzoek(run, original=original, content_hash=h, regel=regel)
+        assert (await client.post("/api/v1/import", json=verzoek)).status_code == 201
+        verzoek["chunks"][0]["text"] = "Een andere tekst."
+        resp = await client.post("/api/v1/import", json=verzoek)
+    assert resp.status_code == 409 and resp.json()["detail"]["code"] == "ander_verzoek"
+
+
+async def test_bekende_hash_maakt_geen_nieuwe_versie(env, app) -> None:
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 ongewijzigd stuk")
+    extern_id = f"stuk-{uuid.uuid4().hex}"
+    async with _client(app) as client:
+        eerste = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            eerste, original=original, content_hash=h, regel=regel, external_id=extern_id))
+        assert resp.status_code == 201
+        versie = resp.json()["source_version_id"]
+        tweede = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            tweede, original=original, content_hash=h, regel=regel, external_id=extern_id))
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "ongewijzigd"
+        assert resp.json()["source_version_id"] == versie and resp.json()["chunk_ids"] == []
+        gesloten = await client.patch(f"/api/v1/runs/{tweede}", json={"status": "geslaagd"})
+    assert gesloten.json()["status"] == "niets_nieuws"
+    assert len(await _versies(resp.json()["source_id"])) == 1
+
+
+async def test_inhoud_a_b_a_volgt_b26(env, app) -> None:
+    regel = await _regel()
+    a, ha = env.origineel(b"%PDF-1.7 inhoud A")
+    b, hb = env.origineel(b"%PDF-1.7 inhoud B")
+    extern_id = f"stuk-{uuid.uuid4().hex}"
+    async with _client(app) as client:
+        ids = []
+        for original, h in ((a, ha), (b, hb), (a, ha)):
+            run = await _start(client, env, regel=regel)
+            resp = await client.post("/api/v1/import", json=_verzoek(
+                run, original=original, content_hash=h, regel=regel, external_id=extern_id))
+            assert resp.status_code in (200, 201), resp.text
+            ids.append((run, resp.json()))
+            await client.patch(f"/api/v1/runs/{run}", json={"status": "geslaagd"})
+    (_, v1), (_, v2), (derde, v3) = ids
+    assert (v1["version_no"], v2["version_no"]) == (1, 2)
+    assert v3["status"] == "ongewijzigd" and v3["source_version_id"] == v1["source_version_id"]
+    bron = await _een("SELECT current_version FROM type::thing($id)", {"id": v1["source_id"]})
+    assert str(bron["current_version"]) == v1["source_version_id"]
+    assert len(await _versies(v1["source_id"])) == 2
+    regels = [r for r in (await _run(derde))["log"] if r["status"] == "versie_teruggezet"]
+    assert len(regels) == 1
+    assert (await _run(derde))["status"] == "niets_nieuws"
+
+
+# --------------------------------------------------------------------------
+# Herkomst en classificatie
+# --------------------------------------------------------------------------
+
+
+async def test_fragment_en_doc_node_dragen_herkomst(env, app) -> None:
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 stuk met structuur")
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel,
+            classification={"value": "extern", "gatekeeper": {"decision": "intern",
+                                                              "internal_markers": ["rubricering"]}}))
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # De poortwachter vond interne kenmerken: strenger dan de regel.
+    assert body["classification"] == "intern"
+    versie = await _een("SELECT * FROM type::thing($id)", {"id": body["source_version_id"]})
+    assert versie["classification"] == "intern"
+    assert versie["content_hash"] == h.removeprefix("sha256:")
+    fragmenten = await _q("SELECT * FROM chunk WHERE source_version = $v",
+                          {"v": conn.ensure_record_id(body["source_version_id"])})
+    knopen = await _q("SELECT * FROM doc_node WHERE source_version = $v",
+                      {"v": conn.ensure_record_id(body["source_version_id"])})
+    assert len(fragmenten) == 2 and len(knopen) >= 2
+    for rij in fragmenten + knopen:
+        assert str(rij["source_version"]) == body["source_version_id"]
+        assert str(rij["run"]) == run
+        assert rij["classification"] == versie["classification"]
+    for rij in fragmenten:
+        assert rij["extractor"] == "docling-serve@v1.38.2"
+        assert rij["section_path"] == ["Hoofdstuk 1", "Paragraaf 1.1"]
+        assert rij["positions"] == [[1.0, 0.1, 0.3, 0.2, 0.4]]
+        assert rij["printed_page"] == 3 and rij["metadata"]["doc_ref"].startswith("#/texts/")
+
+
+async def test_lagere_classificatie_dan_de_bestaande_geeft_409(env, app) -> None:
+    regel = await _regel()
+    a, ha = env.origineel(b"%PDF-1.7 eerst intern")
+    b, hb = env.origineel(b"%PDF-1.7 daarna extern")
+    extern_id = f"stuk-{uuid.uuid4().hex}"
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=a, content_hash=ha, regel=regel, external_id=extern_id,
+            classification={"value": "intern"}))
+        assert resp.status_code == 201 and resp.json()["classification"] == "intern"
+        run = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=b, content_hash=hb, regel=regel, external_id=extern_id))
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "lagere_classificatie"
+    assert len(await _versies((await _q("SELECT VALUE id FROM source WHERE external_id = $e",
+                                         {"e": extern_id}))[0])) == 1
+
+
+async def test_strengere_import_maakt_externe_bron_intern(env, app) -> None:
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 bekend en toch intern")
+    extern_id = f"stuk-{uuid.uuid4().hex}"
+    async with _client(app) as client:
+        for waarde in (None, "intern"):
+            run = await _start(client, env, regel=regel)
+            resp = await client.post("/api/v1/import", json=_verzoek(
+                run, original=original, content_hash=h, regel=regel, external_id=extern_id,
+                classification={"value": waarde}))
+            assert resp.status_code in (200, 201)
+    assert resp.json()["status"] == "ongewijzigd" and resp.json()["classification"] == "intern"
+    waarden = await _q("SELECT VALUE classification FROM chunk WHERE source = type::thing($b)",
+                       {"b": resp.json()["source_id"]})
+    assert set(waarden) == {"intern"}
+
+
+@pytest.mark.parametrize("plek", ["fragment", "structuur", "titel", "ruwe_inhoud"])
+async def test_markering_van_het_blok_geeft_422_en_een_logregel(env, app, plek) -> None:
+    regel = await _regel()
+    inhoud = b"%PDF-1.7 " + (MARKERING.encode() if plek == "ruwe_inhoud" else b"schoon")
+    original, h = env.origineel(inhoud + uuid.uuid4().hex.encode())
+    extern_id = f"stuk-{uuid.uuid4().hex}"
+    verzoek = None
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        verzoek = _verzoek(run, original=original, content_hash=h, regel=regel,
+                           external_id=extern_id)
+        if plek == "fragment":
+            verzoek["chunks"][1]["text"] = f"Notitie {MARKERING} afgeleid"
+        elif plek == "structuur":
+            verzoek["structure"]["content"] = {"texts": [{"text": "<!-- signaalsysteem:end -->"}]}
+        elif plek == "titel":
+            verzoek["source"]["title"] = MARKERING
+        resp = await client.post("/api/v1/import", json=verzoek)
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "afgeleide_tekst"
+    assert MARKERING not in resp.text
+    assert [r["status"] for r in (await _run(run))["log"]].count("geweigerd") == 1
+    assert await _q("SELECT id FROM source WHERE external_id = $e", {"e": extern_id}) == []
+
+
+async def test_flow_niet_vastgelegd_met_interne_invoer_geeft_409(env, app) -> None:
+    regel = await _regel()  # extern: de run start met een waarschuwing
+    original, h = env.origineel(b"%PDF-1.7 flow buiten git")
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel, flow_hash="0" * 64)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel,
+            classification={"gatekeeper": {"decision": "intern"}}))
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "flow_niet_vastgelegd"
+    gelezen = await _run(run)
+    assert gelezen["status"] == "mislukt" and gelezen["error"]
+
+
+async def test_classificatie_uit_de_regel_van_de_werkelijke_bron(env, app) -> None:
+    extern = await _regel()
+    onbevestigd = await _regel(bevestigd=False)
+    original, h = env.origineel(b"%PDF-1.7 bron van regel A")
+    b, hb = env.origineel(b"%PDF-1.7 bron van regel A, nieuwe inhoud")
+    extern_id = f"stuk-{uuid.uuid4().hex}"
+    async with _client(app) as client:
+        # Een onbevestigde externe regel is intern, ook als de aanroeper extern zegt.
+        run = await _start(client, env, regel=onbevestigd)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=onbevestigd, external_id=extern_id,
+            classification={"value": "extern", "basis": "bronkaartregel"}))
+        assert resp.status_code == 201 and resp.json()["classification"] == "intern"
+
+        # Dezelfde bron via een andere (externe) regel: geweigerd.
+        run = await _start(client, env, regel=extern)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=b, content_hash=hb, regel=extern, external_id=extern_id))
+        assert resp.status_code == 409 and resp.json()["detail"]["code"] == "niet_gebonden"
+
+        # Een andere regel in het verzoek dan die van de run: geweigerd.
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=b, content_hash=hb, regel=onbevestigd))
+        assert resp.status_code == 409 and resp.json()["detail"]["code"] == "niet_gebonden"
+    [klasse] = await _q("SELECT VALUE classification FROM source WHERE external_id = $e",
+                        {"e": extern_id})
+    assert klasse == "intern"
+
+
+async def test_inhoudshash_van_een_url_bron_is_die_van_de_ruwe_inhoud(env, app) -> None:
+    regel = await _regel("website", location="https://example.org/nieuws")
+    ruw = b"<html><body><p>Openbaar nieuwsbericht.</p></body></html>"
+    original, h = env.origineel(ruw)
+    tekst = "Openbaar nieuwsbericht."
+    van_tekst = "sha256:" + hashlib.sha256(tekst.encode()).hexdigest()
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=van_tekst, regel=regel,
+            location="https://example.org/nieuws/1", teksten=[tekst]))
+        assert resp.status_code == 422 and resp.json()["detail"]["code"] == "inhoudshash"
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel,
+            location="https://example.org/nieuws/1", teksten=[tekst]))
+    assert resp.status_code == 201, resp.text
+    versie = await _een("SELECT content_hash FROM type::thing($id)",
+                        {"id": resp.json()["source_version_id"]})
+    assert versie["content_hash"] == hashlib.sha256(ruw).hexdigest()
+
+
+@pytest.mark.parametrize("original", ["../buiten.bin", "/etc/hostname", "bronarchief/ontbreekt.bin"])
+async def test_origineel_buiten_het_bronarchief_geeft_422(env, app, original) -> None:
+    regel = await _regel()
+    _, h = env.origineel(b"%PDF-1.7 los")
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel))
+    assert resp.status_code == 422 and resp.json()["detail"]["code"] == "origineel"
+
+
+async def test_locatie_in_de_vault_geeft_422(env, app, tmp_path) -> None:
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 vault")
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel,
+            location=str(tmp_path / "vault" / "notitie.md")))
+    assert resp.status_code == 422 and resp.json()["detail"]["code"] == "locatie"
+
+
+# --------------------------------------------------------------------------
+# Runs: aanmaker, herkomst van de run, verlopen
+# --------------------------------------------------------------------------
+
+
+async def test_import_alleen_in_een_run_uit_post_runs_van_dezelfde_sleutel(env, app) -> None:
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 run van de fork")
+    fork = await _een("CREATE processing_run CONTENT $d RETURN id", {"d": {
+        "trigger": "inname", "pipeline_id": "source_processor", "flow_vastgelegd": True,
+        "source_map_rule_id": regel}})
+    async with _client(app) as client:
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            str(fork["id"]), original=original, content_hash=h, regel=regel))
+        assert resp.status_code == 409 and resp.json()["detail"]["code"] == "niet_gebonden"
+        env.als(ANDERE)
+        run = await _start(client, env, regel=regel)
+        env.als(LANGFLOW)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel))
+    assert resp.status_code == 409 and resp.json()["detail"]["code"] == "niet_gebonden"
+
+
+@pytest.mark.echte_sleutels
+async def test_patch_alleen_door_de_aanmaker(env, app) -> None:
+    async with _client(app) as client:
+        run = await _start(client, env)
+        env.als(ANDERE)
+        resp = await client.patch(f"/api/v1/runs/{run}", json={"status": "mislukt"})
+        assert resp.status_code == 403
+        env.als(LANGFLOW)
+        resp = await client.patch(f"/api/v1/runs/{run}", json={"status": "mislukt"})
+    assert resp.status_code == 200 and resp.json()["status"] == "mislukt"
+
+
+async def test_een_run_die_te_lang_bezig_staat_wordt_mislukt(env, app, monkeypatch) -> None:
+    monkeypatch.setenv("SIGNAAL_RUN_MAX_MINUTEN", "60")
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 oude run")
+    oud = await _een("CREATE processing_run CONTENT $d RETURN id", {"d": {
+        "trigger": "schema", "pipeline_id": "inname_pdf", "flow_vastgelegd": True,
+        "source_map_rule_id": regel, "created_by_key": LANGFLOW.key_id,
+        "started_at": datetime.now(timezone.utc) - timedelta(hours=2)}})
+    async with _client(app) as client:
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            str(oud["id"]), original=original, content_hash=h, regel=regel))
+        assert resp.status_code == 409 and resp.json()["detail"]["code"] == "verkeerde_status"
+        # Een verse run blijft lopen.
+        vers = await _start(client, env, regel=regel)
+    gelezen = await _run(str(oud["id"]))
+    assert gelezen["status"] == "mislukt" and gelezen["error"] == VERLOPEN
+    assert (await _run(vers))["status"] == "bezig"
+
+
+# --------------------------------------------------------------------------
+# Batch en wachtrij-item
+# --------------------------------------------------------------------------
+
+
+async def test_bulkupload_krijgt_de_classificatie_van_de_batch(env, app) -> None:
+    regel = await _regel("bulkupload", "intern", location=str(env.inname))
+    pad = str(env.inname / "jaarstukken.pdf")
+    original, h = env.origineel(b"%PDF-1.7 jaarstukken uit een batch")
+    intern = await _batch(regel, [pad], "intern")
+    extern = await _batch(regel, [pad], "extern")
+    async with _client(app) as client:
+        uitkomst = {}
+        for batch in (intern, extern):
+            run = await _start(client, env, regel=regel, batch=batch)
+            # De aanroeper zegt extern; alleen de batch telt.
+            resp = await client.post("/api/v1/import", json=_verzoek(
+                run, original=original, content_hash=h, regel=regel, batch=batch,
+                location=pad, classification={"value": "extern", "basis": "batch"}))
+            assert resp.status_code == 201, resp.text
+            uitkomst[batch] = resp.json()["classification"]
+            # Een bestand buiten de batch hoort er niet bij.
+            resp = await client.post("/api/v1/import", json=_verzoek(
+                run, original=original, content_hash=h, regel=regel, batch=batch,
+                location=str(env.inname / "ander.pdf")))
+            assert resp.status_code == 409
+    assert uitkomst == {intern: "intern", extern: "extern"}
+
+
+async def test_import_toetst_aan_de_actuele_batch(env, app) -> None:
+    regel = await _regel("bulkupload", "intern", location=str(env.inname))
+    pad = str(env.inname / "notulen.pdf")
+    original, h = env.origineel(b"%PDF-1.7 notulen")
+    batch = await _batch(regel, [pad], "extern")
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel, batch=batch)
+        assert (await _run(run))["input_classification"] == "extern"
+        # De beheerder trekt de bevestiging in nadat de run begon.
+        await _q("UPDATE type::thing($id) SET classification_confirmed_by = NONE,"
+                 " classification_confirmed_at = NONE", {"id": batch})
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel, batch=batch, location=pad))
+    assert resp.status_code == 201 and resp.json()["classification"] == "intern"
+
+
+async def test_watchfolder_krijgt_het_besluit_van_het_item(env, app) -> None:
+    regel = await _regel("watchfolder", "intern", location=str(env.inname))
+    uitkomst = {}
+    async with _client(app) as client:
+        for besluit in ("intern", "extern"):
+            pad = str(env.inname / f"{besluit}-{uuid.uuid4().hex}.pdf")
+            original, h = env.origineel(f"%PDF-1.7 {pad}".encode())
+            item = await _item(pad, h, besluit)
+            run = await _start(client, env, regel=regel, item=item)
+            resp = await client.post("/api/v1/import", json=_verzoek(
+                run, original=original, content_hash=h, regel=regel, item=item, location=pad,
+                classification={"value": "extern", "basis": "beheerder"}))
+            assert resp.status_code == 201, resp.text
+            uitkomst[besluit] = resp.json()["classification"]
+            # Andere inhoud dan waarover is besloten: geweigerd.
+            ander, h2 = env.origineel(b"%PDF-1.7 andere inhoud" + uuid.uuid4().bytes)
+            resp = await client.post("/api/v1/import", json=_verzoek(
+                run, original=ander, content_hash=h2, regel=regel, item=item, location=pad))
+            assert resp.status_code == 409
+    assert uitkomst == {"intern": "intern", "extern": "extern"}
+
+
+async def test_batch_of_item_die_niet_bij_de_regel_hoort_wordt_geweigerd(env, app, tmp_path) -> None:
+    bulk = await _regel("bulkupload", "intern", location=str(env.inname))
+    andere_bulk = await _regel("bulkupload", "intern", location=str(env.inname))
+    watch = await _regel("watchfolder", "intern", location=str(env.inname))
+    api = await _regel()
+    batch = await _batch(andere_bulk, [str(env.inname / "x.pdf")])
+    _, h = env.origineel(b"%PDF-1.7 item")
+    item = await _item(str(env.inname / "item.pdf"), h)
+    elders = await _item(str(tmp_path / "elders" / "item.pdf"), h)
+    wacht = await _item(str(env.inname / "wacht.pdf"), h, besluit=None)
+    async with _client(app) as client:
+        for regel, kwargs in ((bulk, {"batch": batch}), (api, {"batch": batch}),
+                              (api, {"item": item}), (bulk, {"item": item}),
+                              (watch, {"item": elders}), (watch, {"batch": batch})):
+            body = await _start(client, env, regel=regel, status=409, **kwargs)
+            assert body["detail"]["code"] == "niet_gebonden", (regel, kwargs)
+        body = await _start(client, env, regel=watch, item=wacht, status=409)
+        assert body["detail"]["code"] == "verkeerde_status"
+        # Een import zonder batch op een regel voor bulkupload: geweigerd.
+        run = await _start(client, env, regel=bulk)
+        original, h2 = env.origineel(b"%PDF-1.7 zonder batch")
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h2, regel=bulk,
+            location=str(env.inname / "x.pdf")))
+        assert resp.status_code == 409
+        # Een batch in het verzoek die niet die van de run is: geweigerd.
+        eigen = await _batch(bulk, [str(env.inname / "x.pdf")])
+        run = await _start(client, env, regel=bulk, batch=eigen)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h2, regel=bulk, batch=batch,
+            location=str(env.inname / "x.pdf")))
+        assert resp.status_code == 409 and resp.json()["detail"]["code"] == "niet_gebonden"
+
+
+async def test_pijplijn_koppelt_een_run_niet_aan_een_ander_item(env, app) -> None:
+    regel = await _regel("watchfolder", "intern", location=str(env.inname))
+    _, h = env.origineel(b"%PDF-1.7 twee items")
+    eerste = await _item(str(env.inname / f"{uuid.uuid4().hex}.pdf"), h)
+    tweede = await _item(str(env.inname / f"{uuid.uuid4().hex}.pdf"), h)
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel, item=eerste)
+        rev = (await _een("SELECT VALUE rev FROM type::thing($id)", {"id": tweede}))
+        resp = await client.patch(f"/api/v1/intake/items/{tweede}",
+                                  json={"status": "verwerkt", "rev": rev, "run_id": run})
+        assert resp.status_code == 409 and resp.json()["detail"]["code"] == "niet_gebonden"
+        rev = (await _een("SELECT VALUE rev FROM type::thing($id)", {"id": eerste}))
+        resp = await client.patch(f"/api/v1/intake/items/{eerste}",
+                                  json={"status": "verwerkt", "rev": rev, "run_id": run})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "verwerkt" and resp.json()["run"] == run

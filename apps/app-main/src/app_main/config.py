@@ -276,3 +276,23 @@ def get_inname_urls() -> list[str]:
     """Hosts die als URL-locatie mogen, ook als ze lokaal of intern zijn
     (``SIGNAAL_INNAME_URLS``, gescheiden door ``;``). Leeg: geen uitzonderingen."""
     return _paden_env("SIGNAAL_INNAME_URLS", ())
+
+
+# ---------------------------------------------------------------------------
+# Signaalsysteem: importeindpunt en runs (F2-14, ADR 0010, 0003)
+# ---------------------------------------------------------------------------
+
+
+def get_bronarchief() -> str:
+    """De map van het bronvolume ``bronarchief`` (``SIGNAAL_BRONARCHIEF``).
+
+    De import leest daar het origineel van een bronversie, alleen lezend, om de
+    inhoudshash en de markering van het gegenereerde blok te controleren.
+    """
+    return (os.environ.get("SIGNAAL_BRONARCHIEF") or "/bronarchief").strip()
+
+
+def get_run_max_minuten() -> int:
+    """Na zoveel minuten ``bezig`` sluit de fork een run als ``mislukt``
+    (``SIGNAAL_RUN_MAX_MINUTEN``, standaard 360)."""
+    return max(1, _int_env("SIGNAAL_RUN_MAX_MINUTEN", 360))

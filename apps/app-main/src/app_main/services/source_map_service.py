@@ -122,6 +122,11 @@ def _ligt_in(kind: str, ouder: str) -> bool:
     return kind == ouder or kind.startswith(ouder if ouder.endswith("/") else ouder + "/")
 
 
+def ligt_onder(kind: str, ouder: str) -> bool:
+    """Ligt het canonieke pad ``kind`` in de map ``ouder`` (ook canoniek)? (F2-14)"""
+    return _ligt_in(kind, ouder)
+
+
 def _in_een_van(kind: str, mappen: Iterable[str]) -> bool:
     for pad in mappen:
         if weigerreden(pad.strip()) is None and _ligt_in(kind, canoniek_pad(pad)):

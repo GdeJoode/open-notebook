@@ -5,7 +5,8 @@
   beheerder. Aanmaken, wijzigen en bevestigen alleen door een ``beheerder``.
 * **Wachtrij-item**: Langflow (``pijplijn``) meldt documenten uit een
   watchfolder, losse uploads en bronnen zonder regel aan, haalt besloten items
-  op en zet een item op ``verwerkt``. Een watchfolder-item heeft geen
+  op en zet een item op ``verwerkt``, alleen met een run die aan dat item
+  gebonden is (F2-14). Een watchfolder-item heeft geen
   standaardclassificatie en wacht; een upload krijgt het voorstel van de
   poortwachter. Tot het besluit van de beheerder geldt ``intern`` (FO 9).
   Het besluit (route en classificatie) neemt alleen een ``beheerder``, met
@@ -26,9 +27,11 @@ from surrealdb_service.repositories.intake import (
     IntakeBatchRepository,
     IntakeItemRepository,
 )
+from surrealdb_service.repositories.processing_run import ProcessingRunRepository
 from surrealdb_service.repositories.source_map import SourceMapRuleRepository
 
 from app_main.exceptions import InvalidInputError, NotFoundError
+from app_main.services.inname_binding import BindingError
 from app_main.services.source_map_service import (
     Locatiecontrole,
     beheerder,
@@ -56,11 +59,13 @@ class IntakeService:
         item_repo: Optional[IntakeItemRepository] = None,
         rule_repo: Optional[SourceMapRuleRepository] = None,
         locatiecontrole: Optional[Locatiecontrole] = None,
+        run_repo: Optional[ProcessingRunRepository] = None,
     ) -> None:
         self.batch_repo = batch_repo or IntakeBatchRepository()
         self.item_repo = item_repo or IntakeItemRepository()
         self.rule_repo = rule_repo or SourceMapRuleRepository()
         self.locatiecontrole = locatiecontrole or Locatiecontrole()
+        self.run_repo = run_repo or ProcessingRunRepository()
 
     # -- Batches ------------------------------------------------------------
 
@@ -238,5 +243,9 @@ class IntakeService:
             run = eigen_record_id(run_id, "processing_run")
             if run is None:
                 raise InvalidInputError("Geen id van een verwerkingsrun")
+            # Alleen een run die aan dit item gebonden is (F2-14).
+            gelezen = await self.run_repo.get(str(run))
+            if gelezen is None or gelezen.intake_item != str(huidig.id):
+                raise BindingError("run hoort niet bij het item")
             data["run"] = run
         return await self.item_repo.update(str(huidig.id), rev=huidig.rev, data=data, door=door)

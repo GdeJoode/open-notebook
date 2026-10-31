@@ -667,6 +667,9 @@ class RunCreateRequest(BaseModel):
     pipeline_version: PipelineVersionModel = Field(default_factory=PipelineVersionModel)
     source_map_rule_id: Optional[str] = None
     label_schema: Optional[Dict[str, Any]] = None
+    #: Binding aan een batch (bulkupload) of wachtrij-item (F2-14).
+    intake_batch_id: Optional[str] = None
+    intake_item_id: Optional[str] = None
 
 
 class RunLogEntryModel(BaseModel):
@@ -710,6 +713,8 @@ class RunResponse(BaseModel):
     source_map_rule_id: Optional[str] = None
     source_map_rule_rev: Optional[int] = None
     actor: Optional[str] = None
+    intake_batch: Optional[str] = None
+    intake_item: Optional[str] = None
 
 
 class SourceResponse(BaseModel):
@@ -1134,3 +1139,105 @@ class IntakeItemResponse(BaseModel):
     run: Optional[str] = None
     rev: int
     modified_at: Optional[datetime] = None
+
+
+# ---------------------------------------------------------------------------
+# Importeindpunt (F2-14, ADR 0010, plan §5.1)
+# ---------------------------------------------------------------------------
+
+
+class ImportGatekeeper(BaseModel):
+    """De beslissing van de poortwachter: kenmerken, geen inhoud."""
+
+    decision: Optional[Literal["intern", "extern"]] = None
+    internal_markers: List[str] = Field(default_factory=list)
+    method: Optional[str] = None
+    text_source: Optional[str] = None
+    probability: Optional[float] = None
+    model: Optional[str] = None
+
+
+class ImportClassification(BaseModel):
+    """Wat de aanroeper opgeeft. Die kan alleen strenger maken: de
+    classificatie komt uit de regel, de batch of het besluit over het item."""
+
+    value: Optional[Literal["intern", "extern"]] = None
+    basis: Optional[str] = None
+    gatekeeper: Optional[ImportGatekeeper] = None
+
+
+class ImportSource(BaseModel):
+    external_id: str = Field(..., min_length=1)
+    type: str = Field(..., min_length=1)
+    location: str = Field(..., min_length=1)
+    title: Optional[str] = None
+
+
+class ImportSourceVersion(BaseModel):
+    #: SHA-256 van de ruwe inhoud (het origineel in het bronarchief).
+    content_hash: str = Field(..., pattern=r"^sha256:[0-9a-f]{64}$")
+    fetched_at: Optional[datetime] = None
+    #: Het origineel, relatief in het bronarchief.
+    original: str = Field(..., min_length=1)
+    feed_item_id: Optional[str] = None
+
+
+class ImportExtraction(BaseModel):
+    extractor: str = Field(..., min_length=1)
+    version: Optional[str] = None
+    options: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ImportStructure(BaseModel):
+    format: str = "docling_document"
+    content: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ImportPosition(BaseModel):
+    page: int = Field(..., ge=0)
+    bbox: List[float] = Field(..., min_length=4, max_length=4)
+
+
+class ImportChunk(BaseModel):
+    seq: int = Field(..., ge=0)
+    text: str
+    section_path: List[str] = Field(default_factory=list)
+    page: int = Field(0, ge=0)
+    printed_page: Optional[str] = None
+    element_type: str = "paragraph"
+    positions: List[ImportPosition] = Field(default_factory=list)
+    doc_ref: Optional[str] = None
+    labels: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class ImportRequest(BaseModel):
+    """``POST /api/v1/import`` (plan §5.1)."""
+
+    run_id: str = Field(..., min_length=1)
+    source_map_rule_id: Optional[str] = None
+    batch_id: Optional[str] = None
+    #: Het wachtrij-item (watchfolder, losse upload); F2-14.
+    intake_item_id: Optional[str] = None
+    source: ImportSource
+    source_version: ImportSourceVersion
+    classification: ImportClassification = Field(default_factory=ImportClassification)
+    extraction: ImportExtraction
+    structure: Optional[ImportStructure] = None
+    chunks: List[ImportChunk] = Field(default_factory=list)
+
+    @field_validator("chunks")
+    @classmethod
+    def unieke_volgorde(cls, chunks: List[ImportChunk]) -> List[ImportChunk]:
+        if len({c.seq for c in chunks}) != len(chunks):
+            raise ValueError("seq moet uniek zijn")
+        return chunks
+
+
+class ImportResponse(BaseModel):
+    status: Literal["nieuw", "ongewijzigd"]
+    source_id: str
+    source_version_id: str
+    version_no: int
+    run_id: str
+    classification: Literal["intern", "extern"]
+    chunk_ids: List[str] = Field(default_factory=list)

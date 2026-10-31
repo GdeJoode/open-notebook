@@ -317,6 +317,7 @@ def create_app() -> FastAPI:
         episode_profiles,
         exports,
         health,
+        imports,
         insights,
         intake,
         knowledge_graph,
@@ -376,6 +377,7 @@ def create_app() -> FastAPI:
         classification.router, prefix="/api", tags=["classification"]
     )
     application.include_router(runs.router, prefix="/api", tags=["runs"])
+    application.include_router(imports.router, prefix="/api", tags=["import"])
     application.include_router(source_map.router, prefix="/api", tags=["source-map"])
     application.include_router(intake.router, prefix="/api", tags=["intake"])
     application.include_router(
