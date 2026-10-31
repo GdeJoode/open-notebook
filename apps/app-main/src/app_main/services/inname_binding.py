@@ -21,8 +21,10 @@ run begon.
 
 from __future__ import annotations
 
+import posixpath
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import unquote, urlsplit
 
 from shared.models.source_map import (
     OPENBARE_ROUTES,
@@ -70,6 +72,44 @@ def record_tekst(waarde: Optional[str], tabel: str) -> Optional[str]:
         return None
     rid = eigen_record_id(waarde, tabel)
     return str(rid) if rid is not None else None
+
+
+_STANDAARDPOORT = {"http": 80, "https": 443}
+
+
+def _url_delen(url: str) -> Optional[tuple[str, str, int, str]]:
+    """Schema, host, poort en genormaliseerd pad; ``None`` als het geen URL is."""
+    try:
+        delen = urlsplit(url.strip())
+        schema = delen.scheme.lower()
+        host = (delen.hostname or "").lower().rstrip(".")
+        poort = delen.port or _STANDAARDPOORT.get(schema)
+    except ValueError:
+        return None
+    if not schema or not host or "://" not in url:
+        return None
+    pad = posixpath.normpath("/" + unquote(delen.path or "/").lstrip("/"))
+    return schema, host, poort, pad.rstrip("/")
+
+
+def locatie_hoort_bij_regel(locatie: str, regel_locatie: str) -> bool:
+    """Valt de locatie van de bron onder de locatie van de regel? (F2-14, B1)
+
+    URL: hetzelfde schema, dezelfde host en poort, en een padprefix op een
+    segmentgrens (``/api`` dekt ``/api/x``, niet ``/apix``). Pad: onder de map
+    van de regel (:func:`ligt_onder`). Een URL onder een padregel, of andersom,
+    hoort er niet bij.
+    """
+    regel_url = _url_delen(regel_locatie)
+    bron_url = _url_delen(locatie)
+    if regel_url is not None or bron_url is not None:
+        if regel_url is None or bron_url is None or regel_url[:3] != bron_url[:3]:
+            return False
+        prefix, pad = regel_url[3], bron_url[3]
+        return not prefix or pad == prefix or pad.startswith(prefix + "/")
+    if weigerreden(locatie) is not None or weigerreden(regel_locatie) is not None:
+        return False
+    return ligt_onder(canoniek_pad(locatie), canoniek_pad(regel_locatie))
 
 
 class InnameBinding:

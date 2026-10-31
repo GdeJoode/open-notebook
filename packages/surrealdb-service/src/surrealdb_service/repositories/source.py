@@ -244,14 +244,19 @@ class SourceRepository(BaseRepository[Source]):
         versie: Any,
         versie_data: Dict[str, Any],
         fragmenten: List[Dict[str, Any]],
+        knopen: List[Dict[str, Any]],
+        relaties: Dict[str, List[Dict[str, Any]]],
     ) -> None:
-        """Bron (als ``bron_data`` gezet is), bronversie en fragmenten in één transactie.
+        """Bron (als ``bron_data`` gezet is), bronversie, fragmenten en structuur
+        (``doc_node`` met ``parent_of``, ``next_node`` en ``derived_from``) in
+        één transactie.
 
-        ``bron``, ``versie`` en de ``id`` van elk fragment zijn record-id's die
-        de aanroeper vooraf kiest, zodat een herhaald verzoek dezelfde id's
-        terugvindt. Het versienummer en de voorganger volgen uit de database;
-        de bron wijst daarna naar de nieuwe versie. Faalt één stap (een unieke
-        index, een ``ASSERT`` op classificatie of run), dan verandert niets.
+        ``bron``, ``versie`` en de ``id`` van elk fragment en elke knoop zijn
+        record-id's die de aanroeper vooraf kiest, zodat een herhaald verzoek
+        dezelfde id's terugvindt. Het versienummer en de voorganger volgen uit
+        de database; de bron wijst daarna naar de nieuwe versie. Faalt één stap
+        (een unieke index, een ``ASSERT`` op classificatie of run), dan
+        verandert niets.
         """
         delen = ["BEGIN TRANSACTION;"]
         if bron_data is not None:
@@ -265,52 +270,85 @@ class SourceRepository(BaseRepository[Source]):
         )
         delen.append("CREATE $versie CONTENT $data RETURN NONE;")
         delen.append("UPDATE $bron SET current_version = $versie RETURN NONE;")
-        if fragmenten:
-            delen.append("INSERT INTO chunk $fragmenten RETURN NONE;")
-        delen.append("COMMIT TRANSACTION;")
         params: Dict[str, Any] = {
             "bron": bron, "versie": versie, "versie_data": versie_data,
-            "fragmenten": fragmenten,
         }
+        if fragmenten:
+            delen.append("INSERT INTO chunk $fragmenten RETURN NONE;")
+            params["fragmenten"] = fragmenten
+        if knopen:
+            delen.append("INSERT INTO doc_node $knopen RETURN NONE;")
+            params["knopen"] = knopen
+        for tabel in ("parent_of", "next_node", "derived_from"):
+            if relaties.get(tabel):
+                delen.append(f"INSERT RELATION INTO {tabel} $rel_{tabel} RETURN NONE;")
+                params[f"rel_{tabel}"] = relaties[tabel]
+        delen.append("COMMIT TRANSACTION;")
         if bron_data is not None:
             params["bron_data"] = bron_data
         await execute_transaction("\n".join(delen), params, self.config)
 
     async def fragmenten_van_run(self, version_id: str, run_id: str) -> List[Dict[str, Any]]:
-        """Id, volgorde en tekst van de fragmenten van een versie en run, op volgorde."""
+        """De fragmenten van een versie en run, op volgorde (vergelijken bij herhaling)."""
         rows = await execute_query(
-            "SELECT id, order, text FROM chunk WHERE source_version = $v AND run = $r"
-            " ORDER BY order ASC",
+            "SELECT id, order, text, section_path, element_type, physical_page, classification"
+            " FROM chunk WHERE source_version = $v AND run = $r ORDER BY order ASC",
             {"v": ensure_record_id(version_id), "r": ensure_record_id(run_id)},
             self.config,
         )
         return rows or []
 
-    async def heeft_structuur(self, source_id: str, run_id: str) -> bool:
-        """Heeft de run al ``doc_node``-records voor deze bron?"""
+    async def structuur_van_run(self, version_id: str, run_id: str) -> List[str]:
+        """De ``self_ref`` van de ``doc_node``-records van een versie en run."""
         rows = await execute_query(
-            "SELECT VALUE id FROM doc_node WHERE source = $b AND run = $r LIMIT 1",
-            {"b": ensure_record_id(source_id), "r": ensure_record_id(run_id)},
+            "SELECT VALUE self_ref FROM doc_node WHERE source_version = $v AND run = $r",
+            {"v": ensure_record_id(version_id), "r": ensure_record_id(run_id)},
             self.config,
         )
-        return bool(rows)
+        return sorted(rows or [])
 
-    async def zet_intern(self, source_id: str) -> None:
-        """Maak een externe bron intern (strengste wint, ADR 0001); de database
-        zet versies, fragmenten en alles wat erbij hoort mee (migratie 90)."""
-        await execute_query(
-            "UPDATE $b SET classification = 'intern' WHERE classification = 'extern' RETURN NONE",
-            {"b": ensure_record_id(source_id)},
+    async def inhoud_intern_bekend(self, content_hash: str) -> bool:
+        """Is deze ruwe inhoud (64 hex) al intern bekend: een interne bronversie,
+        of een wachtrij-item dat intern is of nog geen besluit heeft? (F2-14)"""
+        rows = await execute_query(
+            "RETURN array::len((SELECT VALUE id FROM source_version"
+            " WHERE content_hash = $h AND classification = 'intern' LIMIT 1))"
+            " + array::len((SELECT VALUE id FROM intake_item WHERE content_hash = $item"
+            " AND (decision = NONE OR decision.classification != 'extern') LIMIT 1))",
+            {"h": content_hash, "item": f"sha256:{content_hash}"},
             self.config,
         )
+        waarde = rows[0] if isinstance(rows, list) and rows else rows
+        return bool(waarde)
 
-    async def zet_huidige_versie(self, source_id: str, version_id: str) -> None:
-        """Laat de bron naar een bestaande versie wijzen (B26, ADR 0003)."""
-        await execute_query(
-            "UPDATE $b SET current_version = $v RETURN NONE",
-            {"b": ensure_record_id(source_id), "v": ensure_record_id(version_id)},
-            self.config,
-        )
+    async def bekende_versie(
+        self,
+        source_id: str,
+        version_id: str,
+        *,
+        maak_intern: bool,
+        terugzetten: bool,
+        run_id: str,
+        regels: List[Dict[str, Any]],
+    ) -> None:
+        """Bekende inhoud in één transactie: de bron intern maken (strengste
+        wint, ADR 0001), ``current_version`` terugzetten (B26) en de regels in
+        het runlogboek."""
+        delen = ["BEGIN TRANSACTION;"]
+        if maak_intern:
+            delen.append("UPDATE $b SET classification = 'intern'"
+                         " WHERE classification = 'extern' RETURN NONE;")
+        if terugzetten:
+            delen.append("UPDATE $b SET current_version = $v RETURN NONE;")
+        if regels:
+            delen.append("UPDATE $r SET log = array::concat(log, $regels) RETURN NONE;")
+        delen.append("COMMIT TRANSACTION;")
+        if len(delen) == 2:
+            return
+        await execute_transaction("\n".join(delen), {
+            "b": ensure_record_id(source_id), "v": ensure_record_id(version_id),
+            "r": ensure_record_id(run_id), "regels": regels,
+        }, self.config)
 
     async def add_to_notebook(self, source_id: str, notebook_id: str) -> bool:
         """

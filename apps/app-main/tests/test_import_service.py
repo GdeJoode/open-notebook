@@ -22,7 +22,9 @@ Stopcondities uit het plan van aanpak:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
@@ -97,8 +99,10 @@ async def env(live_surrealdb, monkeypatch, app, git_flows, tmp_path):
         return ProcessingRunService(flow_register=git_flows.register)
 
     app.dependency_overrides[get_processing_run_service] = _runs
+    omgeving.forkarchief = tmp_path / "forkarchief"
     app.dependency_overrides[get_import_service] = lambda: ImportService(
-        run_service=_runs(), locatiecontrole=controle, bronarchief=str(archief))
+        run_service=_runs(), locatiecontrole=controle, bronarchief=str(archief),
+        fork_archief=str(omgeving.forkarchief))
     app.dependency_overrides[get_intake_service] = lambda: IntakeService(locatiecontrole=controle)
     original = conn._pool
     conn._pool = conn.ConnectionPool(config=live_surrealdb)
@@ -141,9 +145,11 @@ async def _regel(route_type: str = "api", classification: str = "extern", *,
     return str((await _een("CREATE source_map_rule CONTENT $d RETURN id", {"d": data}))["id"])
 
 
-async def _batch(regel: str, files: list[str], classification: str = "extern") -> str:
+async def _batch(regel: str, files: list[str], classification: str = "extern",
+                 hashes: list[str] | None = None) -> str:
     data = {"route": "inname_pdf", "files": files, "classification": classification,
-            "created_by": "Testpersoon", "source_map_rule": conn.ensure_record_id(regel)}
+            "created_by": "Testpersoon", "source_map_rule": conn.ensure_record_id(regel),
+            "file_hashes": [{"path": f, "content_hash": h} for f, h in zip(files, hashes or [])]}
     if classification == "extern":
         data.update(classification_confirmed_by="Testpersoon",
                     classification_confirmed_at=datetime.now(timezone.utc))
@@ -174,13 +180,17 @@ async def _start(client, env, *, regel=None, batch=None, item=None, flow_hash=No
     return resp.json().get("run_id") if status == 201 else resp.json()
 
 
+EXTERN = {"value": "extern", "basis": "bronkaartregel",
+          "gatekeeper": {"decision": "extern", "internal_markers": [], "method": "regel"}}
+
+
 def _verzoek(run_id, *, original, content_hash, regel=None, batch=None, item=None,
              external_id=None, location="https://example.org/api/stuk-1", teksten=None,
-             title="Openbaar stuk", **extra) -> dict:
+             title="Openbaar stuk", classification=EXTERN, **extra) -> dict:
     teksten = teksten or ["Inleiding van het openbare stuk.", "Tweede alinea."]
     return {
         "run_id": run_id, "source_map_rule_id": regel, "batch_id": batch,
-        "intake_item_id": item,
+        "intake_item_id": item, "classification": classification,
         "source": {"external_id": external_id or f"stuk-{uuid.uuid4().hex}", "type": "pdf",
                    "location": location, "title": title},
         "source_version": {"content_hash": content_hash, "original": original,
@@ -352,11 +362,11 @@ async def test_strengere_import_maakt_externe_bron_intern(env, app) -> None:
     original, h = env.origineel(b"%PDF-1.7 bekend en toch intern")
     extern_id = f"stuk-{uuid.uuid4().hex}"
     async with _client(app) as client:
-        for waarde in (None, "intern"):
+        for klasse in (EXTERN, {"value": "intern"}):
             run = await _start(client, env, regel=regel)
             resp = await client.post("/api/v1/import", json=_verzoek(
                 run, original=original, content_hash=h, regel=regel, external_id=extern_id,
-                classification={"value": waarde}))
+                classification=klasse))
             assert resp.status_code in (200, 201)
     assert resp.json()["status"] == "ongewijzigd" and resp.json()["classification"] == "intern"
     waarden = await _q("SELECT VALUE classification FROM chunk WHERE source = type::thing($b)",
@@ -536,33 +546,32 @@ async def test_een_run_die_te_lang_bezig_staat_wordt_mislukt(env, app, monkeypat
 
 async def test_bulkupload_krijgt_de_classificatie_van_de_batch(env, app) -> None:
     regel = await _regel("bulkupload", "intern", location=str(env.inname))
-    pad = str(env.inname / "jaarstukken.pdf")
-    original, h = env.origineel(b"%PDF-1.7 jaarstukken uit een batch")
-    intern = await _batch(regel, [pad], "intern")
-    extern = await _batch(regel, [pad], "extern")
+    uitkomst = {}
     async with _client(app) as client:
-        uitkomst = {}
-        for batch in (intern, extern):
+        for klasse in ("intern", "extern"):
+            pad = str(env.inname / f"jaarstukken-{klasse}.pdf")
+            original, h = env.origineel(f"%PDF-1.7 jaarstukken {klasse}".encode())
+            batch = await _batch(regel, [pad], klasse, [h])
             run = await _start(client, env, regel=regel, batch=batch)
             # De aanroeper zegt extern; alleen de batch telt.
             resp = await client.post("/api/v1/import", json=_verzoek(
                 run, original=original, content_hash=h, regel=regel, batch=batch,
-                location=pad, classification={"value": "extern", "basis": "batch"}))
+                location=pad))
             assert resp.status_code == 201, resp.text
-            uitkomst[batch] = resp.json()["classification"]
+            uitkomst[klasse] = resp.json()["classification"]
             # Een bestand buiten de batch hoort er niet bij.
             resp = await client.post("/api/v1/import", json=_verzoek(
                 run, original=original, content_hash=h, regel=regel, batch=batch,
                 location=str(env.inname / "ander.pdf")))
             assert resp.status_code == 409
-    assert uitkomst == {intern: "intern", extern: "extern"}
+    assert uitkomst == {"intern": "intern", "extern": "extern"}
 
 
 async def test_import_toetst_aan_de_actuele_batch(env, app) -> None:
     regel = await _regel("bulkupload", "intern", location=str(env.inname))
     pad = str(env.inname / "notulen.pdf")
     original, h = env.origineel(b"%PDF-1.7 notulen")
-    batch = await _batch(regel, [pad], "extern")
+    batch = await _batch(regel, [pad], "extern", [h])
     async with _client(app) as client:
         run = await _start(client, env, regel=regel, batch=batch)
         assert (await _run(run))["input_classification"] == "extern"
@@ -584,8 +593,7 @@ async def test_watchfolder_krijgt_het_besluit_van_het_item(env, app) -> None:
             item = await _item(pad, h, besluit)
             run = await _start(client, env, regel=regel, item=item)
             resp = await client.post("/api/v1/import", json=_verzoek(
-                run, original=original, content_hash=h, regel=regel, item=item, location=pad,
-                classification={"value": "extern", "basis": "beheerder"}))
+                run, original=original, content_hash=h, regel=regel, item=item, location=pad))
             assert resp.status_code == 201, resp.text
             uitkomst[besluit] = resp.json()["classification"]
             # Andere inhoud dan waarover is besloten: geweigerd.
@@ -646,3 +654,235 @@ async def test_pijplijn_koppelt_een_run_niet_aan_een_ander_item(env, app) -> Non
                                   json={"status": "verwerkt", "rev": rev, "run_id": run})
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "verwerkt" and resp.json()["run"] == run
+
+
+# --------------------------------------------------------------------------
+# Review F2-14
+# --------------------------------------------------------------------------
+
+BEHEERDER = agent_auth.AgentKeyContext(
+    key_id="agent_keys:beheer", agent_id="mens", permission=Right.BEHEERDER, person="Testpersoon")
+
+
+@pytest.mark.parametrize("locatie", [
+    "https://ander-domein.example.net/geheim", "https://example.org/apix/1",
+    "http://example.org/api/1", "https://example.org/api/../geheim",
+    "https://example.org:8443/api/1", "INNAME"])
+async def test_bron_buiten_de_locatie_van_de_regel_wordt_geweigerd(env, app, locatie) -> None:
+    regel = await _regel()  # https://example.org/api
+    if locatie == "INNAME":
+        locatie = str(env.inname / "watch" / "intern.pdf")
+    original, h = env.origineel(b"%PDF-1.7 elders " + uuid.uuid4().hex.encode())
+    extern_id = f"stuk-{uuid.uuid4().hex}"
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel, location=locatie,
+            external_id=extern_id))
+    assert resp.status_code == 409 and resp.json()["detail"]["code"] == "niet_gebonden"
+    assert await _q("SELECT id FROM source WHERE external_id = $e", {"e": extern_id}) == []
+
+
+@pytest.mark.parametrize("klasse", [
+    None, {}, {"value": "extern"},
+    {"value": "extern", "gatekeeper": {"decision": "extern", "internal_markers": ["rubricering"]}},
+    {"value": "extern", "gatekeeper": {"internal_markers": []}},
+    {"gatekeeper": {"decision": "extern"}},
+])
+async def test_extern_alleen_met_waarde_en_poortwachter(env, app, klasse) -> None:
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 zonder poortwachter " + uuid.uuid4().hex.encode())
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        verzoek = _verzoek(run, original=original, content_hash=h, regel=regel,
+                           classification=klasse)
+        if klasse is None:
+            verzoek.pop("classification")
+        resp = await client.post("/api/v1/import", json=verzoek)
+    assert resp.status_code == 201 and resp.json()["classification"] == "intern"
+
+
+async def test_externe_batch_vraagt_het_bestand_van_de_batch(env, app) -> None:
+    regel = await _regel("bulkupload", "intern", location=str(env.inname))
+    pad = str(env.inname / f"{uuid.uuid4().hex}.pdf")
+    _, eigen = env.origineel(b"%PDF-1.7 bestand van de batch " + uuid.uuid4().hex.encode())
+    ander, h = env.origineel(b"%PDF-1.7 ander intern document " + uuid.uuid4().hex.encode())
+    async with _client(app) as client:
+        for hashes in ([eigen], None):
+            batch = await _batch(regel, [pad], "extern", hashes)
+            run = await _start(client, env, regel=regel, batch=batch)
+            resp = await client.post("/api/v1/import", json=_verzoek(
+                run, original=ander, content_hash=h, regel=regel, batch=batch, location=pad))
+            assert resp.status_code == 409 and resp.json()["detail"]["code"] == "niet_gebonden"
+
+
+async def test_batch_legt_bestandshashes_vast(env, app) -> None:
+    leesbaar = env.inname / f"{uuid.uuid4().hex}.pdf"
+    leesbaar.write_bytes(b"%PDF-1.7 batchbestand")
+    ontbreekt = str(env.inname / "ontbreekt.pdf")
+    env.als(BEHEERDER)
+    async with _client(app) as client:
+        resp = await client.post("/api/v1/intake/batches", json={
+            "route": "inname_pdf", "files": [str(leesbaar), ontbreekt],
+            "classification": "extern", "confirm": True})
+        assert resp.status_code == 422
+        resp = await client.post("/api/v1/intake/batches", json={
+            "route": "inname_pdf", "files": [str(leesbaar)], "classification": "extern",
+            "confirm": True})
+    assert resp.status_code == 201, resp.text
+    verwacht = "sha256:" + hashlib.sha256(b"%PDF-1.7 batchbestand").hexdigest()
+    assert resp.json()["file_hashes"] == [{"path": str(leesbaar), "content_hash": verwacht}]
+
+
+async def test_extern_geweigerd_als_de_inhoud_intern_bekend_is(env, app) -> None:
+    intern = await _regel(bevestigd=False)
+    extern = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 gedeeld " + uuid.uuid4().hex.encode())
+    wacht, hw = env.origineel(b"%PDF-1.7 in de wachtrij " + uuid.uuid4().hex.encode())
+    await _item(str(env.inname / f"{uuid.uuid4().hex}.pdf"), hw, besluit=None)
+    async with _client(app) as client:
+        run = await _start(client, env, regel=intern)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=intern))
+        assert resp.status_code == 201 and resp.json()["classification"] == "intern"
+        for o, hh in ((original, h), (wacht, hw)):
+            run = await _start(client, env, regel=extern)
+            resp = await client.post("/api/v1/import", json=_verzoek(
+                run, original=o, content_hash=hh, regel=extern))
+            assert resp.status_code == 409
+            assert resp.json()["detail"]["code"] == "inhoud_intern_bekend"
+
+
+@pytest.mark.parametrize("variant", [
+    "<!--signaalsysteem:begin-->", "<!-- SIGNAALSYSTEEM:BEGIN -->",
+    "&lt;!-- signaalsysteem:begin --&gt;", "<!--  signaalsysteem :  end  -->",
+    "＜!-- signaalsysteem:begin --＞", "split"])
+async def test_markering_in_varianten(env, app, variant) -> None:
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 schoon " + uuid.uuid4().hex.encode())
+    teksten = (["tekst <!-- signaal", "systeem:begin --> rest"] if variant == "split"
+               else ["a", f"b {variant} c"])
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel, teksten=teksten))
+    assert resp.status_code == 422 and resp.json()["detail"]["code"] == "afgeleide_tekst"
+
+
+@pytest.mark.parametrize("veld", ["labels", "doc_ref", "element_type", "external_id", "location"])
+async def test_markering_in_elk_tekstveld(env, app, veld) -> None:
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 schoon " + uuid.uuid4().hex.encode())
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        verzoek = _verzoek(run, original=original, content_hash=h, regel=regel)
+        if veld == "labels":
+            verzoek["chunks"][0]["labels"] = [{"term": MARKERING}]
+        elif veld in ("doc_ref", "element_type"):
+            verzoek["chunks"][0][veld] = MARKERING
+        elif veld == "external_id":
+            verzoek["source"]["external_id"] = MARKERING
+        else:
+            verzoek["source"]["location"] = "https://example.org/api/" + MARKERING
+        resp = await client.post("/api/v1/import", json=verzoek)
+    assert resp.status_code == 422 and resp.json()["detail"]["code"] == "afgeleide_tekst"
+
+
+async def test_markering_in_ruwe_inhoud_als_utf16(env, app) -> None:
+    regel = await _regel()
+    inhoud = ("Notitie " + MARKERING + uuid.uuid4().hex).encode("utf-16")
+    original, h = env.origineel(inhoud)
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel))
+    assert resp.status_code == 422 and resp.json()["detail"]["code"] == "afgeleide_tekst"
+
+
+async def test_origineel_wordt_bewaard_in_het_archief_van_de_fork(env, app) -> None:
+    regel = await _regel()
+    inhoud = b"%PDF-1.7 origineel " + uuid.uuid4().hex.encode()
+    original, h = env.origineel(inhoud)
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel))
+    assert resp.status_code == 201
+    # Langflow vervangt het origineel daarna.
+    (env.archief / original.removeprefix("bronarchief/")).write_bytes(b"vervangen")
+    hexhash = h.removeprefix("sha256:")
+    versie = await _een("SELECT original FROM type::thing($id)",
+                        {"id": resp.json()["source_version_id"]})
+    assert versie["original"] == f"forkarchief/{hexhash}"
+    kopie = env.forkarchief / hexhash
+    assert kopie.read_bytes() == inhoud and not os.access(kopie, os.W_OK)
+    assert [p.name for p in env.forkarchief.iterdir()] == [hexhash]
+
+
+@pytest.mark.echte_sleutels
+async def test_beheerder_importeert_niet(env, app) -> None:
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 beheerder " + uuid.uuid4().hex.encode())
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        env.als(BEHEERDER)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=original, content_hash=h, regel=regel))
+    assert resp.status_code == 403
+
+
+async def test_tweede_versie_in_dezelfde_run_krijgt_eigen_structuur(env, app) -> None:
+    regel = await _regel()
+    extern_id = f"stuk-{uuid.uuid4().hex}"
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        versies = []
+        for _ in range(2):
+            original, h = env.origineel(b"%PDF-1.7 versie " + uuid.uuid4().hex.encode())
+            resp = await client.post("/api/v1/import", json=_verzoek(
+                run, original=original, content_hash=h, regel=regel, external_id=extern_id))
+            assert resp.status_code == 201, resp.text
+            versies.append(resp.json()["source_version_id"])
+    for versie in versies:
+        [rij] = await _q("SELECT count() AS n FROM doc_node WHERE source_version = $v GROUP ALL",
+                         {"v": conn.ensure_record_id(versie)})
+        assert rij["n"] >= 2
+
+
+async def test_herhaling_met_andere_structuur_of_classificatie(env, app) -> None:
+    regel = await _regel()
+    original, h = env.origineel(b"%PDF-1.7 herhaling " + uuid.uuid4().hex.encode())
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        verzoek = _verzoek(run, original=original, content_hash=h, regel=regel)
+        assert (await client.post("/api/v1/import", json=verzoek)).status_code == 201
+        anders = _verzoek(run, original=original, content_hash=h, regel=regel,
+                          external_id=verzoek["source"]["external_id"])
+        anders["chunks"][0]["section_path"] = ["Ander hoofdstuk"]
+        resp = await client.post("/api/v1/import", json=anders)
+        assert resp.status_code == 409 and resp.json()["detail"]["code"] == "ander_verzoek"
+        strenger = _verzoek(run, original=original, content_hash=h, regel=regel,
+                            external_id=verzoek["source"]["external_id"],
+                            classification={"value": "intern"})
+        resp = await client.post("/api/v1/import", json=strenger)
+    # Strenger bij herhaling: de bron wordt intern, daarna is het hetzelfde verzoek.
+    assert resp.status_code == 200 and resp.json()["classification"] == "intern"
+
+
+async def test_gelijktijdige_nieuwe_versies(env, app) -> None:
+    regel = await _regel()
+    extern_id = f"stuk-{uuid.uuid4().hex}"
+    o0, h0 = env.origineel(b"%PDF-1.7 v0 " + uuid.uuid4().hex.encode())
+    async with _client(app) as client:
+        run = await _start(client, env, regel=regel)
+        resp = await client.post("/api/v1/import", json=_verzoek(
+            run, original=o0, content_hash=h0, regel=regel, external_id=extern_id))
+        assert resp.status_code == 201
+        versies = [env.origineel(b"%PDF-1.7 v " + uuid.uuid4().hex.encode()) for _ in range(4)]
+        antwoorden = await asyncio.gather(*[client.post("/api/v1/import", json=_verzoek(
+            run, original=o, content_hash=h, regel=regel, external_id=extern_id))
+            for o, h in versies])
+    codes = [r.status_code for r in antwoorden]
+    assert set(codes) <= {201, 409}, codes
+    nummers = [v["version_no"] for v in await _versies(resp.json()["source_id"])]
+    assert nummers == list(range(1, 2 + codes.count(201)))

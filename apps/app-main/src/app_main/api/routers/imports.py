@@ -1,6 +1,7 @@
 """Het importeindpunt (F2-14, ADR 0010, plan §5.1).
 
-``POST /api/v1/import`` (recht ``pijplijn``): 201 bij een nieuwe versie, 200
+``POST /api/v1/import`` (alleen recht ``pijplijn``; een ``beheerder`` krijgt 403 en
+corrigeert via de handmatige run, ADR 0005): 201 bij een nieuwe versie, 200
 bij ``ongewijzigd`` of een herhaald verzoek. Een 409 en een 422 hebben een
 vaste ``code`` en melding, zonder inhoud van het verzoek (ADR 0002 C).
 """
@@ -25,6 +26,8 @@ async def importeer(
     key: AgentKeyContext = Depends(require_right(Right.PIJPLIJN)),
     service: ImportService = Depends(get_import_service),
 ) -> ImportResponse:
+    if key.permission != Right.PIJPLIJN:
+        raise HTTPException(status_code=403, detail="Alleen de pijplijn importeert")
     try:
         uitkomst = await service.importeer(body, key_id=key.key_id)
     except ImportWeigering as e:

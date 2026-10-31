@@ -292,6 +292,13 @@ def get_bronarchief() -> str:
     return (os.environ.get("SIGNAAL_BRONARCHIEF") or "/bronarchief").strip()
 
 
+def get_fork_archief() -> str:
+    """Het eigen archief van de fork (``SIGNAAL_FORK_ARCHIEF``): een kopie van
+    elk geïmporteerd origineel, met de inhoudshash als naam. Alleen de fork
+    schrijft hier; Langflow heeft er geen toegang toe."""
+    return (os.environ.get("SIGNAAL_FORK_ARCHIEF") or "/data/forkarchief").strip()
+
+
 def get_run_max_minuten() -> int:
     """Na zoveel minuten ``bezig`` sluit de fork een run als ``mislukt``
     (``SIGNAAL_RUN_MAX_MINUTEN``, standaard 360)."""

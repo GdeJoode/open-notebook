@@ -1,55 +1,75 @@
 """Het importeindpunt: de enige inname van bronnen en fragmenten (F2-14, ADR 0010).
 
-``POST /api/v1/import`` (recht ``pijplijn``) neemt een verwerkte bron aan:
-bron, bronversie, fragmenten en de documentstructuur als ``doc_node``. Regels
-(plan §5.1, ADR 0001, 0003, 0004, 0019, 0020, 0022 E):
+``POST /api/v1/import`` (alleen recht ``pijplijn``) neemt een verwerkte bron
+aan: bron, bronversie, fragmenten en de documentstructuur als ``doc_node``.
+Regels (plan §5.1, ADR 0001, 0003, 0004, 0019, 0020, 0022 E):
 
 * **Run.** Alleen een run die via ``POST /api/v1/runs`` is aangemaakt, door
   dezelfde sleutel, en die ``bezig`` is. Een run zonder aanmaker (zoals die
   van ``SourceProcessor``) telt niet. Runs die te lang ``bezig`` staan, sluit de
   fork eerst als ``mislukt``.
-* **Binding.** Regel, batch en item in het verzoek moeten die van de run zijn;
-  de classificatie komt uit de actuele regel, batch of het besluit over het
-  item in de database (:mod:`app_main.services.inname_binding`). De aanroeper
-  en de poortwachter kunnen alleen strenger maken. Een bestaande bron hoort
-  bij één regel: een import via een andere regel wordt geweigerd.
-* **Classificatie.** Een import die extern zou maken wat intern is, geeft 409.
-  Een strengere import maakt een externe bron intern (strengste wint).
-* **Flow.** Een run met een flow buiten Git en interne of onbekende invoer
-  wordt ``mislukt`` (409).
-* **Afgeleide tekst.** De markering van het gegenereerde blok in de ruwe
-  inhoud, een fragment, de structuur of de titel geeft 422 en een regel in
-  het runlogboek (ADR 0004). De locatie volgt de controle van de bronkaart.
-* **Inhoudshash.** De fork leest het origineel in het bronarchief en berekent
-  zelf de SHA-256 van de ruwe inhoud; een andere opgave geeft 422.
-* **Versies.** Een bekende hash geeft ``ongewijzigd`` en geen nieuwe versie;
-  is die versie niet de huidige, dan wijst de bron weer naar die versie, met
-  een logregel (B26). Hetzelfde verzoek in dezelfde run geeft dezelfde id's.
-  Bron, versie en fragmenten gaan in één transactie; de structuur daarna
-  (``DocGraphBuilder``), met dezelfde versie, run en classificatie.
+* **Binding.** Regel, batch en item in het verzoek moeten die van de run zijn
+  (:mod:`app_main.services.inname_binding`). De locatie van de bron valt onder
+  die van de regel; bij een item zijn pad en hash die van het item; bij een
+  externe batch is de hash die welke de fork bij de batch vastlegde. Een
+  bestaande bron hoort bij één regel.
+* **Classificatie.** ``extern`` alleen als de actuele regel, batch of het
+  besluit over het item extern is, de aanroeper ``extern`` opgeeft, de
+  poortwachter ``extern`` besliste en geen interne kenmerken vond; anders
+  ``intern``. ``extern`` wordt geweigerd (409) voor een interne bron, en als
+  dezelfde ruwe inhoud al intern bekend is (een interne versie, of een
+  wachtrij-item dat intern is of nog geen besluit heeft). Een strengere
+  import maakt een externe bron intern.
+* **Flow.** Een run met een flow buiten Git en interne invoer wordt
+  ``mislukt`` (409).
+* **Afgeleide tekst.** De markering van het gegenereerde blok (na NFKC en
+  HTML-ontsleuteling, ongeacht hoofdletters en witruimte) in de ruwe inhoud
+  (UTF-8, en UTF-16 bij een BOM) of in een tekstveld van het verzoek geeft 422
+  en een regel in het runlogboek (ADR 0004).
+* **Ruwe inhoud.** De fork leest het origineel in het bronarchief, berekent
+  zelf de SHA-256 en kopieert het in dezelfde leesgang naar het eigen archief
+  (``SIGNAAL_FORK_ARCHIEF``, naam = de hash). ``source_version.original``
+  verwijst naar die kopie.
+* **Versies.** Een bekende hash geeft ``ongewijzigd``; is die versie niet de
+  huidige, dan wijst de bron weer naar die versie, met een logregel (B26), in
+  één transactie. Hetzelfde verzoek in dezelfde run geeft dezelfde id's.
+  Bron, versie, fragmenten en structuur gaan in één transactie. Een
+  schrijfconflict wordt een beperkt aantal keren opnieuw geprobeerd, daarna 409.
 """
 
 from __future__ import annotations
 
 import asyncio
+import codecs
 import hashlib
+import html
+import json
+import os
+import re
+import tempfile
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
-from loguru import logger
 from shared.utils.text import strip_null_bytes
-from surrealdb_service.connection import ensure_record_id
+from surrealdb_service.connection import ClassificationConflictError, ensure_record_id
+from surrealdb_service.repositories.base import is_schrijfconflict
 from surrealdb_service.repositories.processing_run import ProcessingRunRepository
 from surrealdb_service.repositories.source import SourceRepository
 from surrealdb_service.repositories.source_version import SourceVersionRepository
 
 from app_main import config
 from app_main.api.schemas import ImportChunk, ImportRequest
-from app_main.services.graph.doc_graph_builder import DocGraphBuilder
-from app_main.services.inname_binding import BindingError, InnameBinding, record_tekst
+from app_main.services.graph.doc_graph_builder import compute_graph
+from app_main.services.inname_binding import (
+    BindingError,
+    InnameBinding,
+    locatie_hoort_bij_regel,
+    record_tekst,
+)
 from app_main.services.processing_run_service import ProcessingRunService
 from app_main.services.source_map_service import (
     Locatiecontrole,
@@ -58,10 +78,17 @@ from app_main.services.source_map_service import (
     weigerreden,
 )
 
-#: De markering van het gegenereerde blok van de export naar Obsidian (ADR 0004).
-MARKERINGEN = ("<!-- signaalsysteem:begin -->", "<!-- signaalsysteem:end -->")
-_MARKERINGEN_BYTES = tuple(m.encode("utf-8") for m in MARKERINGEN)
+#: De markering van het gegenereerde blok van de export naar Obsidian (ADR 0004),
+#: ongeacht hoofdletters en witruimte.
+MARKERING = re.compile(r"<!--\s*signaalsysteem\s*:\s*(begin|end)\s*-->", re.IGNORECASE)
 _BLOK = 1 << 20
+#: Zoveel tekens van het vorige blok tellen mee, zodat een markering op een
+#: blokgrens (ook als HTML-entiteit) gevonden wordt.
+_OVERLAP = 512
+#: Zoveel pogingen bij een schrijfconflict of een gelijktijdig verzoek.
+POGINGEN = 5
+_GELIJKTIJDIG = ("idx_source_external_id", "idx_source_version_hash",
+                 "idx_source_version_no", "dn_run_ref")
 
 
 class ImportWeigering(Exception):
@@ -87,6 +114,32 @@ class ImportResultaat:
     chunk_ids: List[str] = field(default_factory=list)
 
 
+@dataclass
+class Origineel:
+    """Het origineel na één leesgang: hash, markering en de kopie in wording."""
+
+    hexhash: str
+    markering: bool
+    tijdelijk: Path
+    archief: Path
+
+    @property
+    def verwijzing(self) -> str:
+        return f"forkarchief/{self.hexhash}"
+
+    def bewaar(self) -> None:
+        """Zet de kopie onder haar hash in het archief, alleen-lezen."""
+        doel = self.archief / self.hexhash
+        if doel.exists():
+            self.tijdelijk.unlink(missing_ok=True)
+            return
+        os.replace(self.tijdelijk, doel)
+        os.chmod(doel, 0o444)
+
+    def vergeet(self) -> None:
+        self.tijdelijk.unlink(missing_ok=True)
+
+
 def _nu() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -99,28 +152,80 @@ def _tekst(chunk: ImportChunk) -> str:
     return strip_null_bytes(chunk.text)
 
 
+def normaliseer(tekst: str) -> str:
+    """HTML-ontsleuteling en NFKC, herhaald tot de tekst niet meer verandert."""
+    for _ in range(4):
+        nieuw = unicodedata.normalize("NFKC", html.unescape(tekst))
+        if nieuw == tekst:
+            break
+        tekst = nieuw
+    return tekst
+
+
 def bevat_markering(tekst: Optional[str]) -> bool:
-    return bool(tekst) and any(m in tekst for m in MARKERINGEN)
+    return bool(tekst) and MARKERING.search(normaliseer(tekst)) is not None
 
 
-def lees_origineel(pad: Path) -> tuple[str, bool]:
-    """SHA-256 van het bestand en of de markering erin staat, in blokken gelezen."""
+def _teksten_van(verzoek: ImportRequest) -> Iterable[str]:
+    """Elk tekstveld van het verzoek, en de fragmenten aaneengeschakeld."""
+    geordend = sorted(verzoek.chunks, key=lambda c: c.seq)
+    yield "".join(c.text for c in geordend)
+    yield verzoek.source.title or ""
+    yield verzoek.source.external_id
+    yield verzoek.source.location
+    for c in geordend:
+        yield c.doc_ref or ""
+        yield c.element_type
+        yield c.printed_page or ""
+        yield "".join(c.section_path)
+        yield json.dumps(c.labels, ensure_ascii=False)
+    if verzoek.structure is not None:
+        yield json.dumps(verzoek.structure.content, ensure_ascii=False)
+
+
+def lees_origineel(pad: Path, archief: Path) -> Origineel:
+    """Lees het origineel één keer: SHA-256, markering (UTF-8, en UTF-16 bij een
+    BOM) en een kopie in het archief van de fork."""
+    archief.mkdir(parents=True, exist_ok=True)
     h = hashlib.sha256()
-    overlap = max(len(m) for m in _MARKERINGEN_BYTES) - 1
-    staart = b""
+    decoders: List[Any] = []
+    staarten: List[str] = []
     gevonden = False
-    with open(pad, "rb") as f:
-        for blok in iter(lambda: f.read(_BLOK), b""):
-            h.update(blok)
-            venster = staart + blok
-            gevonden = gevonden or any(m in venster for m in _MARKERINGEN_BYTES)
-            staart = venster[-overlap:]
-    return h.hexdigest(), gevonden
+    fd, naam = tempfile.mkstemp(dir=archief, prefix=".import-")
+    try:
+        with os.fdopen(fd, "wb") as kopie, open(pad, "rb") as f:
+            eerste = True
+            for blok in iter(lambda: f.read(_BLOK), b""):
+                h.update(blok)
+                kopie.write(blok)
+                if eerste:
+                    decoders = [codecs.getincrementaldecoder("utf-8")("replace")]
+                    if blok.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+                        decoders.append(codecs.getincrementaldecoder("utf-16")("replace"))
+                    staarten = ["" for _ in decoders]
+                    eerste = False
+                for i, dec in enumerate(decoders):
+                    venster = staarten[i] + dec.decode(blok)
+                    gevonden = gevonden or MARKERING.search(normaliseer(venster)) is not None
+                    staarten[i] = venster[-_OVERLAP:]
+    except BaseException:
+        Path(naam).unlink(missing_ok=True)
+        raise
+    return Origineel(h.hexdigest(), gevonden, Path(naam), archief)
 
 
 def _posities(chunk: ImportChunk) -> List[List[float]]:
     """``{page, bbox: [l, t, r, b]}`` naar de vorm van de fork ``[page, x1, x2, y1, y2]``."""
     return [[float(p.page), p.bbox[0], p.bbox[2], p.bbox[1], p.bbox[3]] for p in chunk.positions]
+
+
+def _graafvorm(chunks: List[ImportChunk], ids: List[str]) -> List[Dict[str, Any]]:
+    return [
+        {"id": cid, "order": c.seq, "element_type": c.element_type, "text": _tekst(c),
+         "physical_page": c.page, "positions": _posities(c),
+         "metadata": {"section_path": c.section_path}}
+        for cid, c in zip(ids, chunks)
+    ]
 
 
 class ImportService:
@@ -131,18 +236,18 @@ class ImportService:
         run_repo: Optional[ProcessingRunRepository] = None,
         run_service: Optional[ProcessingRunService] = None,
         binding: Optional[InnameBinding] = None,
-        graph_builder: Optional[DocGraphBuilder] = None,
         locatiecontrole: Optional[Locatiecontrole] = None,
         bronarchief: Optional[str] = None,
+        fork_archief: Optional[str] = None,
     ) -> None:
         self.source_repo = source_repo or SourceRepository()
         self.version_repo = version_repo or SourceVersionRepository()
         self.run_repo = run_repo or ProcessingRunRepository()
         self.run_service = run_service or ProcessingRunService(run_repo=self.run_repo)
         self.binding = binding or InnameBinding()
-        self.graph_builder = graph_builder or DocGraphBuilder()
         self.locatiecontrole = locatiecontrole or Locatiecontrole()
         self._bronarchief = bronarchief
+        self._fork_archief = fork_archief
 
     # -- Controles ----------------------------------------------------------
 
@@ -191,26 +296,25 @@ class ImportService:
     # -- Import -------------------------------------------------------------
 
     async def importeer(self, verzoek: ImportRequest, *, key_id: str) -> ImportResultaat:
-        try:
-            return await self._importeer(verzoek, key_id=key_id)
-        except RuntimeError as e:
-            # Een gelijktijdig verzoek maakte dezelfde bron of versie: opnieuw
-            # lezen geeft dan de bestaande.
-            if "idx_source_external_id" in str(e) or "idx_source_version_hash" in str(e):
+        for poging in range(POGINGEN):
+            try:
                 return await self._importeer(verzoek, key_id=key_id)
-            raise
+            except ClassificationConflictError:
+                raise
+            except RuntimeError as e:
+                # Een gelijktijdig verzoek schreef dezelfde bron of versie, of
+                # een volgnummer: opnieuw lezen en opnieuw proberen.
+                if not (is_schrijfconflict(e) or any(i in str(e) for i in _GELIJKTIJDIG)):
+                    raise
+                await asyncio.sleep(0.02 * (poging + 1))
+        raise ImportWeigering(409, "gelijktijdig", "Gelijktijdige wijziging; probeer opnieuw")
 
     async def _importeer(self, verzoek: ImportRequest, *, key_id: str) -> ImportResultaat:
         run = await self._run(verzoek.run_id, key_id)
         run_id = str(run.id)
 
-        # 1. Afgeleide tekst (ADR 0004): fragmenten, structuur, titel.
-        teksten = [c.text for c in verzoek.chunks] + [verzoek.source.title]
-        teksten += [s for c in verzoek.chunks for s in c.section_path]
-        if any(bevat_markering(t) for t in teksten) or (
-            verzoek.structure is not None
-            and bevat_markering(str(verzoek.structure.content))
-        ):
+        # 1. Afgeleide tekst in het verzoek (ADR 0004).
+        if any(bevat_markering(t) for t in _teksten_van(verzoek)):
             await self._weiger_markering(run_id)
 
         # 2. Binding: regel, batch en item van het verzoek zijn die van de run.
@@ -228,12 +332,16 @@ class ImportService:
             item_id=run.intake_item, run_id=run_id,
         )
 
-        # 3. Locatie (ADR 0004, 0020).
+        # 3. Locatie (ADR 0004, 0020) en binding aan regel, item of batch.
         locatie = verzoek.source.location
         try:
             self.locatiecontrole.controleer(locatie)
         except VerbodenLocatieError:
             raise ImportWeigering(422, "locatie", "Locatie niet toegestaan") from None
+        if invoer.regel is not None and not locatie_hoort_bij_regel(
+            locatie, invoer.regel.location
+        ):
+            raise BindingError("bron valt niet onder de locatie van de regel")
         if invoer.item is not None and not (
             self._zelfde_pad(invoer.item.path, locatie)
             and invoer.item.content_hash == verzoek.source_version.content_hash
@@ -244,22 +352,37 @@ class ImportService:
         ):
             raise BindingError("bron hoort niet bij de batch")
 
-        # 4. Ruwe inhoud: de fork berekent de hash zelf (ADR 0003).
+        # 4. Ruwe inhoud: één leesgang voor hash, markering en kopie.
         pad = self._origineel(verzoek.source_version.original)
-        hexhash, markering = await asyncio.to_thread(lees_origineel, pad)
-        if markering:
+        archief = Path(self._fork_archief or config.get_fork_archief())
+        origineel = await asyncio.to_thread(lees_origineel, pad, archief)
+        try:
+            return await self._verder(verzoek, run, invoer, locatie, origineel)
+        finally:
+            origineel.vergeet()
+
+    async def _verder(self, verzoek, run, invoer, locatie, origineel) -> ImportResultaat:
+        run_id = str(run.id)
+        hexhash = origineel.hexhash
+        if origineel.markering:
             await self._weiger_markering(run_id)
         if verzoek.source_version.content_hash != f"sha256:{hexhash}":
             raise ImportWeigering(422, "inhoudshash",
                                   "Inhoudshash is niet die van de ruwe inhoud")
 
-        # 5. Classificatie: uit de database; aanroeper en poortwachter alleen strenger.
-        klasse = invoer.classification
+        # 5. Classificatie: extern alleen als alles extern zegt.
         poort = verzoek.classification.gatekeeper
-        if verzoek.classification.value == "intern" or (
-            poort is not None and (poort.decision == "intern" or poort.internal_markers)
+        klasse = "extern" if (
+            invoer.classification == "extern"
+            and verzoek.classification.value == "extern"
+            and poort is not None and poort.decision == "extern" and not poort.internal_markers
+        ) else "intern"
+        if klasse == "extern" and invoer.batch is not None and not any(
+            self._zelfde_pad(f.get("path", ""), locatie)
+            and f.get("content_hash") == f"sha256:{hexhash}"
+            for f in invoer.batch.file_hashes
         ):
-            klasse = "intern"
+            raise BindingError("origineel is niet het bestand van de batch")
 
         bron = await self.source_repo.find_by_external_id(verzoek.source.external_id)
         regel_id = str(invoer.regel.id) if invoer.regel is not None else None
@@ -269,6 +392,9 @@ class ImportService:
             if klasse == "extern" and (bron.classification or "intern") == "intern":
                 raise ImportWeigering(409, "lagere_classificatie",
                                       "Een interne bron wordt niet extern via de import")
+        if klasse == "extern" and await self.source_repo.inhoud_intern_bekend(hexhash):
+            raise ImportWeigering(409, "inhoud_intern_bekend",
+                                  "Dezelfde inhoud is al intern bekend")
 
         # 6. Flow buiten Git (ADR 0022 E).
         if not run.flow_vastgelegd and klasse != "extern":
@@ -283,20 +409,24 @@ class ImportService:
             if versie is not None:
                 return await self._bekend(verzoek, run_id, bron, versie, klasse)
 
-        return await self._nieuw(verzoek, run_id, bron, regel_id, hexhash, klasse)
+        await asyncio.to_thread(origineel.bewaar)
+        return await self._nieuw(verzoek, run_id, bron, regel_id, origineel, klasse)
 
     async def _bekend(self, verzoek, run_id, bron, versie, klasse) -> ImportResultaat:
         bron_id, versie_id = str(bron.id), str(versie.id)
+        maak_intern = klasse == "intern" and bron.classification == "extern"
+        regels = []
+        if maak_intern:
+            regels.append(_logregel("intern", "Bron intern gemaakt: strengste wint (ADR 0001)"))
+
         if record_tekst(versie.created_by_run, "processing_run") == run_id:
             # Hetzelfde verzoek in dezelfde run: dezelfde id's.
-            bestaand = await self.source_repo.fragmenten_van_run(versie_id, run_id)
-            gevraagd = [_tekst(c) for c in sorted(verzoek.chunks, key=lambda c: c.seq)]
-            if [r.get("text") for r in bestaand] != gevraagd:
-                raise ImportWeigering(409, "ander_verzoek",
-                                      "Andere fragmenten voor dezelfde versie in deze run")
-            ids = [str(r["id"]) for r in bestaand]
-            if ids and not await self.source_repo.heeft_structuur(bron_id, run_id):
-                await self._structuur(bron_id, versie_id, run_id, verzoek, ids)
+            await self.source_repo.bekende_versie(
+                bron_id, versie_id, maak_intern=maak_intern, terugzetten=False,
+                run_id=run_id, regels=regels)
+            await self._vergelijk(verzoek, versie_id, run_id, klasse)
+            ids = [str(r["id"]) for r in await self.source_repo.fragmenten_van_run(
+                versie_id, run_id)]
             return ImportResultaat(
                 status="nieuw", nieuw=False, source_id=bron_id, source_version_id=versie_id,
                 version_no=versie.version_no, run_id=run_id,
@@ -304,23 +434,39 @@ class ImportService:
                 chunk_ids=ids,
             )
 
-        regels = []
-        if klasse == "intern" and bron.classification == "extern":
-            await self.source_repo.zet_intern(bron_id)
-            regels.append(_logregel("intern", "Bron intern gemaakt: strengste wint (ADR 0001)"))
-        if record_tekst(bron.current_version, "source_version") != versie_id:
-            await self.source_repo.zet_huidige_versie(bron_id, versie_id)
+        terug = record_tekst(bron.current_version, "source_version") != versie_id
+        if terug:
             regels.append(_logregel(
                 "versie_teruggezet",
                 f"Bekende inhoud: huidige versie terug naar versie {versie.version_no} (B26)"))
-        await self.run_repo.append_log(run_id, regels)
+        await self.source_repo.bekende_versie(
+            bron_id, versie_id, maak_intern=maak_intern, terugzetten=terug,
+            run_id=run_id, regels=regels)
         return ImportResultaat(
             status="ongewijzigd", nieuw=False, source_id=bron_id, source_version_id=versie_id,
             version_no=versie.version_no, run_id=run_id,
             classification=await self.source_repo.get_classification(bron_id) or "intern",
         )
 
-    async def _nieuw(self, verzoek, run_id, bron, regel_id, hexhash, klasse) -> ImportResultaat:
+    async def _vergelijk(self, verzoek, versie_id: str, run_id: str, klasse: str) -> None:
+        """Een herhaald verzoek moet hetzelfde zijn: fragmenten, classificatie en structuur."""
+        geordend = sorted(verzoek.chunks, key=lambda c: c.seq)
+        bestaand = await self.source_repo.fragmenten_van_run(versie_id, run_id)
+        gevraagd = [(_tekst(c), c.section_path, c.element_type, c.page) for c in geordend]
+        gelezen = [(r.get("text"), r.get("section_path") or [], r.get("element_type"),
+                    r.get("physical_page")) for r in bestaand]
+        klassen = {r.get("classification") for r in bestaand}
+        versie = await self.version_repo.get(versie_id)
+        if versie is not None:
+            klassen.add(versie.classification)
+        refs = sorted(n.self_ref for n in compute_graph(
+            _graafvorm(geordend, [str(r["id"]) for r in bestaand])).nodes)
+        if (gevraagd != gelezen or klassen - {klasse}
+                or refs != await self.source_repo.structuur_van_run(versie_id, run_id)):
+            raise ImportWeigering(409, "ander_verzoek",
+                                  "Ander verzoek voor dezelfde versie in deze run")
+
+    async def _nieuw(self, verzoek, run_id, bron, regel_id, origineel, klasse) -> ImportResultaat:
         run_rid = ensure_record_id(run_id)
         bron_rid = ensure_record_id(str(bron.id)) if bron else ensure_record_id(
             f"source:{uuid.uuid4().hex}")
@@ -333,7 +479,7 @@ class ImportService:
             locatie = verzoek.source.location
             asset = {"url": locatie} if "://" in locatie else {"file_path": locatie}
             bron_data = {
-                "title": verzoek.source.title, "topics": [], "asset": asset,
+                "title": strip_null_bytes(verzoek.source.title), "topics": [], "asset": asset,
                 "external_id": verzoek.source.external_id, "classification": klasse,
             }
             if regel_id:
@@ -341,8 +487,8 @@ class ImportService:
             bron_data = {k: v for k, v in bron_data.items() if v is not None}
 
         versie_data: Dict[str, Any] = {
-            "content_hash": hexhash,
-            "original": verzoek.source_version.original,
+            "content_hash": origineel.hexhash,
+            "original": origineel.verwijzing,
             "created_by_run": run_rid,
             "current_run": run_rid,
             "classification": klasse,
@@ -350,8 +496,9 @@ class ImportService:
         if verzoek.source_version.fetched_at is not None:
             versie_data["fetched_at"] = verzoek.source_version.fetched_at
 
+        geordend = sorted(verzoek.chunks, key=lambda c: c.seq)
         fragmenten = []
-        for c in sorted(verzoek.chunks, key=lambda c: c.seq):
+        for c in geordend:
             metadata: Dict[str, Any] = {"section_path": c.section_path, "labels": c.labels}
             if c.doc_ref:
                 metadata["doc_ref"] = c.doc_ref
@@ -373,15 +520,33 @@ class ImportService:
             if gedrukt is not None:
                 fragment["printed_page"] = gedrukt
             fragmenten.append(fragment)
+        ids = [str(f["id"]) for f in fragmenten]
+
+        # De structuur (``doc_node``) uit de fragmenten, in dezelfde transactie.
+        graaf = compute_graph(_graafvorm(geordend, ids))
+        knoop = {n.self_ref: ensure_record_id(f"doc_node:{uuid.uuid4().hex}")
+                 for n in graaf.nodes}
+        knopen = [{
+            "id": knoop[n.self_ref], "source": bron_rid, "source_version": versie_rid,
+            "run": run_rid, "classification": klasse, "self_ref": n.self_ref,
+            "element_type": n.element_type, "text": strip_null_bytes(n.text), "page": n.page,
+            "level": n.level, "sequence": n.sequence, "bbox": n.bbox,
+        } for n in graaf.nodes]
+        knopen = [{k: v for k, v in kn.items() if v is not None} for kn in knopen]
+        relaties = {
+            "parent_of": [{"in": knoop[e.source_ref], "out": knoop[e.target_ref]}
+                          for e in graaf.parent_of],
+            "next_node": [{"in": knoop[e.source_ref], "out": knoop[e.target_ref]}
+                          for e in graaf.next_node],
+            "derived_from": [{"in": ensure_record_id(e.source_ref), "out": knoop[e.target_ref]}
+                             for e in graaf.derived_from],
+        }
 
         await self.source_repo.schrijf_import(
             bron=bron_rid, bron_data=bron_data, versie=versie_rid,
-            versie_data=versie_data, fragmenten=fragmenten,
+            versie_data=versie_data, fragmenten=fragmenten, knopen=knopen, relaties=relaties,
         )
         bron_id, versie_id = str(bron_rid), str(versie_rid)
-        ids = [str(f["id"]) for f in fragmenten]
-        if ids:
-            await self._structuur(bron_id, versie_id, run_id, verzoek, ids)
         versie = await self.version_repo.get(versie_id)
         return ImportResultaat(
             status="nieuw", nieuw=True, source_id=bron_id, source_version_id=versie_id,
@@ -389,23 +554,3 @@ class ImportService:
             classification=await self.source_repo.get_classification(bron_id) or "intern",
             chunk_ids=ids,
         )
-
-    async def _structuur(self, bron_id, versie_id, run_id, verzoek, ids) -> None:
-        """De documentstructuur als ``doc_node`` (``DocGraphBuilder``), uit de
-        fragmenten met hun sectiepad. Een fout komt in het runlogboek; de
-        fragmenten staan dan al, en hetzelfde verzoek bouwt de structuur opnieuw."""
-        geordend = sorted(verzoek.chunks, key=lambda c: c.seq)
-        chunks = [
-            {"id": cid, "order": c.seq, "element_type": c.element_type, "text": _tekst(c),
-             "physical_page": c.page, "positions": _posities(c),
-             "metadata": {"section_path": c.section_path}}
-            for cid, c in zip(ids, geordend)
-        ]
-        try:
-            await self.graph_builder.build(bron_id, chunks=chunks,
-                                           source_version=versie_id, run=run_id)
-        except Exception as e:  # noqa: BLE001 - de import zelf is geslaagd
-            logger.warning("Structuur niet opgebouwd voor {bron}: {soort}",
-                           bron=bron_id, soort=type(e).__name__)
-            await self.run_repo.append_log(run_id, [_logregel(
-                "structuur_mislukt", f"Structuur niet opgebouwd: {type(e).__name__}")])
