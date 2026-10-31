@@ -5,12 +5,18 @@ Stopconditie F2-08. De test faalt:
 1. bij een Ollama-eindpunt (``/api/generate``, ``/api/chat``, ``/api/embed``,
    ``/api/embeddings``), de Ollama-poort ``11434`` of ``host.docker.internal`` in
    ``apps/``, ``packages/`` of ``pipelines/``;
-2. bij code buiten de poort die een model zelf opbouwt of aanroept: een import
+2. bij een OpenAI-compatibel eindpunt (``/v1/chat``, ``/v1/embeddings``,
+   ``/v1/completions``) of het adres ``llama-swap:8080`` in code buiten
+   ``llm_manager/providers/factory.py`` (in Python: tekstconstanten, geen
+   docstrings; tests tellen niet mee, die bootsen llama-swap na);
+3. bij code buiten de poort die een model zelf opbouwt of aanroept: een import
    van Esperanto of van een modelbibliotheek (OpenAI, Anthropic, Ollama,
-   LangChain-aanbieders, LiteLLM), of van de llama-swap-client in
-   ``llm_manager/providers/factory.py`` buiten ``llm_manager/aanroep.py``;
-3. bij een aanroep van ``shared.model_routing`` (``call_llm``, ``embed_text``)
-   buiten die module zelf.
+   LangChain-aanbieders, LiteLLM, LangExtract), of van de llama-swap-client in
+   ``llm_manager/providers/factory.py`` buiten ``llm_manager/aanroep.py``. Ook een
+   relatieve import en ``importlib.import_module``/``__import__`` met zo'n module
+   als tekst tellen;
+4. bij ``import shared.model_routing`` of een aanroep daaruit (``call_llm``,
+   ``embed_text``, ``_call_*``) buiten die module zelf.
 
 Tijdelijke uitzondering (plan F2-08): ``packages/shared/src/shared/model_routing.py``,
 dat met F2-09 vervalt.
@@ -22,8 +28,8 @@ Wat geen modelaanroep is en dus mag:
 - ``host.docker.internal`` in de blokkadelijst van de URL-controle van de
   bronkaart (``source_map_service.py``) en in de test daarvan: die lijst
   weigert zo'n adres juist;
-- de import van ``openai`` in ``error_mapping.py`` (Track J, vervalt in F2-09):
-  alleen uitzonderingsklassen, geen client;
+- de import van ``openai`` in ``error_mapping.py`` (Track J, vervalt in F2-09),
+  zolang die module er alleen de genoemde uitzonderingsklassen uit leest;
 - de import van ``langextract`` in de uitgeschakelde LangExtract-extractor: de
   constructor weigert altijd.
 """
@@ -52,6 +58,13 @@ VERBODEN = {
     "host.docker.internal": re.compile(r"host\.docker\.internal"),
 }
 
+#: Alleen in code buiten de client (en niet in tests): het OpenAI-pad en het adres.
+VERBODEN_BUITEN_CLIENT = {
+    "OpenAI-eindpunt": re.compile(r"/v1/(?:chat|embeddings|completions)\b"),
+    "adres llama-swap": re.compile(r"llama-swap:8080"),
+}
+CLIENT_BESTAND = "packages/llm-manager/src/llm_manager/providers/factory.py"
+
 #: Een routeprefix van de fork is geen Ollama-eindpunt.
 ROUTEPREFIX = re.compile(r"prefix\s*=\s*[\"']/api/")
 
@@ -68,9 +81,14 @@ MODELBIBLIOTHEKEN = (
     "langchain_google_genai", "langchain_groq", "langchain_mistralai",
 )
 
-#: Track J, vervalt in F2-09: importeert alleen uitzonderingsklassen van de
-#: OpenAI-SDK om fouten in te delen; er wordt geen client opgebouwd.
-ALLEEN_UITZONDERINGEN = {"apps/app-main/src/app_main/services/model_routing/error_mapping.py"}
+#: Track J, vervalt in F2-09: ``error_mapping.py`` leest uit ``openai`` alleen
+#: deze uitzonderingsklassen, via ``getattr(_openai, "<naam>")``.
+ERROR_MAPPING = "apps/app-main/src/app_main/services/model_routing/error_mapping.py"
+OPENAI_UITZONDERINGEN = {
+    "RateLimitError", "APITimeoutError", "APIConnectionError", "InternalServerError",
+    "AuthenticationError", "PermissionDeniedError", "BadRequestError", "NotFoundError",
+    "UnprocessableEntityError", "ConflictError", "APIStatusError", "APIError",
+}
 
 #: LangExtract is uitgeschakeld: de constructor weigert altijd
 #: (``LangExtractUitgeschakeld``). Voorstel: verwijderen met F2-09.
@@ -84,8 +102,10 @@ CLIENT_MODULE = "llm_manager.providers.factory"
 CLIENT_NAMEN = {"LlamaSwapClient"}
 CLIENT_TOEGESTAAN = {
     "packages/llm-manager/src/llm_manager/aanroep.py",
-    "packages/llm-manager/src/llm_manager/providers/factory.py",
+    CLIENT_BESTAND,
 }
+
+MODEL_ROUTING = "shared.model_routing"
 
 
 def _bestanden():
@@ -104,31 +124,147 @@ def _is_test(rel: str) -> bool:
     return "/tests/" in rel or naam.startswith("test_") or naam == "conftest.py"
 
 
+def _module_van(rel: str) -> list[str]:
+    """De modulenaam van een bestand onder ``src/`` als delen (voor relatieve imports)."""
+    delen = rel[:-3].split("/") if rel.endswith(".py") else rel.split("/")
+    if "src" in delen:
+        delen = delen[delen.index("src") + 1:]
+    return delen
+
+
+def _imports(boom: ast.AST, rel: str = ""):
+    """(regel, module, naam) per import, relatieve imports opgelost.
+
+    Ook ``importlib.import_module("x")`` en ``__import__("x")`` met een tekst
+    als argument tellen als import van ``x``.
+    """
+    for knoop in ast.walk(boom):
+        if isinstance(knoop, ast.Import):
+            for alias in knoop.names:
+                yield knoop.lineno, alias.name, None
+        elif isinstance(knoop, ast.ImportFrom):
+            if knoop.level == 0:
+                module = knoop.module or ""
+            else:
+                basis = _module_van(rel)
+                if not rel.endswith("__init__.py"):
+                    basis = basis[:-1]
+                basis = basis[: len(basis) - (knoop.level - 1)] if knoop.level > 1 else basis
+                module = ".".join([*basis, *([knoop.module] if knoop.module else [])])
+            for alias in knoop.names:
+                yield knoop.lineno, module, alias.name
+                if knoop.level and not knoop.module:
+                    # ``from . import factory``: de naam is zelf een module.
+                    yield knoop.lineno, f"{module}.{alias.name}", None
+        elif isinstance(knoop, ast.Call) and knoop.args:
+            functie = knoop.func
+            naam = getattr(functie, "attr", None) or getattr(functie, "id", None)
+            eerste = knoop.args[0]
+            if naam in ("import_module", "__import__") and isinstance(eerste, ast.Constant) \
+                    and isinstance(eerste.value, str):
+                yield knoop.lineno, eerste.value, None
+
+
+def _docstrings(boom: ast.AST) -> set[int]:
+    ids = set()
+    for knoop in ast.walk(boom):
+        if isinstance(knoop, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            romp = getattr(knoop, "body", [])
+            if romp and isinstance(romp[0], ast.Expr) and isinstance(romp[0].value, ast.Constant):
+                ids.add(id(romp[0].value))
+    return ids
+
+
+def _openai_buiten_uitzonderingen(boom: ast.AST) -> list[int]:
+    """Regels in ``error_mapping.py`` waar ``_openai`` iets anders doet dan een
+    genoemde uitzonderingsklasse lezen of op ``None`` toetsen."""
+    ouders = {}
+    for knoop in ast.walk(boom):
+        for kind in ast.iter_child_nodes(knoop):
+            ouders[id(kind)] = knoop
+    fout = []
+    for knoop in ast.walk(boom):
+        if not (isinstance(knoop, ast.Name) and knoop.id == "_openai"):
+            continue
+        ouder = ouders.get(id(knoop))
+        if isinstance(ouder, ast.Compare) or (
+            isinstance(ouder, ast.Assign) and knoop in ouder.targets
+        ):
+            continue
+        if (isinstance(ouder, ast.Call) and getattr(ouder.func, "id", None) == "getattr"
+                and len(ouder.args) >= 2 and ouder.args[0] is knoop
+                and isinstance(ouder.args[1], ast.Constant)
+                and ouder.args[1].value in OPENAI_UITZONDERINGEN):
+            continue
+        fout.append(knoop.lineno)
+    return fout
+
+
+def _bevindingen_tekst(rel: str, inhoud: str) -> list[str]:
+    gevonden = []
+    for nr, regel in enumerate(inhoud.splitlines(), 1):
+        for naam, patroon in VERBODEN.items():
+            if not patroon.search(regel):
+                continue
+            if naam == "Ollama-eindpunt" and ROUTEPREFIX.search(regel):
+                continue
+            if (rel, naam) in BLOKKADE:
+                continue
+            gevonden.append(f"{rel}:{nr}: {naam}: {regel.strip()[:120]}")
+    if _is_test(rel) or rel == CLIENT_BESTAND:
+        return gevonden
+    if rel.endswith(".py"):
+        boom = ast.parse(inhoud)
+        docs = _docstrings(boom)
+        teksten = [(k.lineno, k.value) for k in ast.walk(boom)
+                   if isinstance(k, ast.Constant) and isinstance(k.value, str)
+                   and id(k) not in docs]
+    else:
+        teksten = list(enumerate(inhoud.splitlines(), 1))
+    for nr, tekst in teksten:
+        for naam, patroon in VERBODEN_BUITEN_CLIENT.items():
+            if patroon.search(tekst):
+                gevonden.append(f"{rel}:{nr}: {naam}: {tekst.strip()[:120]}")
+    return gevonden
+
+
+def _bevindingen_imports(rel: str, inhoud: str) -> list[str]:
+    gevonden = []
+    boom = ast.parse(inhoud, filename=rel)
+    test = _is_test(rel)
+    for nr, module, naam in _imports(boom, rel):
+        wortel = module.split(".")[0]
+        if wortel in MODELBIBLIOTHEKEN and not test:
+            if rel == ERROR_MAPPING and wortel == "openai":
+                pass  # getoetst hieronder: alleen genoemde uitzonderingsklassen
+            elif rel in LANGEXTRACT_UITGESCHAKELD and wortel == "langextract":
+                pass
+            else:
+                gevonden.append(f"{rel}:{nr}: import {module}")
+        raakt_client = (
+            module == CLIENT_MODULE
+            or (module == "llm_manager.providers" and naam in CLIENT_NAMEN | {"factory"})
+        )
+        if raakt_client and rel not in CLIENT_TOEGESTAAN and not test:
+            gevonden.append(f"{rel}:{nr}: llama-swap-client buiten de poort")
+        if not test and (module == MODEL_ROUTING or (module == "shared" and naam == "model_routing")):
+            if naam is None or naam in {"call_llm", "embed_text", "model_routing"} or (
+                naam.startswith("_call")
+            ):
+                gevonden.append(f"{rel}:{nr}: {MODEL_ROUTING}.{naam or '*'}")
+    if rel == ERROR_MAPPING:
+        gevonden += [f"{rel}:{nr}: openai buiten de uitzonderingsklassen"
+                     for nr in _openai_buiten_uitzonderingen(boom)]
+    return gevonden
+
+
 def test_geen_ollama_eindpunten():
     gevonden = []
     for pad, rel in _bestanden():
         if rel in TIJDELIJK:
             continue
-        for nr, regel in enumerate(pad.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
-            for naam, patroon in VERBODEN.items():
-                if not patroon.search(regel):
-                    continue
-                if naam == "Ollama-eindpunt" and ROUTEPREFIX.search(regel):
-                    continue
-                if (rel, naam) in BLOKKADE:
-                    continue
-                gevonden.append(f"{rel}:{nr}: {naam}: {regel.strip()[:120]}")
+        gevonden += _bevindingen_tekst(rel, pad.read_text(encoding="utf-8", errors="ignore"))
     assert not gevonden, "Modelaanroep buiten llama-swap:\n" + "\n".join(gevonden)
-
-
-def _imports(boom: ast.AST):
-    for knoop in ast.walk(boom):
-        if isinstance(knoop, ast.Import):
-            for alias in knoop.names:
-                yield knoop.lineno, alias.name, None
-        elif isinstance(knoop, ast.ImportFrom) and knoop.module and knoop.level == 0:
-            for alias in knoop.names:
-                yield knoop.lineno, knoop.module, alias.name
 
 
 def test_geen_model_buiten_de_poort():
@@ -136,26 +272,11 @@ def test_geen_model_buiten_de_poort():
     for pad, rel in _bestanden():
         if pad.suffix != ".py" or rel in TIJDELIJK:
             continue
-        boom = ast.parse(pad.read_text(encoding="utf-8"), filename=rel)
-        for nr, module, naam in _imports(boom):
-            wortel = module.split(".")[0]
-            if (wortel in MODELBIBLIOTHEKEN and not _is_test(rel)
-                    and not (rel in ALLEEN_UITZONDERINGEN and wortel == "openai")
-                    and not (rel in LANGEXTRACT_UITGESCHAKELD and wortel == "langextract")):
-                gevonden.append(f"{rel}:{nr}: import {module}")
-            raakt_client = (
-                module == CLIENT_MODULE
-                or (module == "llm_manager.providers" and naam in CLIENT_NAMEN)
-                or (module == "llm_manager.providers" and naam == "factory")
-            )
-            if raakt_client and rel not in CLIENT_TOEGESTAAN and not _is_test(rel):
-                gevonden.append(f"{rel}:{nr}: llama-swap-client buiten de poort")
-            if module == "shared.model_routing" or (module == "shared" and naam == "model_routing"):
-                if naam in {"call_llm", "embed_text", "model_routing"} or (
-                    naam and naam.startswith("_call")
-                ):
-                    gevonden.append(f"{rel}:{nr}: shared.model_routing.{naam}")
+        gevonden += _bevindingen_imports(rel, pad.read_text(encoding="utf-8"))
     assert not gevonden, "Modelaanroep om de poort heen:\n" + "\n".join(gevonden)
+
+
+BRON = "apps/app-main/src/app_main/services/iets.py"
 
 
 def test_de_test_vindt_wat_hij_zoekt():
@@ -167,9 +288,35 @@ def test_de_test_vindt_wat_hij_zoekt():
     assert not eindpunt.search('c.post("/api/chat/context")')
     assert ROUTEPREFIX.search('router, prefix="/api/embeddings", tags=["x"]')
     assert VERBODEN["poort 11434"].search("http://localhost:11434")
-    boom = ast.parse(
-        "import esperanto\nfrom llm_manager.providers.factory import LlamaSwapClient\n"
-        "from shared.model_routing import call_llm\n"
-    )
-    modules = {m for _, m, _ in _imports(boom)}
-    assert {"esperanto", CLIENT_MODULE, "shared.model_routing"} <= modules
+
+
+def test_de_omzeilvormen_uit_de_review_worden_gevonden():
+    """De vormen uit de probe van de reviewer (F2-08)."""
+    omzeilvormen = {
+        "import shared.model_routing\n": "shared.model_routing",
+        "import importlib\nm = importlib.import_module('esperanto')\n": "import esperanto",
+        "m = __import__('openai')\n": "import openai",
+        "from ..providers.factory import LlamaSwapClient\n": "client buiten de poort",
+    }
+    for bron, verwacht in omzeilvormen.items():
+        rel = "packages/llm-manager/src/llm_manager/api/iets.py" if "providers" in bron else BRON
+        assert any(verwacht in b for b in _bevindingen_imports(rel, bron)), bron
+    # ``from . import factory`` in het pakket ``providers``.
+    rel = "packages/llm-manager/src/llm_manager/providers/iets.py"
+    assert _bevindingen_imports(rel, "from . import factory\n")
+    # Het OpenAI-pad en het adres van llama-swap in code buiten de client.
+    for bron in ('client.post("https://api.openai.com/v1/chat/completions")\n',
+                 'url = "http://llama-swap:8080/v1"\n',
+                 'pad = "/v1/embeddings"\n'):
+        assert _bevindingen_tekst(BRON, bron), bron
+    # Maar niet in een docstring, en niet in de client zelf.
+    assert not _bevindingen_tekst(BRON, '"""Gaat naar /v1/embeddings van llama-swap:8080."""\n')
+    assert not _bevindingen_tekst(CLIENT_BESTAND, 'LLAMA_SWAP_URL = "http://llama-swap:8080/v1"\n')
+    # Wat mag, blijft mogen.
+    assert not _bevindingen_imports(BRON, "from shared.model_routing import _load_config\n")
+    # error_mapping: alleen de genoemde uitzonderingsklassen.
+    goed = "import openai as _openai\nx = getattr(_openai, 'RateLimitError', None)\n"
+    assert not _bevindingen_imports(ERROR_MAPPING, goed)
+    for fout in ("import openai as _openai\nc = _openai.OpenAI()\n",
+                 "import openai as _openai\nc = getattr(_openai, 'OpenAI')()\n"):
+        assert _bevindingen_imports(ERROR_MAPPING, fout), fout
