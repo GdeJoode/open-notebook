@@ -223,7 +223,15 @@ async def test_automatische_run_verzet_de_handmatige_run_niet(env, app) -> None:
     assert str(melding["source_version"]) == str(handmatig["versie"])
 
 
-async def test_mislukte_transactie_laat_alles_staan(env, monkeypatch) -> None:
+async def _bewerk(mutator, op: str, bron: str, oude: list):
+    """Samenvoegen of splitsen van het eerste fragment, rechtstreeks via de dienst."""
+    if op == "merge":
+        return await mutator.merge(bron, str(oude[0]["id"]), actor="Testpersoon")
+    return await mutator.split(bron, str(oude[0]["id"]), 4, actor="Testpersoon")
+
+
+@pytest.mark.parametrize("op", ["merge", "split"])
+async def test_mislukte_transactie_laat_alles_staan(env, monkeypatch, op) -> None:
     import app_main.services.chunking.chunk_mutator as mutator_mod
     from app_main.services.chunking.chunk_mutator import ChunkMutator
 
@@ -236,7 +244,7 @@ async def test_mislukte_transactie_laat_alles_staan(env, monkeypatch) -> None:
 
     monkeypatch.setattr(mutator_mod, "execute_transaction", _faalt)
     with pytest.raises(RuntimeError):
-        await ChunkMutator().merge(bron, str(oude[0]["id"]), actor="Testpersoon")
+        await _bewerk(ChunkMutator(), op, bron, oude)
     assert await _stand(bron) == voor
     [run] = await _q("SELECT * FROM processing_run WHERE trigger = 'handmatig' AND actor = 'Testpersoon'"
                      " AND status = 'mislukt' AND id NOT IN (SELECT VALUE run FROM chunk)"
@@ -245,13 +253,15 @@ async def test_mislukte_transactie_laat_alles_staan(env, monkeypatch) -> None:
     assert len(await _fragmenten(voor["run"])) == 3
 
 
-async def test_bewerking_komt_in_chunk_edit_met_actor(env, app) -> None:
+@pytest.mark.parametrize("op, body", [("merge", {}), ("split", {"cursorOffset": 4})])
+async def test_bewerking_komt_in_chunk_edit_met_actor(env, app, op, body) -> None:
     bron = await _verwerkte_bron()
     oude = await _fragmenten((await _stand(bron))["run"])
     async with _client(app) as client:
-        assert (await client.post(f"/api/sources/{bron}/chunks/{oude[0]['id']}/merge", json={})).status_code == 200
+        assert (await client.post(f"/api/sources/{bron}/chunks/{oude[0]['id']}/{op}",
+                                  json=body)).status_code == 200
     [rij] = await _q("SELECT op, actor FROM chunk_edit WHERE source = $b", {"b": _rid(bron)})
-    assert (rij["op"], rij["actor"]) == ("merge", "Testpersoon")
+    assert (rij["op"], rij["actor"]) == (op, "Testpersoon")
 
 
 async def test_resolution_log_heeft_een_auteur(env) -> None:

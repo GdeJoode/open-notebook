@@ -37,6 +37,7 @@ from surrealdb_service.connection import (
     execute_query,
     execute_transaction,
 )
+from surrealdb_service.repositories.base import is_schrijfconflict
 from surrealdb_service.repositories.processing_run import ProcessingRunRepository
 
 from app_main.services.audit.chunk_audit import ChunkAuditService
@@ -71,8 +72,8 @@ _SCHRIJF_SET = (
     "COMMIT TRANSACTION;"
 )
 
-#: Een schrijfconflict in de opslag (RocksDB onder SurrealDB v2).
-_SCHRIJFCONFLICT = ("chunk_mutator:verouderd", "read or write conflict", "can be retried")
+#: De THROW van ``_SCHRIJF_SET`` als de huidige run intussen is verzet.
+_VEROUDERD = "chunk_mutator:verouderd"
 
 
 class ChunkConflictError(Exception):
@@ -351,7 +352,7 @@ class ChunkMutator:
                 self.config,
             )
         except Exception as e:
-            conflict = any(t in str(e) for t in _SCHRIJFCONFLICT)
+            conflict = _VEROUDERD in str(e) or is_schrijfconflict(e)
             await self.run_repo.close(
                 str(run.id), status="mislukt",
                 error="verouderd" if conflict else type(e).__name__,
