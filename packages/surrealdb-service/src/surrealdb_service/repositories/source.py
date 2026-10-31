@@ -24,6 +24,9 @@ from surrealdb_service.repositories.base import (
 )
 from surrealdb_service.repositories.source_version import NIEUWE_VERSIE
 
+#: De ``THROW`` van een externe import waarvan de inhoud intern bekend is.
+INHOUD_INTERN_BEKEND = "inhoud:intern_bekend"
+
 # The ``processing_stage`` filter shared by the sources list (``?stage=``) and
 # the Werkbak (WB.1), so both count the same rows. The field is a strict string
 # defaulting to ``ingested`` (migration 71), so every row has a stage.
@@ -247,10 +250,18 @@ class SourceRepository(BaseRepository[Source]):
         fragmenten: List[Dict[str, Any]],
         knopen: List[Dict[str, Any]],
         relaties: Dict[str, List[Dict[str, Any]]],
+        extern: bool = False,
     ) -> None:
         """Bron (als ``bron_data`` gezet is), bronversie, fragmenten en structuur
         (``doc_node`` met ``parent_of``, ``next_node`` en ``derived_from``) in
         één transactie.
+
+        Een externe import schrijft eerst het record ``inhoud`` van haar hash en
+        toetst binnen de transactie of de inhoud intern bekend is (migratie 97);
+        zo ja, dan ``THROW`` met :data:`INHOUD_INTERN_BEKEND`. Een
+        gelijktijdige interne import of een intern besluit schrijft hetzelfde
+        record; dat wordt een schrijfconflict. Een interne versie zet het record
+        zelf op intern (event ``inhoud_intern_versie``).
 
         ``bron``, ``versie`` en de ``id`` van elk fragment en elke knoop zijn
         record-id's die de aanroeper vooraf kiest, zodat een herhaald verzoek
@@ -260,6 +271,13 @@ class SourceRepository(BaseRepository[Source]):
         index, een ``ASSERT`` op classificatie of run), dan verandert niets.
         """
         delen = ["BEGIN TRANSACTION;"]
+        if extern:
+            delen.append(
+                "UPSERT type::thing('inhoud', $versie_data.content_hash)"
+                " SET classification = classification ?? 'extern' RETURN NONE;"
+                f" IF fn::inhoud_intern_bekend($versie_data.content_hash)"
+                f" {{ THROW '{INHOUD_INTERN_BEKEND}' }};"
+            )
         if bron_data is not None:
             delen.append("CREATE $bron CONTENT $bron_data RETURN NONE;")
         delen.append(NIEUWE_VERSIE)
@@ -305,19 +323,12 @@ class SourceRepository(BaseRepository[Source]):
 
         Een interne bronversie, een wachtrij-item dat intern is of nog geen
         besluit heeft, of een bestand van een batch die niet effectief extern
-        is (onbevestigd extern geldt als intern).
+        is (onbevestigd extern geldt als intern), of het record ``inhoud`` staat
+        op intern. Dezelfde toets draait in de transactie van een externe import
+        (:meth:`schrijf_import`).
         """
         rows = await execute_query(
-            "RETURN array::len((SELECT VALUE id FROM source_version"
-            " WHERE content_hash = $h AND classification = 'intern' LIMIT 1))"
-            " + array::len((SELECT VALUE id FROM intake_item WHERE content_hash = $item"
-            " AND (decision = NONE OR decision.classification != 'extern') LIMIT 1))"
-            " + array::len((SELECT VALUE id FROM intake_batch"
-            " WHERE file_hashes.*.content_hash CONTAINS $item"
-            " AND (classification != 'extern' OR classification_confirmed_by = NONE) LIMIT 1))",
-            {"h": content_hash, "item": f"sha256:{content_hash}"},
-            self.config,
-        )
+            "RETURN fn::inhoud_intern_bekend($h)", {"h": content_hash}, self.config)
         waarde = rows[0] if isinstance(rows, list) and rows else rows
         return bool(waarde)
 

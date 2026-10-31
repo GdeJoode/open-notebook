@@ -1,0 +1,92 @@
+-- ============================================================================
+-- Migratie 97: importeindpunt na de derde review (F2-14, ADR 0001, 0003).
+--
+-- 1. `inhoud`: één record per inhoudshash (id = de hash), met de strengste
+--    classificatie die de fork voor die inhoud kent. Elke import schrijft het
+--    record in zijn transactie, en elk intern besluit (interne versie, intern
+--    item, interne batch) zet het op `intern`. Twee gelijktijdige transacties
+--    over dezelfde inhoud schrijven zo hetzelfde record: dat wordt een
+--    schrijfconflict, en de fork probeert opnieuw.
+-- 2. `fn::inhoud_intern_bekend`: is de inhoud intern bekend (het record
+--    `inhoud`, een interne bronversie, een wachtrij-item dat intern is of nog
+--    geen besluit heeft, of een batch die niet effectief extern is)? De import
+--    toetst dit binnen haar transactie.
+-- 3. `fn::inhoud_intern` maakt alle versies met de hash intern, niet alleen de
+--    huidige (ADR 0001: de strengste waarde wint; de bron en alles eronder gaan
+--    mee via het event `strengste_classificatie`). Een `beheer_melding` alleen
+--    als een bron daardoor echt van extern naar intern ging.
+-- 4. Een batch die niet meer effectief extern is (of zo wordt aangemaakt),
+--    maakt de inhoud van al haar bestanden intern.
+-- 5. `version_seq` daalt nooit (`>=`: een schrijfactie op de bron die de teller
+--    niet raakt, toetst de ASSERT ook). Geen backfill: de omgeving start met een
+--    lege database (B3).
+-- 6. `beheer_melding`: soort `batchhash_ontbreekt` en veld `intake_batch`.
+--
+-- Idempotent via OVERWRITE. Alleen hele regels commentaar: de migratieloader
+-- plakt de regels aan elkaar.
+-- ============================================================================
+
+-- 1. Eén record per inhoud.
+DEFINE TABLE OVERWRITE inhoud SCHEMAFULL;
+DEFINE FIELD OVERWRITE classification ON inhoud TYPE string
+    ASSERT $value IN ['intern', 'extern'] AND ($before = NONE OR $before = 'extern' OR $value = 'intern');
+DEFINE FIELD OVERWRITE gewijzigd_op ON inhoud TYPE datetime VALUE time::now();
+
+-- 2. Intern bekend?
+DEFINE FUNCTION OVERWRITE fn::inhoud_intern_bekend($hash: string) {
+    LET $item = 'sha256:' + $hash;
+    RETURN (SELECT VALUE classification FROM ONLY type::thing('inhoud', $hash)) = 'intern'
+        OR array::len((SELECT VALUE id FROM source_version
+            WHERE content_hash = $hash AND classification = 'intern' LIMIT 1)) > 0
+        OR array::len((SELECT VALUE id FROM intake_item WHERE content_hash = $item
+            AND (decision = NONE OR decision.classification != 'extern') LIMIT 1)) > 0
+        OR array::len((SELECT VALUE id FROM intake_batch
+            WHERE file_hashes.*.content_hash CONTAINS $item
+            AND (classification != 'extern' OR classification_confirmed_by = NONE) LIMIT 1)) > 0;
+};
+
+-- 3. Strengste wint per inhoud: alle versies met de hash.
+DEFINE FUNCTION OVERWRITE fn::inhoud_intern($hash: any) {
+    UPSERT type::thing('inhoud', $hash) SET classification = 'intern' RETURN NONE;
+    LET $bronnen = array::distinct((SELECT VALUE source FROM source_version WHERE content_hash = $hash));
+    FOR $b IN $bronnen {
+        LET $gewijzigd = (UPDATE $b SET classification = 'intern' WHERE classification = 'extern' RETURN id);
+        IF array::len($gewijzigd) > 0 {
+            CREATE beheer_melding CONTENT {
+                soort: 'inhoud_intern',
+                melding: 'Dezelfde inhoud is intern binnengekomen; bron intern gemaakt',
+                source: $b
+            } RETURN NONE;
+        };
+    };
+    UPDATE source_version SET classification = 'intern'
+        WHERE content_hash = $hash AND classification != 'intern' RETURN NONE;
+    RETURN array::len($bronnen);
+};
+
+-- 4. Een batch die niet (meer) effectief extern is.
+DEFINE FUNCTION OVERWRITE fn::batch_effectief_extern($batch: any) {
+    RETURN $batch != NONE AND $batch.classification = 'extern'
+        AND $batch.classification_confirmed_by != NONE;
+};
+DEFINE EVENT OVERWRITE inhoud_intern_batch ON intake_batch
+    WHEN $event IN ['CREATE', 'UPDATE'] AND !fn::batch_effectief_extern($after)
+        AND ($event = 'CREATE' OR fn::batch_effectief_extern($before)
+            OR $before.file_hashes != $after.file_hashes)
+    THEN {
+        FOR $f IN $after.file_hashes ?? [] {
+            fn::inhoud_intern(string::replace($f.content_hash, 'sha256:', ''));
+        };
+    };
+
+-- 5. Versieteller.
+DEFINE FIELD OVERWRITE version_seq ON source TYPE option<int>
+    ASSERT $value = NONE OR ($value >= 0 AND ($before = NONE OR $value >= $before));
+
+-- 6. Meldingen.
+DEFINE FIELD OVERWRITE soort ON beheer_melding TYPE string READONLY
+    ASSERT $value IN ['handmatige_run_beschermd', 'vastgezet_overgeslagen', 'inhoud_intern',
+        'batchhash_ontbreekt'];
+DEFINE FIELD OVERWRITE intake_batch ON beheer_melding TYPE option<record<intake_batch>> READONLY;
+
+RETURN NONE;

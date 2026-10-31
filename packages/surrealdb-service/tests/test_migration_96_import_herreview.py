@@ -32,7 +32,7 @@ def _migraties_bovenop(live_surrealdb: SurrealDBConfig) -> None:
 
     import surrealdb_service.connection as conn
 
-    for versie in (93, 94, 95, 96):
+    for versie in (93, 94, 95, 96, 97):
         asyncio.run(execute_transaction(_migratie(versie), config=live_surrealdb))
     conn._pool = None
 
@@ -81,6 +81,7 @@ async def test_intern_besluit_over_een_item_maakt_de_bron_intern(live_surrealdb)
 
 async def test_down_en_weer_op(live_surrealdb) -> None:
     for _ in range(2):
+        await execute_transaction(_migratie(97, down=True), config=live_surrealdb)
         await execute_transaction(_migratie(96, down=True), config=live_surrealdb)
     hexhash = uuid.uuid4().hex * 2
     bron = await _externe_bron_met_versie(live_surrealdb, hexhash)
@@ -97,6 +98,7 @@ async def test_down_en_weer_op(live_surrealdb) -> None:
     assert klasse == "extern"
     for _ in range(2):
         await execute_transaction(_migratie(96), config=live_surrealdb)
+        await execute_transaction(_migratie(97), config=live_surrealdb)
     info = await _q(live_surrealdb, "INFO FOR TABLE intake_batch")
     info = info[0] if isinstance(info, list) else info
     assert "idx_intake_batch_file_hash" in info["indexes"]

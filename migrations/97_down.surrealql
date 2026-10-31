@@ -1,0 +1,28 @@
+-- ============================================================================
+-- Migratie 97 terug (F2-14). Functies, event en tabel `inhoud` gaan weg;
+-- `fn::inhoud_intern` krijgt de vorm van migratie 96 terug. `version_seq`,
+-- de soorten van `beheer_melding` en `intake_batch` daarop blijven ruim, zodat
+-- bestaande records geldig blijven. Idempotent.
+-- ============================================================================
+
+REMOVE EVENT IF EXISTS inhoud_intern_batch ON intake_batch;
+REMOVE FUNCTION IF EXISTS fn::batch_effectief_extern;
+REMOVE FUNCTION IF EXISTS fn::inhoud_intern_bekend;
+REMOVE TABLE IF EXISTS inhoud;
+DEFINE FUNCTION OVERWRITE fn::inhoud_intern($hash: any) {
+    LET $geraakt = (SELECT VALUE source FROM source_version WHERE content_hash = $hash
+        AND source.classification = 'extern' AND source.current_version = id);
+    FOR $b IN $geraakt {
+        UPDATE $b SET classification = 'intern' RETURN NONE;
+        CREATE beheer_melding CONTENT {
+            soort: 'inhoud_intern',
+            melding: 'Dezelfde inhoud is intern binnengekomen; bron intern gemaakt',
+            source: $b
+        } RETURN NONE;
+    };
+    RETURN array::len($geraakt);
+};
+DEFINE FIELD OVERWRITE version_seq ON source TYPE option<int>
+    ASSERT $value = NONE OR $value >= 0;
+
+RETURN NONE;

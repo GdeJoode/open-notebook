@@ -81,6 +81,19 @@ class IntakeBatchRepository:
         ))
 
 
+    async def meld_ontbrekende_hash(self, batch_id: str) -> None:
+        """Een ``beheer_melding`` dat een bestand van de batch geen (passende)
+        hash heeft (F2-14, migratie 97)."""
+        rid = eigen_record_id(batch_id, self.TABEL)
+        if rid is None:
+            raise RecordNotFoundError([str(batch_id)])
+        await execute_query("CREATE beheer_melding CONTENT $d RETURN NONE", {"d": {
+            "soort": "batchhash_ontbreekt",
+            "melding": "Bestand van een interne batch zonder passende hash bij de import",
+            "intake_batch": rid,
+        }}, self.config)
+
+
 class IntakeItemRepository:
     TABEL = "intake_item"
 
