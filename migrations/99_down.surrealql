@@ -1,0 +1,75 @@
+-- ============================================================================
+-- Migratie 99 terug (F2-14): de vorm van migratie 98. Idempotent.
+-- ============================================================================
+
+REMOVE FUNCTION IF EXISTS fn::inhoud_groep;
+REMOVE FIELD IF EXISTS kandidaat_h ON inhoud_groep;
+REMOVE FIELD IF EXISTS kandidaat_b ON inhoud_groep;
+REMOVE FIELD IF EXISTS nieuw_h ON inhoud_groep;
+DEFINE FUNCTION OVERWRITE fn::inhoud_intern($hash: any, $vast: bool) {
+    LET $g = type::thing('inhoud_groep', rand::uuid());
+    CREATE $g SET hashes = [$hash], bronnen = [] RETURN NONE;
+    FOR $i IN array::repeat(0, 1000) {
+        LET $st = (SELECT hashes, bronnen FROM ONLY $g);
+        LET $b = array::distinct((SELECT VALUE source FROM source_version WHERE content_hash INSIDE $st.hashes));
+        LET $h = array::union($st.hashes, array::distinct((SELECT VALUE content_hash FROM source_version WHERE $b CONTAINS source)));
+        IF array::len($b) = array::len($st.bronnen) AND array::len($h) = array::len($st.hashes) {
+            BREAK;
+        };
+        UPDATE $g SET hashes = $h, bronnen = $b RETURN NONE;
+    };
+    LET $groep = (SELECT hashes, bronnen FROM ONLY $g);
+    DELETE $g RETURN NONE;
+    FOR $h IN $groep.hashes {
+        IF $vast {
+            UPSERT type::thing('inhoud', $h) SET classification = 'intern' RETURN NONE;
+        } ELSE {
+            UPSERT type::thing('inhoud', $h) SET classification = classification ?? 'extern' RETURN NONE;
+        };
+    };
+    LET $gewijzigd = (UPDATE $groep.bronnen SET classification = 'intern'
+        WHERE classification = 'extern' RETURN VALUE id);
+    FOR $bron IN $gewijzigd {
+        CREATE beheer_melding CONTENT {
+            soort: 'inhoud_intern',
+            melding: 'Dezelfde inhoud is intern binnengekomen; bron intern gemaakt',
+            source: $bron
+        } RETURN NONE;
+    };
+    UPDATE source_version SET classification = 'intern'
+        WHERE $groep.bronnen CONTAINS source AND classification != 'intern' RETURN NONE;
+    RETURN array::len($groep.bronnen);
+};
+
+DEFINE EVENT OVERWRITE inhoud_intern_versie ON source_version
+    WHEN $after.classification = 'intern' AND ($event = 'CREATE' OR $before.classification != 'intern')
+        AND (SELECT VALUE classification FROM ONLY type::thing('inhoud', $after.content_hash)) != 'intern'
+    THEN { fn::inhoud_intern($after.content_hash, true); };
+
+DEFINE EVENT OVERWRITE inhoud_intern_batch ON intake_batch
+    WHEN $event IN ['CREATE', 'UPDATE'] AND !fn::batch_effectief_extern($after)
+        AND ($event = 'CREATE' OR fn::batch_effectief_extern($before)
+            OR $before.classification != $after.classification
+            OR $before.file_hashes != $after.file_hashes)
+    THEN {
+        FOR $f IN $after.file_hashes ?? [] {
+            IF $after.classification = 'intern' {
+                fn::inhoud_intern(string::replace($f.content_hash, 'sha256:', ''), false);
+            } ELSE {
+                UPSERT type::thing('inhoud', string::replace($f.content_hash, 'sha256:', ''))
+                    SET classification = classification ?? 'extern' RETURN NONE;
+            };
+        };
+    };
+DEFINE FUNCTION OVERWRITE fn::inhoud_elders_intern($hashes: array, $bron: any) {
+    LET $items = $hashes.map(|$h| 'sha256:' + $h);
+    RETURN array::concat(array::concat(
+        (SELECT VALUE id FROM source_version WHERE content_hash INSIDE $hashes
+            AND source != $bron AND classification = 'intern'),
+        (SELECT VALUE id FROM intake_item WHERE content_hash INSIDE $items
+            AND (decision = NONE OR decision.classification != 'extern'))),
+        (SELECT VALUE id FROM intake_batch WHERE file_hashes.*.content_hash CONTAINSANY $items
+            AND (classification != 'extern' OR classification_confirmed_by = NONE)));
+};
+
+RETURN NONE;

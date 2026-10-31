@@ -1,0 +1,129 @@
+-- ============================================================================
+-- Migratie 99: importeindpunt na de vijfde review (F2-14, ADR 0001).
+--
+-- 1. Elke interne `source_version` schrijft het record `inhoud:<hash>` op
+--    intern, ook als het dat al is. Zo botst een interne import altijd met een
+--    gelijktijdige herclassificatie naar extern (schrijfconflict). Alleen de
+--    groepsberekening (`fn::inhoud_intern`) is voorwaardelijk: als het record
+--    nog niet intern was.
+-- 2. Een interne of onbevestigde batch laat bestaande bronnen ongemoeid; ze
+--    telt alleen mee in `fn::inhoud_intern_bekend`. De batch schrijft het
+--    record wel aan (zonder de classificatie te wijzigen), voor het
+--    schrijfconflict met een gelijktijdige externe import.
+-- 3. `fn::inhoud_elders_intern` telt items en batches die via een run aan de
+--    bron zelf gebonden zijn niet mee: die blokkeren haar herclassificatie niet.
+-- 4. De groep (`fn::inhoud_groep`) met een frontier: per ronde alleen de nieuwe
+--    hashes en bronnen, met `content_hash = $h` en `source = $s` per stuk, zodat
+--    de indexen gebruikt worden. Na de lus een THROW als de frontier niet leeg
+--    is (grens bereikt); de grens is een parameter (1000 in gebruik).
+--
+-- Idempotent via OVERWRITE. Alleen hele regels commentaar: de migratieloader
+-- plakt de regels aan elkaar.
+-- ============================================================================
+
+-- 4. Tussenstand van de groep.
+DEFINE FIELD OVERWRITE nieuw_h ON inhoud_groep TYPE array<string> DEFAULT [];
+DEFINE FIELD OVERWRITE kandidaat_b ON inhoud_groep TYPE array<record<source>> DEFAULT [];
+DEFINE FIELD OVERWRITE kandidaat_h ON inhoud_groep TYPE array<string> DEFAULT [];
+
+DEFINE FUNCTION OVERWRITE fn::inhoud_groep($hash: string, $grens: int) {
+    LET $g = type::thing('inhoud_groep', rand::uuid());
+    CREATE $g SET hashes = [$hash], bronnen = [], nieuw_h = [$hash] RETURN NONE;
+    FOR $i IN array::repeat(0, $grens) {
+        LET $st = (SELECT nieuw_h FROM ONLY $g);
+        IF array::len($st.nieuw_h) = 0 {
+            BREAK;
+        };
+        FOR $h IN $st.nieuw_h {
+            LET $bs = (SELECT VALUE source FROM source_version WHERE content_hash = $h);
+            UPDATE $g SET kandidaat_b = array::union(kandidaat_b, $bs) RETURN NONE;
+        };
+        LET $st = (SELECT bronnen, kandidaat_b FROM ONLY $g);
+        LET $nb = array::complement($st.kandidaat_b, $st.bronnen);
+        FOR $s IN $nb {
+            LET $hs = (SELECT VALUE content_hash FROM source_version WHERE source = $s);
+            UPDATE $g SET kandidaat_h = array::union(kandidaat_h, $hs) RETURN NONE;
+        };
+        LET $st = (SELECT hashes, kandidaat_h FROM ONLY $g);
+        LET $nh = array::complement($st.kandidaat_h, $st.hashes);
+        UPDATE $g SET bronnen = array::union(bronnen, $nb), hashes = array::union(hashes, $nh),
+            nieuw_h = $nh, kandidaat_b = [], kandidaat_h = [] RETURN NONE;
+    };
+    LET $groep = (SELECT hashes, bronnen, nieuw_h FROM ONLY $g);
+    DELETE $g RETURN NONE;
+    IF array::len($groep.nieuw_h) > 0 {
+        THROW 'inhoud:groep_te_groot';
+    };
+    RETURN { hashes: $groep.hashes, bronnen: $groep.bronnen };
+};
+
+DEFINE FUNCTION OVERWRITE fn::inhoud_intern($hash: any, $vast: bool) {
+    LET $groep = fn::inhoud_groep($hash, 1000);
+    FOR $h IN $groep.hashes {
+        IF $vast {
+            UPSERT type::thing('inhoud', $h) SET classification = 'intern' RETURN NONE;
+        } ELSE {
+            UPSERT type::thing('inhoud', $h) SET classification = classification ?? 'extern' RETURN NONE;
+        };
+    };
+    LET $gewijzigd = (UPDATE $groep.bronnen SET classification = 'intern'
+        WHERE classification = 'extern' RETURN VALUE id);
+    FOR $bron IN $gewijzigd {
+        CREATE beheer_melding CONTENT {
+            soort: 'inhoud_intern',
+            melding: 'Dezelfde inhoud is intern binnengekomen; bron intern gemaakt',
+            source: $bron
+        } RETURN NONE;
+    };
+    FOR $s IN $groep.bronnen {
+        UPDATE source_version SET classification = 'intern'
+            WHERE source = $s AND classification != 'intern' RETURN NONE;
+    };
+    RETURN array::len($groep.bronnen);
+};
+
+-- 1. Elke interne versie schrijft het record; de groep alleen als het nieuw is.
+DEFINE EVENT OVERWRITE inhoud_intern_versie ON source_version
+    WHEN $after.classification = 'intern' AND ($event = 'CREATE' OR $before.classification != 'intern')
+    THEN {
+        LET $al = (SELECT VALUE classification FROM ONLY type::thing('inhoud', $after.content_hash)) = 'intern';
+        UPSERT type::thing('inhoud', $after.content_hash) SET classification = 'intern' RETURN NONE;
+        IF !$al {
+            fn::inhoud_intern($after.content_hash, true);
+        };
+    };
+
+-- 2. Een batch die niet effectief extern is: alleen het record aanschrijven.
+DEFINE EVENT OVERWRITE inhoud_intern_batch ON intake_batch
+    WHEN $event IN ['CREATE', 'UPDATE'] AND !fn::batch_effectief_extern($after)
+        AND ($event = 'CREATE' OR fn::batch_effectief_extern($before)
+            OR $before.classification != $after.classification
+            OR $before.file_hashes != $after.file_hashes)
+    THEN {
+        FOR $f IN $after.file_hashes ?? [] {
+            UPSERT type::thing('inhoud', string::replace($f.content_hash, 'sha256:', ''))
+                SET classification = classification ?? 'extern' RETURN NONE;
+        };
+    };
+
+-- 3. Items en batches die via een run aan de bron zelf gebonden zijn, tellen
+-- niet mee.
+DEFINE FUNCTION OVERWRITE fn::inhoud_elders_intern($hashes: array, $bron: any) {
+    LET $items = $hashes.map(|$h| 'sha256:' + $h);
+    LET $runs = array::distinct(array::concat(
+        (SELECT VALUE created_by_run FROM source_version WHERE source = $bron),
+        (SELECT VALUE current_run FROM source_version WHERE source = $bron)));
+    LET $eigen_items = array::filter((SELECT VALUE intake_item FROM $runs), |$v| $v != NONE);
+    LET $eigen_batches = array::filter((SELECT VALUE intake_batch FROM $runs), |$v| $v != NONE);
+    RETURN array::concat(array::concat(
+        (SELECT VALUE id FROM source_version WHERE content_hash INSIDE $hashes
+            AND source != $bron AND classification = 'intern'),
+        (SELECT VALUE id FROM intake_item WHERE content_hash INSIDE $items
+            AND (decision = NONE OR decision.classification != 'extern')
+            AND !($eigen_items CONTAINS id))),
+        (SELECT VALUE id FROM intake_batch WHERE file_hashes.*.content_hash CONTAINSANY $items
+            AND (classification != 'extern' OR classification_confirmed_by = NONE)
+            AND !($eigen_batches CONTAINS id)));
+};
+
+RETURN NONE;
