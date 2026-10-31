@@ -126,6 +126,11 @@ def _is_schrijfaanroep(node: ast.Call) -> bool:
             return True
         if doel.attr in _SCHRIJVEND and ("chunk" in ontvanger or "source" in ontvanger):
             return True
+        # ``db.create("chunk", ...)``: de tabel als eerste argument.
+        if (doel.attr in _SCHRIJVEND | {"insert_relation"} and node.args
+                and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
+                and node.args[0].value.split(":")[0].strip("`\u27e8\u27e9") in _SCHRIJFTABELLEN):
+            return True
     # ``wijzig_met_rev(..., aanmaken=[("chunk", {...})])``
     for kw in node.keywords:
         if kw.arg == "aanmaken":
@@ -174,26 +179,47 @@ def _ruwe_tekst(node: ast.AST) -> str | None:
     return None
 
 
+_COMMENTAAR = re.compile(r"/\*.*?\*/|--[^\n]*|(?:^|(?<=\s))(?://|#)[^\n]*", re.DOTALL)
+
+
+def zonder_commentaar(sql: str) -> str:
+    """SurrealQL zonder commentaar (``--``, ``//``, ``#``, ``/* */``)."""
+    return _COMMENTAAR.sub(" ", sql)
+
+
+def _schrijft(tekst: str | None) -> bool:
+    return tekst is not None and _SQL.search(zonder_commentaar(tekst)) is not None
+
+
 def schrijfplekken(bron: str) -> set[str]:
     """De functies (``Klasse.methode`` of ``<module>``) die een bron, fragment,
-    structuur of embedding maken."""
+    structuur of embedding maken. Tekst die met ``=`` en ``+=`` aan een naam
+    wordt opgebouwd, telt als één geheel."""
     boom = ast.parse(bron)
     plekken: set[str] = set()
 
-    def loop(node: ast.AST, pad: list[str]) -> None:
+    def loop(node: ast.AST, pad: list[str], opgebouwd: dict) -> None:
         for kind in ast.iter_child_nodes(node):
-            nieuw = pad
+            nieuw, teksten = pad, opgebouwd
             if isinstance(kind, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                nieuw = [*pad, kind.name]
+                nieuw, teksten = [*pad, kind.name], {}
             plek = ".".join(nieuw) or "<module>"
             if isinstance(kind, ast.Call) and _is_schrijfaanroep(kind):
                 plekken.add(plek)
-            tekst = _tekst_van(kind)
-            if tekst is not None and _SQL.search(tekst):
+            if _schrijft(_tekst_van(kind)):
                 plekken.add(plek)
-            loop(kind, nieuw)
+            if (isinstance(kind, ast.Assign) and len(kind.targets) == 1
+                    and isinstance(kind.targets[0], ast.Name)):
+                opgebouwd[kind.targets[0].id] = _tekst_van(kind.value) or ""
+            elif (isinstance(kind, ast.AugAssign) and isinstance(kind.op, ast.Add)
+                    and isinstance(kind.target, ast.Name)):
+                naam = kind.target.id
+                opgebouwd[naam] = opgebouwd.get(naam, "{}") + (_tekst_van(kind.value) or "{}")
+                if _schrijft(opgebouwd[naam]):
+                    plekken.add(plek)
+            loop(kind, nieuw, teksten)
 
-    loop(boom, [])
+    loop(boom, [], {})
     return plekken
 
 
@@ -211,23 +237,43 @@ def _alle_plekken() -> set[tuple[str, str]]:
 MIGRATIES_TOEGESTAAN = {
     ("migrations/91.surrealql", "EVENT chunk_extern_bijhouden"):
         "de zoekkopie van externe fragmenten (F2-05), volgt ``chunk``",
+    ("migrations/91.surrealql", "<hoogste niveau>"):
+        "vult ``chunk_extern`` voor bestaande externe fragmenten (F2-05)",
+    ("migrations/98.surrealql", "FUNCTION fn::inhoud_intern"):
+        "``CREATE $g``: het tijdelijke record ``inhoud_groep`` (F2-14)",
 }
 
+#: Begin van een deel van een migratie: elke ``DEFINE`` (ook ingesprongen), en
+#: elk ander statement in kolom 0.
+_DEEL = re.compile(
+    r"^(?:\s*DEFINE\b|(?:REMOVE|RETURN|LET|UPDATE|CREATE|INSERT|UPSERT|DELETE|RELATE|FOR|IF"
+    r"|BEGIN|COMMIT|USE|INFO|SELECT|THROW)\b)", re.IGNORECASE | re.MULTILINE)
 _DEFINITIE = re.compile(
-    r"^DEFINE\s+(FUNCTION|EVENT)\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\S+)",
-    re.IGNORECASE | re.MULTILINE)
+    r"^\s*DEFINE\s+(\w+)\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\S+)(?:\s+ON\s+(?:TABLE\s+)?(\w+))?",
+    re.IGNORECASE)
 
 
 def migratieplekken(tekst: str) -> set[str]:
-    """``FUNCTION fn::naam`` of ``EVENT naam`` die een bron of fragment maken."""
+    """De delen van een migratie die een bron of fragment maken: ``FUNCTION
+    fn::naam``, ``EVENT naam``, ``FIELD naam ON tabel`` (DEFAULT, VALUE) of
+    ``<hoogste niveau>`` voor een los statement. Het hele bestand telt, zonder
+    commentaar."""
+    tekst = zonder_commentaar(tekst)
     uit = set()
-    treffers = list(_DEFINITIE.finditer(tekst))
-    for i, m in enumerate(treffers):
-        einde = treffers[i + 1].start() if i + 1 < len(treffers) else len(tekst)
-        volgende = re.search(r"^(?:DEFINE|REMOVE|RETURN)\b", tekst[m.end():einde], re.MULTILINE)
-        body = tekst[m.end(): m.end() + volgende.start()] if volgende else tekst[m.end():einde]
-        if _SQL.search(body):
+    starts = [m.start() for m in _DEEL.finditer(tekst)]
+    for i, start in enumerate(starts):
+        deel = tekst[start: starts[i + 1] if i + 1 < len(starts) else len(tekst)]
+        if not _SQL.search(deel):
+            continue
+        m = _DEFINITIE.match(deel)
+        if m is None:
+            uit.add("<hoogste niveau>")
+        elif m.group(1).upper() == "FIELD":
+            uit.add(f"FIELD {m.group(2)} ON {m.group(3)}")
+        else:
             uit.add(f"{m.group(1).upper()} {m.group(2).split('(')[0]}")
+    if starts and _SQL.search(tekst[: starts[0]]):
+        uit.add("<hoogste niveau>")
     return uit
 
 
@@ -252,6 +298,13 @@ def test_de_test_vindt_een_schrijvende_functie_in_een_migratie() -> None:
              "DEFINE EVENT OVERWRITE e ON t WHEN true THEN {\n    CREATE \u27e8chunk\u27e9 SET a = 1;\n};\n"
              "DEFINE FUNCTION OVERWRITE fn::lezen() {\n    RETURN SELECT * FROM chunk;\n};\n")
     assert migratieplekken(tekst) == {"FUNCTION fn::stil", "EVENT e"}
+    tekst = ("DEFINE FIELD OVERWRITE x ON t VALUE (CREATE chunk SET a = 1);\n"
+             "    DEFINE EVENT OVERWRITE ingesprongen ON t THEN { INSERT INTO source $x };\n"
+             "CREATE source_version SET a = 1;\n"
+             "-- CREATE chunk in commentaar telt niet\n"
+             "DEFINE FUNCTION OVERWRITE fn::a() {\n    RETURN 1;\n};\n"
+             "RETURN NONE;\n")
+    assert migratieplekken(tekst) == {"FIELD x ON t", "EVENT ingesprongen", "<hoogste niveau>"}
 
 
 def test_alleen_toegestane_plekken_schrijven_bronnen_en_fragmenten() -> None:
@@ -312,6 +365,14 @@ def test_importeindpunt_is_de_route_naar_de_importdienst() -> None:
     ("def x(t):\n    return ' '.join(['CREATE', t, 'CONTENT $d'])", {"x"}),
     ("Q = 'CREATE \u27e8chunk\u27e9 CONTENT $d'", {"<module>"}),
     ("Q = 'INSERT INTO `chunk` $x'", {"<module>"}),
+    # Vierde review: tabel als argument, commentaar, +=.
+    ("async def y(db):\n    await db.create('chunk', {})", {"y"}),
+    ("async def z(db):\n    await db.insert_relation('derived_from', [])", {"z"}),
+    ("async def za(db):\n    await db.upsert('source:1', {})", {"za"}),
+    ("Q = 'CREATE /* niets */ chunk CONTENT $d'", {"<module>"}),
+    ("Q = 'CREATE -- niets\\n chunk CONTENT $d'", {"<module>"}),
+    ("def zb():\n    q = 'CREATE '\n    q += 'chunk CONTENT $d'\n    return q", {"zb"}),
+    ("async def zc(db):\n    await db.create('notebook', {})", set()),
     ("def u(a, b):\n    return wijzig_met_rev([], door='x', aanmaken=[('classification_log', {})])",
      set()),
 ])
