@@ -1,7 +1,7 @@
 # ADR 0010: Eén inname via het importeindpunt
 
 - **Status:** besloten
-- **Datum:** 2026-10-29
+- **Datum:** 2026-10-29; 2026-10-31 uitwerking in F2-14
 - **Raakt FO-paragraaf:** 4, 5, 11 (bouwstenen), 13.2 punt 1, 14 (inname en Open Notebook)
 - **Lost op:** verschilanalyse conflict 9, open vraag 3
 - **Gewijzigd door:** ADR 0019 (classificatie en pipelinestart per innameroute)
@@ -96,3 +96,36 @@ Optie 2.
   - een routetest dat geen route behalve `/api/v1/import` een `source` of `chunk` kan aanmaken. De test zoekt in de router- en servicecode naar aanroepen van de schrijfmethoden.
 - **Interface:** de upload, de Zotero-koppeling en de mapbewaker in de interface werken niet meer (ADR 0016).
 - **ARCHITECTURE.md:** paragraaf 14 (Track PL) wordt herschreven.
+
+## Uitwerking in F2-14 (31-10)
+
+De bouw (`migrations/94.surrealql`, `ImportService`, `InnameBinding`) werkt het voorstel hierboven als volgt uit, of wijkt ervan af. De classificatie van regel, batch en item volgt ADR 0019 en 0020, "Uitwerking in F2-13".
+
+**Besloten** (review F2-14, 31-10; in uitvoering bij de bouwer):
+
+- **Recht.** `POST /api/v1/import` is alleen voor `pijplijn`. Een beheerder corrigeert via de handmatige run (ADR 0003, "Uitwerking in F2-06").
+- **Batch en item.** Het verzoek heeft `intake_batch_id` en `intake_item_id`. De run legt `intake_batch` en `intake_item` vast.
+- **Binding.**
+  - De locatie van de bron moet onder `regel.location` vallen: bij een URL hetzelfde schema, dezelfde host en een padprefix; bij een pad `ligt_onder`.
+  - Een bestand van een batch en een item worden gebonden aan een hash die de fork zelf berekent.
+  - Regel, batch en item van het verzoek moeten die van de run zijn (409 `niet_gebonden`).
+- **Extern.** Een import is alleen `extern` als alle vier gelden:
+  - de regel, de batch of het item is extern;
+  - de aanroeper geeft `extern` op;
+  - de poortwachter zegt `extern`, zonder interne kenmerken;
+  - dezelfde inhoud (hash) is in de fork niet al bekend als intern of onbeslist.
+
+  In alle andere gevallen geldt `intern`.
+- **Markering van het blok** (ADR 0004). Na normalisatie (NFKC, HTML-entiteiten) herkent een reguliere expressie het gegenereerde blok in alle tekstvelden van het verzoek en in de aaneengeschakelde tekst van de fragmenten.
+  - Restrisico: in een gecomprimeerde PDF-stroom is de markering niet te zien.
+- **Structuur.**
+  - `doc_node` wordt in dezelfde transactie gebouwd uit de fragmenten met hun sectiepad.
+  - `structure.content` van Docling wordt alleen op de markering gecontroleerd en niet ingelezen. Dat wijkt af van plan van aanpak §5.1 ("wordt opgeslagen als `doc_node`").
+- **`feed_item_id`** loopt via `source.external_id`. `external_id` is uniek over alle regels, zodat twee feeds met dezelfde GUID elkaar met 409 blokkeren. Dat is veilig, maar beperkt.
+- **Origineel.**
+  - De fork hasht het origineel zelf uit het bronarchief (`SIGNAAL_BRONARCHIEF`, alleen-lezen) en kopieert het naar een eigen archief, met de hash als naam (`SIGNAAL_FORK_ARCHIEF`).
+  - `source_version.original` verwijst naar die kopie. De koppelingen staan in plan van aanpak §4 en F2-10.
+
+**Open punt**
+
+- **Herverwerking van een bekende versie.** Een nieuwe run op een bestaande bronversie (trigger `herverwerking`, ADR 0003) kan nog niet via de import: een bekende hash geeft `ongewijzigd` en schrijft geen fragmenten. Geen taak in het plan lost dit nu op; F2-31 (toets herhaalbaarheid) heeft het nodig. Te beslissen: in welke taak, vóór F2-31.

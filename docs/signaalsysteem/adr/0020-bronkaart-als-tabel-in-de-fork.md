@@ -1,7 +1,7 @@
 # ADR 0020: De bronkaart als tabel in de fork, alleen via de API
 
 - **Status:** besloten (Geert, 2026-10-30)
-- **Datum:** 2026-10-30; bijgewerkt 2026-10-30 na de review (rechten, leesrecht, locatie); 2026-10-31 uitwerking in F2-13
+- **Datum:** 2026-10-30; bijgewerkt 2026-10-30 na de review (rechten, leesrecht, locatie); 2026-10-31 uitwerking in F2-13 en F2-14
 - **Raakt FO-paragraaf:** 5 (bronkaart, bronkaartregel), 6 (regels eerst), 11 (planning en routes in Langflow)
 - **Lost op:** plan van aanpak §8, besluitpunt B2 en aanname A4
 
@@ -65,3 +65,11 @@ De bouw (`migrations/93.surrealql`, `SourceMapService`) wijkt op de volgende pun
   - **Restrisico.** `subst` en junctions zijn vanuit de fork niet te zien. `realpath` lost koppelingen op in de container van de fork, niet in die van Langflow. De echte grens is wat Compose koppelt (F2-10).
 - Restrisico (herreview F2-13): de database dwingt de intrekking van een bevestiging bij een gewijzigde locatie niet af; alleen de API van de fork doet dat. Dat is aanvaard zolang alleen de fork schrijft (B2). URL-locaties: alleen `http` en `https`; loopback-, private en link-local adressen, `host.docker.internal` en hosts zonder punt worden geweigerd tenzij ze op `SIGNAAL_INNAME_URLS` staan, zodat een externe regel niet via een lokale dienst (zoals een REST-plug-in van Obsidian) afgeleide tekst uit de vault binnenhaalt.
 - Restrisico DNS (derde review F2-13): een openbare naam die naar een lokaal adres wijst (zoals `127.0.0.1.nip.io`, `localtest.me`) is zonder resolve niet te zien, en een resolve helpt niet tegen DNS-rebinding. De echte grens is het netwerk: de container `ophalen` heeft alleen uitgaand internet en geen route naar de host of naar interne netwerken (F2-10, F4-13).
+
+## Uitwerking in F2-14 (31-10)
+
+Zie ADR 0010, "Uitwerking in F2-14".
+
+- **Restrisico hash van een watchfolder-item.** De fork kan de watchfolder niet lezen. De hash van een wachtrij-item uit de watchfolder komt daarom van de aanroeper (`pijplijn`); de fork kan niet nagaan dat het bestand in de watchfolder die hash heeft.
+  - Beperking: de import toetst de hash van het origineel, die de fork zelf berekent uit het bronarchief, aan de hash van het item. Wat wordt geïmporteerd, heeft dus de hash van het item; de koppeling tussen het item en het bestand in de watchfolder rust op Langflow.
+  - Alternatief: de watchfolder alleen-lezen koppelen aan `open-notebook`, zodat de fork de hash bij het aanmelden zelf berekent. Opgenomen als optie in F2-10.
