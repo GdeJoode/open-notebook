@@ -129,3 +129,4 @@ De bouw (`migrations/94.surrealql`, `ImportService`, `InnameBinding`) werkt het 
 **Open punt**
 
 - **Herverwerking van een bekende versie.** Een nieuwe run op een bestaande bronversie (trigger `herverwerking`, ADR 0003) kan nog niet via de import: een bekende hash geeft `ongewijzigd` en schrijft geen fragmenten. Geen taak in het plan lost dit nu op; F2-31 (toets herhaalbaarheid) heeft het nodig. Te beslissen: in welke taak, vóór F2-31.
+- **Batchbestanden hashen in de innamemap (herreview F2-14, 31-10).** De fork hasht een batchbestand op zijn pad in de innamemap bij aanmaken, wijzigen en bevestigen, omdat het dan nog niet in het bronarchief staat. Daarvoor koppelt `open-notebook` de innamemappen (`SIGNAAL_INNAME_PADEN`) alleen-lezen (F2-10). De import toetst het origineel uit het bronarchief alsnog aan die hash. Of de watchfolder op dezelfde manier wordt gekoppeld, is B29.
