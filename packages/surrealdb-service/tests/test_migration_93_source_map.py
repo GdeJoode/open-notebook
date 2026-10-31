@@ -148,10 +148,17 @@ async def test_externe_regel_niet_naar_watchfolder(live_surrealdb, sql) -> None:
         classification="extern", classification_confirmed_by="Beheerder Test",
         classification_confirmed_at=datetime.now(timezone.utc))})
     rid = ensure_record_id(str(rij["id"]))
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="classification"):
         await _q(live_surrealdb, sql, {"id": rid})
     [terug] = await _q(live_surrealdb, "SELECT route_type, classification FROM $id", {"id": rid})
     assert (terug["route_type"], terug["classification"]) == ("api", "extern")
+
+    # Tegenproef: dezelfde UPDATE op een interne regel slaagt.
+    [intern] = await _q(live_surrealdb, "CREATE source_map_rule CONTENT $d RETURN id", {"d": _regel()})
+    iid = ensure_record_id(str(intern["id"]))
+    await _q(live_surrealdb, sql, {"id": iid})
+    [terug] = await _q(live_surrealdb, "SELECT route_type, classification FROM $id", {"id": iid})
+    assert (terug["route_type"], terug["classification"]) == ("watchfolder", "intern")
 
 
 async def test_batch_standaard_intern(live_surrealdb) -> None:

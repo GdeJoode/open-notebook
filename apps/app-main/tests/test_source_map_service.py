@@ -280,6 +280,7 @@ async def test_bevestigen_van_bevestigde_regel_geeft_409(env, app) -> None:
         pad = f"/api/v1/source-map-rules/{regel['id']}"
         r = await c.post(f"{pad}/confirm", json={"rev": regel["rev"]})
         assert r.status_code == 409
+        assert r.json()["detail"]["code"] == "al_bevestigd"
         # Ook met een beschrijvende wijziging: niets ingetrokken, dus al bevestigd.
         r = await c.patch(pad, json={"rev": regel["rev"], "name": "x", "confirm": True})
         assert r.status_code == 409
@@ -350,6 +351,7 @@ async def test_verouderde_rev_geeft_409(env, app) -> None:
         assert (await c.patch(pad, json={"rev": 0, "name": "Eerste"})).status_code == 200
         r = await c.patch(pad, json={"rev": 0, "name": "Tweede"})
         assert r.status_code == 409
+        assert r.json()["detail"]["code"] == "verouderde_rev"
         assert (await c.post(f"{pad}/confirm", json={"rev": 0})).status_code == 409
         assert (await c.get(pad)).json()["name"] == "Eerste"
         assert await _log("source_map_rule", regel["id"]) == []
@@ -465,6 +467,10 @@ async def test_toegestane_locaties(locatie) -> None:
     "http://[fc00::1]/api", "http://ollama:11434/api", "http://open-notebook/api",
     "http://api.localhost/x", "smb://server/share/x.pdf", "ftp://example.org/x.pdf",
     "ws://example.org/x", "http:///geen-host",
+    "http://１２７.０.０.１/", "http://①②⑦.0.0.1/", "http://a.localhost。/",
+    "http://100.64.0.1/api", "http://100.127.255.254/api", "http://printer.local/x",
+    "http://nas.lan/x", "http://router.home.arpa/x", "http://db.internal/x",
+    "http://224.0.0.1/x", "http://exämple.org/x",
 ])
 async def test_url_naar_interne_host_of_ander_schema_geweigerd(locatie) -> None:
     with pytest.raises(VerbodenLocatieError):
@@ -537,6 +543,26 @@ async def test_batch_bestanden_wijzigen_en_bevestigen(env, app, mappen) -> None:
         r = await c.post(f"/api/v1/intake/batches/{batch['id']}/confirm",
                          json={"rev": r.json()["rev"]})
         assert r.status_code == 409
+
+
+async def test_gelijktijdige_besluiten_over_een_item(env, app, mappen) -> None:
+    import asyncio
+
+    env["ctx"] = PIJPLIJN
+    async with _client(app) as c:
+        item = (await c.post("/api/v1/intake/items", json={
+            "origin": "watchfolder", "path": str(mappen[2] / "inbox" / "gelijk.pdf"),
+            "content_hash": "sha256:" + "e" * 64})).json()
+        env["ctx"] = BEHEERDER
+        pad = f"/api/v1/intake/items/{item['id']}/decision"
+        een, twee = await asyncio.gather(
+            c.post(pad, json={"rev": item["rev"], "route": "inname_pdf", "classification": "extern"}),
+            c.post(pad, json={"rev": item["rev"], "route": "inname_pdf", "classification": "intern"}),
+        )
+        assert sorted([een.status_code, twee.status_code]) == [200, 409]
+        winnaar = een if een.status_code == 200 else twee
+        [log] = await _log("intake_item", item["id"])
+        assert log["to_classification"] == winnaar.json()["decision"]["classification"]
 
 
 async def test_batch_alleen_bij_een_regel_voor_bulkupload(env, app, mappen) -> None:

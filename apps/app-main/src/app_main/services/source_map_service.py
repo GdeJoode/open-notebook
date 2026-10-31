@@ -132,13 +132,20 @@ def _in_een_van(kind: str, mappen: Iterable[str]) -> bool:
 _GETAL = re.compile(r"^(0x[0-9a-f]+|[0-9]+)$")
 
 
+#: Achtervoegsels van namen die alleen binnen een eigen netwerk bestaan.
+_INTERNE_ACHTERVOEGSELS = (".localhost", ".internal", ".local", ".lan", ".home.arpa")
+
+
 def is_interne_host(host: str) -> bool:
     """Wijst ``host`` (kleine letters, zonder punt aan het eind) naar de eigen
-    machine of het eigen netwerk? Loopback, ``0.0.0.0``, private en
-    link-local adressen (IPv4 en IPv6, ook IPv4 in IPv6), ``localhost``,
-    ``host.docker.internal`` en elke naam zonder punt (een containernaam of
-    een getal als ``2130706433``). Een naam van alleen getallen die geen geldig
-    adres is (``127.1``, ``0x7f.1``), telt ook als intern.
+    machine of het eigen netwerk? Elk IP-adres dat niet globaal is
+    (``not is_global``: loopback, ``0.0.0.0``, private, link-local, CGNAT
+    ``100.64.0.0/10``, gereserveerd; IPv4 in IPv6 als IPv4) en multicast;
+    ``localhost``, ``host.docker.internal``, namen op :data:`_INTERNE_ACHTERVOEGSELS`
+    en elke naam zonder punt (een containernaam of een getal als
+    ``2130706433``). Een naam van alleen getallen die geen geldig adres is
+    (``127.1``, ``0x7f.1``), telt ook als intern. Een niet-ASCII-host weigert
+    :class:`Locatiecontrole` al eerder (Unicode-cijfers, ``。``).
     """
     host = host.strip("[]")
     try:
@@ -148,11 +155,10 @@ def is_interne_host(host: str) -> bool:
     if ip is not None:
         if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
             ip = ip.ipv4_mapped
-        return (ip.is_loopback or ip.is_private or ip.is_link_local
-                or ip.is_unspecified or ip.is_reserved or ip.is_multicast)
+        return not ip.is_global or ip.is_multicast
     if "." not in host or host in ("localhost", "host.docker.internal"):
         return True
-    if host.endswith((".localhost", ".internal")):
+    if host.endswith(_INTERNE_ACHTERVOEGSELS):
         return True
     return all(_GETAL.match(deel) for deel in host.split("."))
 
@@ -207,6 +213,10 @@ class Locatiecontrole:
                 raise VerbodenLocatieError("ongeldig adres") from None
             if not host:
                 raise VerbodenLocatieError("adres zonder host")
+            if not host.isascii():
+                # Unicode-cijfers of -punten (１２７, ①, 。) worden elders
+                # genormaliseerd tot een intern adres; zo'n host nooit.
+                raise VerbodenLocatieError("host niet in ASCII")
             if host in self.toegestane_hosts:
                 # Expliciet toegestaan; ook dan nooit een pad in de vault.
                 pad = unquote(urlsplit(tekst).path)

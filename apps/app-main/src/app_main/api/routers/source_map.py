@@ -53,9 +53,14 @@ def _opslag(body: Any, velden: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def fout_naar_http(e: Exception) -> HTTPException:
-    """Vaste meldingen, zonder tekst van de uitzondering (ADR 0002 C)."""
+    """Vaste meldingen, zonder tekst van de uitzondering (ADR 0002 C).
+
+    Een 409 heeft een vaste ``code``: ``verouderde_rev``, ``al_bevestigd`` of
+    ``verkeerde_status``.
+    """
     if isinstance(e, RevConflictError):
-        return HTTPException(status_code=409, detail="Intussen gewijzigd; laad opnieuw")
+        return HTTPException(status_code=409, detail={
+            "code": "verouderde_rev", "melding": "Intussen gewijzigd; laad opnieuw"})
     if isinstance(e, RecordNotFoundError):
         return HTTPException(status_code=404, detail="Niet gevonden")
     if isinstance(e, VerbodenLocatieError):
@@ -63,9 +68,11 @@ def fout_naar_http(e: Exception) -> HTTPException:
     if isinstance(e, PermissionError):
         return HTTPException(status_code=403, detail="Onvoldoende recht")
     if isinstance(e, AlBevestigdError):
-        return HTTPException(status_code=409, detail="Al extern bevestigd")
+        return HTTPException(status_code=409, detail={
+            "code": "al_bevestigd", "melding": "Al extern bevestigd"})
     if isinstance(e, IntakeConflictError):
-        return HTTPException(status_code=409, detail="Status staat dit niet toe")
+        return HTTPException(status_code=409, detail={
+            "code": "verkeerde_status", "melding": "Status staat dit niet toe"})
     return HTTPException(status_code=500, detail="Interne fout")
 
 
