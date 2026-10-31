@@ -46,6 +46,9 @@ class ProcessingRunRepository:
         error: Optional[str] = None,
         log: Optional[List[Dict[str, Any]]] = None,
         actor: Optional[str] = None,
+        created_by_key: Optional[str] = None,
+        intake_batch: Optional[str] = None,
+        intake_item: Optional[str] = None,
     ) -> ProcessingRun:
         data: Dict[str, Any] = {
             "trigger": trigger,
@@ -60,6 +63,10 @@ class ProcessingRunRepository:
             "status": status,
             "error": error,
             "log": log or [],
+            # Binding van de run (F2-14, migratie 94).
+            "created_by_key": created_by_key,
+            "intake_batch": ensure_record_id(intake_batch) if intake_batch else None,
+            "intake_item": ensure_record_id(intake_item) if intake_item else None,
         }
         if status != "bezig":
             data["ended_at"] = _nu()
@@ -124,6 +131,23 @@ class ProcessingRunRepository:
         )
         rij = _rij(rows)
         return ProcessingRun(**rij) if rij else None
+
+    async def sluit_verlopen(self, grens: datetime, melding: str) -> int:
+        """Sluit elke run die sinds vóór ``grens`` ``bezig`` staat als ``mislukt``.
+
+        Een run die door een afgebroken proces blijft lopen, kan anders blijven
+        schrijven (ADR 0003, restrisico F2-04). Geeft het aantal gesloten runs.
+        """
+        rows = await execute_query(
+            "UPDATE processing_run SET status = 'mislukt', ended_at = time::now(),"
+            " error = $melding, log = array::concat(log, [$regel])"
+            " WHERE status = 'bezig' AND started_at < $grens RETURN id",
+            {"grens": grens, "melding": melding,
+             "regel": {"at": _nu(), "step": "bewaking", "status": "mislukt",
+                       "message": melding}},
+            self.config,
+        )
+        return len(rows or [])
 
     async def has_new_content(self, run_id: str) -> bool:
         """Maakte de run een bronversie, fragment of ``doc_node``?"""

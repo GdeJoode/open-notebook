@@ -1,0 +1,19 @@
+-- ============================================================================
+-- Migratie 94 terug: binding van run en bron (F2-14).
+--
+-- De indexen gaan weg. De velden blijven als optioneel veld bestaan, zonder
+-- READONLY en zonder ASSERT, net als de herkomstvelden in `90_down`: een
+-- terugdraaiactie wist geen herkomst (harde eis 2).
+-- Idempotent: IF EXISTS en OVERWRITE.
+-- ============================================================================
+
+REMOVE INDEX IF EXISTS idx_source_external_id ON source;
+REMOVE INDEX IF EXISTS idx_processing_run_intake_item ON processing_run;
+
+DEFINE FIELD OVERWRITE created_by_key ON processing_run TYPE option<string>;
+DEFINE FIELD OVERWRITE intake_batch ON processing_run TYPE option<record<intake_batch>>;
+DEFINE FIELD OVERWRITE intake_item ON processing_run TYPE option<record<intake_item>>;
+DEFINE FIELD OVERWRITE external_id ON source TYPE option<string>;
+DEFINE FIELD OVERWRITE source_map_rule ON source TYPE option<record<source_map_rule>>;
+
+RETURN NONE;

@@ -1,0 +1,34 @@
+-- ============================================================================
+-- Migratie 94: binding van run en bron voor het importeindpunt (F2-14, ADR
+-- 0010, 0003 "Uitwerking in F2-04", 0019 en 0020 "Uitwerking in F2-13").
+--
+-- 1. `processing_run` legt vast wie de run aanmaakte (`created_by_key`, het
+--    id van de sleutel) en, waar dat van toepassing is, de batch of het
+--    wachtrij-item van de run. Alleen de aanmaker importeert in de run en
+--    sluit hem af; een run zonder aanmaker (bijvoorbeeld van
+--    `SourceProcessor`) kan niet importeren.
+-- 2. `source` krijgt `external_id` (uniek; de sleutel waarmee een import een
+--    bestaande bron terugvindt) en `source_map_rule` (de regel waarmee de bron
+--    is binnengekomen). Beide liggen vast na het aanmaken: een latere import
+--    van dezelfde bron moet via dezelfde regel lopen, zodat de classificatie
+--    uit de regel van de werkelijke bron komt.
+--
+-- Lege database (B3): geen omzetting van bestaande records. Idempotent via
+-- OVERWRITE. Alleen hele regels commentaar: de migratieloader plakt de regels
+-- aan elkaar.
+-- ============================================================================
+
+-- 1. De run.
+DEFINE FIELD OVERWRITE created_by_key ON processing_run TYPE option<string> READONLY
+    ASSERT $value = NONE OR string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE intake_batch ON processing_run TYPE option<record<intake_batch>> READONLY;
+DEFINE FIELD OVERWRITE intake_item ON processing_run TYPE option<record<intake_item>> READONLY;
+DEFINE INDEX OVERWRITE idx_processing_run_intake_item ON processing_run FIELDS intake_item;
+
+-- 2. De bron.
+DEFINE FIELD OVERWRITE external_id ON source TYPE option<string> READONLY
+    ASSERT $value = NONE OR string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE source_map_rule ON source TYPE option<record<source_map_rule>> READONLY;
+DEFINE INDEX OVERWRITE idx_source_external_id ON source FIELDS external_id UNIQUE;
+
+RETURN NONE;

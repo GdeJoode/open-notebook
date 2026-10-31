@@ -64,6 +64,12 @@ class ProcessingRun(ObjectModel):
     source_map_rule_rev: Optional[int] = None
     #: Wie de run startte; verplicht bij ``handmatig`` (migratie 92, ADR 0005).
     actor: Optional[str] = None
+    #: De sleutel die de run aanmaakte via ``POST /api/v1/runs`` (F2-14,
+    #: migratie 94). Alleen die importeert in de run en sluit hem af.
+    created_by_key: Optional[str] = None
+    #: De batch of het wachtrij-item waaraan de run gebonden is (F2-14).
+    intake_batch: Optional[str] = None
+    intake_item: Optional[str] = None
 
     @property
     def afgesloten(self) -> bool:

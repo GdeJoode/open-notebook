@@ -206,6 +206,10 @@ class Source(ObjectModel):
         None, description="intern of extern; standaard intern (F2-03)"
     )
     current_version: Optional[str] = Field(None, description="De nieuwste bronversie (F2-04)")
+    # Binding van de bron (F2-14, migratie 94): de sleutel waarmee een import
+    # de bron terugvindt, en de bronkaartregel waarmee ze binnenkwam.
+    external_id: Optional[str] = Field(None, description="Extern id van de bron (F2-14)")
+    source_map_rule: Optional[str] = Field(None, description="Bronkaartregel van de bron (F2-14)")
 
     @field_validator("topics", mode="before")
     @classmethod
