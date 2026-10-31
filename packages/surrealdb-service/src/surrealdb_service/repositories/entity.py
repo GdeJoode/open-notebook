@@ -22,12 +22,16 @@ from surrealdb_service.connection import (
     get_pool,
 )
 from surrealdb_service.repositories.base import (
+    TOEGESTAAN_OP_VASTGEZET,
     RecordNotFoundError,
     RevConflictError,
     RevWijziging,
     bewaak_vastgezet,
     wijzig_met_rev,
 )
+
+#: How often ``upsert_entity`` reads again when the row changed meanwhile.
+_UPSERT_POGINGEN = 3
 
 
 def _union_preserve_order(
@@ -333,109 +337,32 @@ class EntityRepository:
         # `_assert_identity_column`. Once per process per database.
         await _assert_identity_column(self.config)
 
-        try:
-            existing_rows = await execute_query(
-                "SELECT * FROM entity "
-                "WHERE name_key = $name_key "
-                "AND entity_type = $entity_type LIMIT 1",
-                {
-                    "name_key": name_key,
-                    "entity_type": entity.entity_type,
-                },
-                self.config,
-            )
-        except Exception as e:
-            logger.exception(
-                f"upsert_entity lookup failed for "
-                f"'{entity.canonical_name}' ({entity.entity_type}): {e}"
-            )
-            raise
-
-        if existing_rows:
-            existing = existing_rows[0]
-            merged_confidence = max(
-                float(existing.get("confidence", 0.0) or 0.0),
-                entity.confidence,
-            )
-            merged_sources = _union_preserve_order(
-                existing.get("source_documents") or [],
-                list(entity.source_documents),
-            )
-            merged_type_tags = _union_preserve_order(
-                existing.get("type_tags") or [],
-                list(entity.type_tags),
-            )
-            merged_provenance = _union_preserve_order(
-                existing.get("provenance_chain") or [],
-                list(entity.provenance_chain),
-            )
-            merged_properties: Dict[str, Any] = dict(
-                existing.get("properties") or {}
-            )
-            # PC.3: `grounding` merges by SOURCE ID; every other key overlays.
-            #
-            # It maps `source_id -> {chunk_id, grounding, context}`, one entry per
-            # document a mention came from. Under the plain overlay below, the
-            # second document to mention an entity would replace where the first
-            # one found it — and with cross-document resolution on that is the
-            # normal case, not an edge one. The union is what lets a curator ask
-            # "why is this one entity" and get an answer per source.
-            incoming_grounding = entity.properties.get("grounding")
-            if isinstance(incoming_grounding, dict):
-                merged_grounding = dict(merged_properties.get("grounding") or {})
-                merged_grounding.update(incoming_grounding)
-            else:
-                merged_grounding = None
-
-            merged_properties.update(entity.properties)
-            if merged_grounding:
-                merged_properties["grounding"] = merged_grounding
-
-            update_payload = {
-                "id": existing["id"],
-                "confidence": merged_confidence,
-                "source_documents": merged_sources,
-                "properties": merged_properties,
-                "type_tags": merged_type_tags,
-                "primary_type": entity.primary_type
-                if entity.primary_type is not None
-                else existing.get("primary_type"),
-                "provenance_chain": merged_provenance,
-                # manual_override (migration 59) is OPERATOR state, never
-                # extraction state: re-upserting an entity from a new document
-                # must NOT clear an operator's pin. Carry the existing value
-                # through verbatim (the triage decision is the only writer of
-                # this flag, via ``set_status``). NULL-coalesce so a pre-59 row
-                # lacking the column reads as False.
-                "manual_override": bool(existing.get("manual_override") or False),
-            }
-            if update_payload["manual_override"]:
-                update_payload = await self._alleen_vermeldingen(
-                    existing, update_payload, merged_grounding, run_id
-                )
+        # F2-06: read, guard and write against `rev`; a write that lands in
+        # between (a pin, another upsert) makes this read again.
+        for _ in range(_UPSERT_POGINGEN):
             try:
-                await execute_query(
-                    """
-                    UPDATE type::thing($id) SET
-                        confidence = $confidence,
-                        source_documents = $source_documents,
-                        properties = $properties,
-                        type_tags = $type_tags,
-                        primary_type = $primary_type,
-                        provenance_chain = $provenance_chain,
-                        manual_override = $manual_override,
-                        updated_at = time::now();
-                    """,
-                    update_payload,
+                existing_rows = await execute_query(
+                    "SELECT * FROM entity "
+                    "WHERE name_key = $name_key "
+                    "AND entity_type = $entity_type LIMIT 1",
+                    {
+                        "name_key": name_key,
+                        "entity_type": entity.entity_type,
+                    },
                     self.config,
                 )
             except Exception as e:
                 logger.exception(
-                    f"upsert_entity update failed for "
+                    f"upsert_entity lookup failed for "
                     f"'{entity.canonical_name}' ({entity.entity_type}): {e}"
                 )
                 raise
-            return str(existing["id"])
+            if not existing_rows:
+                break
+            if await self._werk_bestaande_bij(existing_rows[0], entity, run_id):
+                return str(existing_rows[0]["id"])
+        else:
+            raise RevConflictError([str(existing_rows[0]["id"])])
 
         # No existing row — fresh CREATE.
         # ``hash_id`` is a required string on the live DB (schema drift — not in
@@ -510,38 +437,128 @@ class EntityRepository:
             )
         return str(result[0]["id"])
 
+    async def _werk_bestaande_bij(
+        self, existing: Dict[str, Any], entity: Entity, run_id: Optional[str]
+    ) -> bool:
+        """Merge ``entity`` into the existing row; ``False`` if its ``rev`` moved."""
+        merged_confidence = max(
+            float(existing.get("confidence", 0.0) or 0.0),
+            entity.confidence,
+        )
+        merged_sources = _union_preserve_order(
+            existing.get("source_documents") or [],
+            list(entity.source_documents),
+        )
+        merged_type_tags = _union_preserve_order(
+            existing.get("type_tags") or [],
+            list(entity.type_tags),
+        )
+        merged_provenance = _union_preserve_order(
+            existing.get("provenance_chain") or [],
+            list(entity.provenance_chain),
+        )
+        merged_properties: Dict[str, Any] = dict(
+            existing.get("properties") or {}
+        )
+        # PC.3: `grounding` merges by SOURCE ID; every other key overlays.
+        #
+        # It maps `source_id -> {chunk_id, grounding, context}`, one entry per
+        # document a mention came from. Under the plain overlay below, the
+        # second document to mention an entity would replace where the first
+        # one found it — and with cross-document resolution on that is the
+        # normal case, not an edge one. The union is what lets a curator ask
+        # "why is this one entity" and get an answer per source.
+        incoming_grounding = entity.properties.get("grounding")
+        if isinstance(incoming_grounding, dict):
+            merged_grounding = dict(merged_properties.get("grounding") or {})
+            merged_grounding.update(incoming_grounding)
+        else:
+            merged_grounding = None
+
+        merged_properties.update(entity.properties)
+        if merged_grounding:
+            merged_properties["grounding"] = merged_grounding
+
+        update_payload = {
+            "id": existing["id"],
+            "confidence": merged_confidence,
+            "source_documents": merged_sources,
+            "properties": merged_properties,
+            "type_tags": merged_type_tags,
+            "primary_type": entity.primary_type
+            if entity.primary_type is not None
+            else existing.get("primary_type"),
+            "provenance_chain": merged_provenance,
+            # manual_override (migration 59) is OPERATOR state, never
+            # extraction state: this write never sets it (F2-06), so a pin
+            # that lands meanwhile is not undone; `rev` below catches it.
+            "rev": existing.get("rev"),
+        }
+        overgeslagen = False
+        if existing.get("manual_override"):
+            update_payload, overgeslagen = self._alleen_vermeldingen(
+                existing, update_payload, merged_grounding
+            )
+        try:
+            rows = await execute_query(
+                """
+                UPDATE type::thing($id) SET
+                    confidence = $confidence,
+                    source_documents = $source_documents,
+                    properties = $properties,
+                    type_tags = $type_tags,
+                    primary_type = $primary_type,
+                    provenance_chain = $provenance_chain,
+                    updated_at = time::now()
+                WHERE rev = $rev RETURN id;
+                """,
+                update_payload,
+                self.config,
+            )
+        except Exception as e:
+            logger.exception(
+                f"upsert_entity update failed for "
+                f"'{entity.canonical_name}' ({entity.entity_type}): {e}"
+            )
+            raise
+        if not rows:
+            return False  # changed meanwhile: the caller reads again
+        if overgeslagen:
+            await bewaak_vastgezet(
+                [existing["id"]], actie="upsert buiten vermeldingen",
+                run_id=run_id, config=self.config,
+            )
+        return True
+
     async def bewaak_vastgezet(
         self, entity_ids: List[str], *, actie: str, run_id: Optional[str] = None
     ) -> set:
         """:func:`bewaak_vastgezet` with this repository's database (voorstel B28)."""
         return await bewaak_vastgezet(entity_ids, actie=actie, run_id=run_id, config=self.config)
 
-    async def _alleen_vermeldingen(
-        self,
+    @staticmethod
+    def _alleen_vermeldingen(
         existing: Dict[str, Any],
         payload: Dict[str, Any],
         merged_grounding: Optional[Dict[str, Any]],
-        run_id: Optional[str],
-    ) -> Dict[str, Any]:
-        """The upsert payload for a pinned entity: only mentions are added (B28)."""
-        properties = dict(existing.get("properties") or {})
-        if merged_grounding:
-            properties["grounding"] = merged_grounding
-        beperkt = {
-            **payload,
-            "confidence": float(existing.get("confidence") or 0.0),
-            "properties": properties,
-            "type_tags": list(existing.get("type_tags") or []),
-            "primary_type": existing.get("primary_type"),
-            "provenance_chain": list(existing.get("provenance_chain") or []),
-        }
-        if any(beperkt[k] != payload[k] for k in
-               ("confidence", "properties", "type_tags", "primary_type", "provenance_chain")):
-            await bewaak_vastgezet(
-                [existing["id"]], actie="upsert buiten vermeldingen",
-                run_id=run_id, config=self.config,
-            )
-        return beperkt
+    ) -> tuple:
+        """The upsert payload for a pinned entity, and whether anything was skipped.
+
+        Only the fields in :data:`TOEGESTAAN_OP_VASTGEZET` follow the incoming
+        entity (voorstel B28); every other field keeps the stored value.
+        """
+        beperkt: Dict[str, Any] = {}
+        for veld, waarde in payload.items():
+            if veld in ("id", "rev") or veld in TOEGESTAAN_OP_VASTGEZET:
+                beperkt[veld] = waarde
+            elif veld == "properties":
+                properties = dict(existing.get("properties") or {})
+                if "properties.grounding" in TOEGESTAAN_OP_VASTGEZET and merged_grounding:
+                    properties["grounding"] = merged_grounding
+                beperkt[veld] = properties
+            else:
+                beperkt[veld] = existing.get(veld)
+        return beperkt, any(beperkt[k] != payload[k] for k in payload)
 
     async def get_entity(self, record_id: str) -> Optional[Entity]:
         """Fetch a single entity by record ID, returning a typed ``Entity``.
@@ -894,7 +911,9 @@ class EntityRepository:
             self.config,
         )
 
-    async def mark_merged(self, loser_id: str, winner_id: str) -> bool:
+    async def mark_merged(
+        self, loser_id: str, winner_id: str, *, automatisch: bool = False
+    ) -> bool:
         """Soft-merge ``loser`` into ``winner`` (status + merged_into).
 
         Sets ``status='merged'`` and ``merged_into=<winner id>`` on the loser.
@@ -905,6 +924,10 @@ class EntityRepository:
         Args:
             loser_id: Record ID of the entity being merged away.
             winner_id: Record ID of the surviving canonical entity.
+
+        With ``automatisch`` (F2-06, voorstel B28) the write is refused when the
+        loser or the winner is pinned (``manual_override``), checked in the
+        same statement; then this returns ``False``.
 
         Returns:
             ``True`` when the update ran (even if nothing changed),
@@ -917,14 +940,20 @@ class EntityRepository:
         except Exception as e:
             logger.error(f"mark_merged: invalid loser_id '{loser_id}': {e}")
             return False
+        voorwaarde = (
+            " WHERE manual_override != true AND type::thing($winner).manual_override != true"
+            if automatisch else ""
+        )
         try:
-            await execute_query(
+            rows = await execute_query(
                 "UPDATE type::thing($id) SET "
                 "status = 'merged', merged_into = $winner, "
-                "updated_at = time::now();",
+                f"updated_at = time::now(){voorwaarde} RETURN id;",
                 {"id": rid, "winner": str(winner_id)},
                 self.config,
             )
+            if automatisch and not rows:
+                return False
         except Exception as e:
             logger.error(
                 f"mark_merged failed for loser='{loser_id}' "
@@ -972,17 +1001,24 @@ class EntityRepository:
         if await bewaak_vastgezet([rid], actie="external_ids", run_id=run_id, config=self.config):
             return False
         try:
-            data = await self.external_ids_wijziging(entity_id, external_ids, aliases)
-            await execute_query(
+            gelezen = await self.external_ids_wijziging(entity_id, external_ids, aliases)
+            if gelezen is None:
+                return False
+            _rev, data = gelezen
+            # Guard and write in one statement (F2-06): a pin that lands after
+            # the check above still stops this write.
+            rows = await execute_query(
                 "UPDATE type::thing($id) SET "
                 "external_ids = $ext, aliases = $aliases, "
-                "updated_at = time::now();",
-                {"id": rid, "ext": (data or {}).get("external_ids", []),
-                 "aliases": (data or {}).get("aliases", [])},
+                "updated_at = time::now() WHERE manual_override != true RETURN id;",
+                {"id": rid, "ext": data["external_ids"], "aliases": data["aliases"]},
                 self.config,
             )
         except Exception as e:
             logger.error(f"update_external_ids failed for '{entity_id}': {e}")
+            return False
+        if not rows:
+            await bewaak_vastgezet([rid], actie="external_ids", run_id=run_id, config=self.config)
             return False
         return True
 
@@ -991,20 +1027,22 @@ class EntityRepository:
         entity_id: str,
         external_ids: List[str],
         aliases: Optional[List[str]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """``external_ids`` and ``aliases`` after the union, or ``None`` if absent.
+    ) -> Optional[tuple]:
+        """``(rev, data)``: the ``rev`` read and ``external_ids`` and ``aliases``
+        after the union; ``None`` if absent.
 
-        The data for a write; the caller writes it (``update_external_ids``, or
-        the triage decision in one transaction with its row, F2-06).
+        The data for a write; the caller writes it against that ``rev``
+        (``update_external_ids``, or the triage decision in one transaction
+        with its row, F2-06).
         """
         rows = await execute_query(
-            "SELECT external_ids, aliases FROM $id",
+            "SELECT rev, external_ids, aliases FROM $id",
             {"id": ensure_record_id(entity_id)},
             self.config,
         )
         if not rows:
             return None
-        return {
+        return rows[0].get("rev"), {
             "external_ids": _union_preserve_order(
                 rows[0].get("external_ids") or [], list(external_ids or [])
             ),
@@ -1375,25 +1413,36 @@ class EntityRepository:
             if existing:
                 return True
 
-            # Insert the new alias
-            await execute_query(
-                "INSERT INTO entity_alias { "
+            # Insert the new alias; for an automatic write the pin is checked
+            # in the same statement (F2-06), so a pin that lands meanwhile
+            # still stops it.
+            rows = await execute_query(
+                "RETURN IF $handmatig OR $entity_id.manual_override != true { "
+                "(INSERT INTO entity_alias { "
                 "canonical_entity: $entity_id, "
                 "alias_text: $alias_text, "
                 "match_type: $match_type, "
                 "similarity_score: $similarity_score, "
                 "method: $method, "
-                "verified: false "
-                "}",
+                "verified: false, "
+                "modified_by: $door ?? NONE "
+                "} RETURN id) } ELSE { [] };",
                 {
                     "entity_id": entity_id,
                     "alias_text": alias_text,
                     "match_type": match_type,
                     "similarity_score": similarity_score,
                     "method": method,
+                    "door": door,
+                    "handmatig": door is not None,
                 },
                 self.config,
             )
+            if not rows:
+                await bewaak_vastgezet(
+                    [entity_id], actie="alias", run_id=run_id, config=self.config
+                )
+                return False
             return True
         except Exception as e:
             logger.error(
@@ -1955,8 +2004,14 @@ class EntityRepository:
         increment_attempts: bool = False,
         set_first_orphaned_at: bool = False,
         set_last_reconnect_attempt_at: bool = False,
+        run_id: Optional[str] = None,
     ) -> bool:
         """Update an entity's orphan-prune lifecycle fields.
+
+        An automatic writer (orphan prune after extraction): a pinned entity is
+        skipped and reported through :func:`bewaak_vastgezet` (voorstel B28),
+        also when the pin lands between the check and the write; then this
+        returns ``False``.
 
         Single helper that drives all three lifecycle transitions in
         B.5b (mark pending, retry attempt, archive). The flags let the
@@ -2020,19 +2075,27 @@ class EntityRepository:
                 "last_reconnect_attempt_at = time::now()"
             )
 
+        if await bewaak_vastgezet(
+            [rid], actie="orphan_status", run_id=run_id, config=self.config
+        ):
+            return False
         query = (
             "UPDATE type::thing($id) SET "
             + ", ".join(set_clauses)
-            + ";"
+            + " WHERE manual_override != true RETURN id;"
         )
 
         try:
-            await execute_query(query, params, self.config)
+            rows = await execute_query(query, params, self.config)
         except Exception as e:
             logger.error(
                 f"update_orphan_status failed for '{entity_id}' "
                 f"(status={status}): {e}"
             )
+            return False
+        if not rows and await bewaak_vastgezet(
+            [rid], actie="orphan_status", run_id=run_id, config=self.config
+        ):
             return False
         return True
 

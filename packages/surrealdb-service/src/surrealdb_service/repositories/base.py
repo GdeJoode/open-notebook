@@ -127,16 +127,19 @@ _VERGRENDELVELDEN = ("id", "rev", "modified_by", "modified_at")
 
 #: Wat een automatisch proces (een run, of een proces zonder sleutel van een
 #: beheerder) aan een vastgezette entiteit (``manual_override = true``) mag
-#: toevoegen: vermeldingen en herkomst (voorstel B28). Al het andere, zoals
+#: toevoegen: vermeldingen en herkomst (voorstel B28; ``provenance_chain`` tot
+#: F3-08 het vervangt). Al het andere, zoals
 #: naam, type, beschrijving, status, ``external_ids``, aliassen en samenvoegen
 #: als winnaar of verliezer, slaat het over via :func:`bewaak_vastgezet`.
-TOEGESTAAN_OP_VASTGEZET = ("source_documents", "properties.grounding", "mentions")
+TOEGESTAAN_OP_VASTGEZET = (
+    "source_documents", "properties.grounding", "mentions", "provenance_chain",
+)
 
 #: Tekst van een schrijfconflict in de opslag (RocksDB onder SurrealDB v2).
 _SCHRIJFCONFLICT = ("read or write conflict", "can be retried", "Transaction conflict")
 
 
-def _is_schrijfconflict(error: BaseException) -> bool:
+def is_schrijfconflict(error: BaseException) -> bool:
     tekst = str(error)
     return any(t in tekst for t in _SCHRIJFCONFLICT)
 
@@ -249,7 +252,7 @@ async def wijzig_met_rev(
     try:
         await execute_transaction("\n".join(regels), params, config)
     except RuntimeError as e:
-        if _is_schrijfconflict(e):
+        if is_schrijfconflict(e):
             # Een gelijktijdige schrijfactie in de opslag: net als een
             # verouderde rev, opnieuw lezen en opnieuw proberen (HTTP 409).
             raise RevConflictError([str(rid) for rid in ids]) from None
@@ -296,7 +299,7 @@ async def _wijzig_door_run(
                 f"UPDATE $id MERGE $d WHERE {voorwaarde} RETURN AFTER", params, config
             )
         except Exception as e:
-            if _is_schrijfconflict(e):
+            if is_schrijfconflict(e):
                 raise RevConflictError([str(rid)]) from None
             if (fout := as_classification_error(e)) is not None:
                 raise fout from e

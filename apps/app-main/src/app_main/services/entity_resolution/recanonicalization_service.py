@@ -290,6 +290,25 @@ class RecanonicalizationService:
                 skipped=True,
             )
 
+        # F2-06 (B28): an automatic merge soft-merges each loser FIRST, with the
+        # pin of loser and winner checked in the same statement; only the
+        # losers that were marked are folded in. A pin that lands after the
+        # check above therefore stops the merge of that loser entirely.
+        merged_ids: List[str] = []
+        if door is None:
+            for loser in active_losers:
+                lid = str(loser["id"])
+                if await self.entity_repo.mark_merged(lid, cluster.winner_id, automatisch=True):
+                    merged_ids.append(lid)
+            if len(merged_ids) < len(active_losers):
+                await self.entity_repo.bewaak_vastgezet(
+                    [cluster.winner_id, *[str(r["id"]) for r in active_losers]],
+                    actie="samenvoegen", run_id=run_id,
+                )
+            active_losers = [r for r in active_losers if str(r["id"]) in merged_ids]
+            if not active_losers:
+                return skipped
+
         # 1. Re-point relations (ID-based) for each still-active loser.
         relations_repointed = 0
         for loser in active_losers:
@@ -317,17 +336,18 @@ class RecanonicalizationService:
                 match_type="exact",
                 similarity_score=1.0,
                 method="recanonicalization",
-                door=door or "systeem:recanonicalization",
+                door=door,
             )
             if ok:
                 aliases_created += 1
 
-        # 4. Soft-merge each loser (status + merged_into).
-        merged_ids: List[str] = []
-        for loser in active_losers:
-            lid = str(loser["id"])
-            if await self.entity_repo.mark_merged(lid, cluster.winner_id):
-                merged_ids.append(lid)
+        # 4. Soft-merge each loser (status + merged_into); an automatic merge
+        # did this first, above.
+        if door is not None:
+            for loser in active_losers:
+                lid = str(loser["id"])
+                if await self.entity_repo.mark_merged(lid, cluster.winner_id):
+                    merged_ids.append(lid)
 
         logger.info(
             "apply_merge: winner={w} merged={n} relations={r} aliases={a}",

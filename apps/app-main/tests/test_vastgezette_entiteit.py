@@ -119,3 +119,27 @@ async def test_de_beheerder_mag_een_vastgezette_entiteit_samenvoegen(env) -> Non
     assert result.merged_loser_ids == [vast]
     assert await _status(vast) == "merged"
     assert await _meldingen(vast) == []
+
+
+async def test_vastzetting_na_de_voorcontrole_stopt_de_samenvoeging(env) -> None:
+    """De pin valt na de voorcontrole: de verliezer wordt toch niet samengevoegd."""
+    from surrealdb_service.repositories.entity import EntityRepository
+
+    vast = await _entiteit("Openbaar instituut", manual_override=True)
+    vrij = await _entiteit("openbaar instituut")
+    repo = EntityRepository()
+    echt = repo.bewaak_vastgezet
+    aanroepen = []
+
+    async def _te_laat(ids, **kw):
+        aanroepen.append(kw["actie"])
+        return set() if len(aanroepen) == 1 else await echt(ids, **kw)
+
+    repo.bewaak_vastgezet = _te_laat
+    result = await RecanonicalizationService(entity_repo=repo).apply_merge(_cluster(vrij, vast))
+
+    assert result.skipped and result.merged_loser_ids == []
+    assert await _status(vast) == "active"
+    assert not await _q("SELECT id FROM entity_alias WHERE canonical_entity = $e",
+                        {"e": conn.ensure_record_id(vrij)})
+    assert await _meldingen(vast)

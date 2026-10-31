@@ -107,7 +107,7 @@ class FakeEntityRepo:
         """F2-06 (B28): no row here is pinned; the real guard is tested live."""
         return set()
 
-    async def mark_merged(self, loser_id: str, winner_id: str) -> bool:
+    async def mark_merged(self, loser_id: str, winner_id: str, **_kw) -> bool:
         self.writes.append(f"mark_merged:{loser_id}")
         self._rows[str(loser_id)]["status"] = "merged"
         self._rows[str(loser_id)]["merged_into"] = str(winner_id)

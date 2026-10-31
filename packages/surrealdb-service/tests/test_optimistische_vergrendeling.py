@@ -262,3 +262,77 @@ async def test_schrijfconflict_van_de_opslag_wordt_een_revconflict(live_surreald
     with pytest.raises(RevConflictError):
         await wijzig_met_rev([RevWijziging(eid, 0, {"status": "reference"})],
                              door="Beheerder Test", config=live_surrealdb)
+
+
+async def test_upsert_maakt_een_tussentijdse_vastzetting_niet_ongedaan(live_surrealdb) -> None:
+    """De vastzetting valt tussen lezen en schrijven: de upsert leest opnieuw."""
+    from shared.models.entity import Entity
+    from surrealdb_service.repositories.entity import EntityRepository
+
+    naam = f"Openbaar fonds {uuid.uuid4().hex[:8]}"
+    repo = EntityRepository(config=live_surrealdb)
+    eid = await repo.upsert_entity(Entity(
+        canonical_name=naam, entity_type="programme", confidence=0.5, embedding=[]))
+    origineel = repo._werk_bestaande_bij
+    pogingen = []
+
+    async def _vastzetten_tussendoor(existing, entity, run_id):
+        if not pogingen:
+            await _q(live_surrealdb, "UPDATE $id SET manual_override = true",
+                     {"id": ensure_record_id(eid)})
+        pogingen.append(existing.get("manual_override"))
+        return await origineel(existing, entity, run_id)
+
+    repo._werk_bestaande_bij = _vastzetten_tussendoor
+    await repo.upsert_entity(Entity(
+        canonical_name=naam, entity_type="programme", confidence=0.9, embedding=[],
+        provenance_chain=["openbare herkomst"]))
+    assert pogingen == [False, True]  # eerste schrijfactie geweigerd op rev
+    [rij] = await _q(live_surrealdb, "SELECT * FROM $id", {"id": ensure_record_id(eid)})
+    assert rij["manual_override"] is True
+    assert rij["confidence"] == 0.5
+    # provenance_chain is herkomst en mag erbij (B28, tot F3-08).
+    assert "openbare herkomst" in rij["provenance_chain"]
+    assert await _melding(live_surrealdb, eid)
+
+
+async def test_automatische_schrijvers_toetsen_de_vastzetting_in_de_schrijfactie(
+    live_surrealdb, monkeypatch,
+) -> None:
+    """Valt de vastzetting na de voorcontrole, dan weigert de schrijfactie zelf."""
+    import surrealdb_service.repositories.entity as entity_mod
+    from surrealdb_service.repositories.entity import EntityRepository
+
+    echt = entity_mod.bewaak_vastgezet
+    voorcontroles = []
+
+    async def _te_laat(ids, **kw):
+        # De voorcontrole (eerste aanroep per schrijver) ziet nog niets.
+        voorcontroles.append(kw["actie"])
+        if voorcontroles.count(kw["actie"]) == 1:
+            return set()
+        return await echt(ids, **kw)
+
+    monkeypatch.setattr(entity_mod, "bewaak_vastgezet", _te_laat)
+    repo = EntityRepository(config=live_surrealdb)
+    vast = await _entiteit(live_surrealdb, manual_override=True)
+    assert await repo.update_external_ids(vast, ["https://example.org/id/2"]) is False
+    assert await repo.register_alias(vast, "Late alias", "exact", 1.0) is False
+    assert await repo.update_orphan_status(vast, "pending_reconnect") is False
+    [rij] = await _q(live_surrealdb, "SELECT external_ids, orphan_status FROM $id",
+                     {"id": ensure_record_id(vast)})
+    assert not rij.get("external_ids") and rij.get("orphan_status") is None
+    assert not await _q(live_surrealdb, "SELECT id FROM entity_alias WHERE canonical_entity = $e",
+                        {"e": ensure_record_id(vast)})
+    assert len(await _melding(live_surrealdb, vast)) == 3
+
+
+async def test_alias_van_de_beheerder_krijgt_modified_by(live_surrealdb) -> None:
+    from surrealdb_service.repositories.entity import EntityRepository
+
+    eid = await _entiteit(live_surrealdb)
+    assert await EntityRepository(config=live_surrealdb).register_alias(
+        eid, "Openbare alias", "exact", 1.0, door="Beheerder Test") is True
+    [rij] = await _q(live_surrealdb, "SELECT modified_by FROM entity_alias WHERE canonical_entity = $e",
+                     {"e": ensure_record_id(eid)})
+    assert rij["modified_by"] == "Beheerder Test"
