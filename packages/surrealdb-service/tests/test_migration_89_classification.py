@@ -15,6 +15,8 @@ from surrealdb import RecordID
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import (
     ClassificationConflictError,
+    ClassificationValueError,
+    db_connection,
     execute_query,
     execute_transaction,
 )
@@ -181,7 +183,8 @@ async def test_embedding_niet_losser_dan_zijn_fragment(live_surrealdb: SurrealDB
 async def test_onbekende_waarde_wordt_geweigerd(live_surrealdb: SurrealDBConfig, tabel: str) -> None:
     bron = await _bron(live_surrealdb, "extern")
     rid = bron if tabel == "source" else await _maak(live_surrealdb, tabel, bron)
-    with pytest.raises(ClassificationConflictError):
+    # Een ongeldige waarde is geen regelschending: 422, geen 409.
+    with pytest.raises(ClassificationValueError):
         await _q(live_surrealdb, "UPDATE type::thing($id) SET classification = 'openbaar'", {"id": rid})
 
 
@@ -195,13 +198,35 @@ async def test_intern_naar_extern_alleen_bij_herclassificatie(
     with pytest.raises(ClassificationConflictError):
         await _q(live_surrealdb, "UPDATE type::thing($id) SET classification = 'extern'", {"id": rid})
     assert (await _lees(live_surrealdb, rid))["classification"] == "intern"
-    await execute_transaction(
-        "BEGIN; LET $herclassificatie = true;"
-        " UPDATE type::thing($id) SET classification = 'extern'; COMMIT;",
-        {"id": rid},
-        live_surrealdb,
-    )
+    # Met de vlag mag het in de database. De fork zet de vlag alleen in
+    # SourceRepository.reclassify; hier rechtstreeks via de SDK.
+    async with db_connection(live_surrealdb) as db:
+        await db.query(
+            "BEGIN; LET $herclassificatie = true;"
+            " UPDATE type::thing($id) SET classification = 'extern'; COMMIT;",
+            {"id": rid},
+        )
     assert (await _lees(live_surrealdb, rid))["classification"] == "extern"
+
+
+@pytest.mark.parametrize(
+    "sql, params",
+    [
+        ("UPDATE type::thing($id) SET classification = 'extern'", {"herclassificatie": True}),
+        ("UPDATE type::thing($id) SET classification = 'extern'", {"$herclassificatie": True}),
+        ("LET $herclassificatie = true; UPDATE type::thing($id) SET classification = 'extern'", {}),
+        ("let  $Herclassificatie = true; UPDATE type::thing($id) SET classification = 'extern'", {}),
+        ("DEFINE PARAM OVERWRITE $herclassificatie VALUE true", {}),
+    ],
+)
+async def test_de_vlag_kan_niet_van_buiten_worden_gezet(
+    live_surrealdb: SurrealDBConfig, sql: str, params: dict
+) -> None:
+    bron = await _bron(live_surrealdb)
+    for uitvoeren in (execute_query, execute_transaction):
+        with pytest.raises(ValueError, match="herclassificatievlag"):
+            await uitvoeren(sql, {"id": bron, **params}, live_surrealdb)
+    assert (await _lees(live_surrealdb, bron))["classification"] == "intern"
 
 
 async def test_strengste_wint_bij_een_bron_die_intern_wordt(live_surrealdb: SurrealDBConfig) -> None:
@@ -332,6 +357,7 @@ async def test_down_draait_terug_en_zet_private_op_alle_bronnen(
 ) -> None:
     extern = await _bron(live_surrealdb, "extern")
     await _q(live_surrealdb, "UPDATE type::thing($id) SET private = false", {"id": extern})
+    logregel = str((await _logregel(live_surrealdb))[0]["id"])
     try:
         await execute_transaction(_migratie(89, down=True), config=live_surrealdb)
         # Twee keer na elkaar: idempotent.
@@ -342,7 +368,14 @@ async def test_down_draait_terug_en_zet_private_op_alle_bronnen(
             assert "classification" not in (info[0] if isinstance(info, list) else info)["fields"]
         db = await _q(live_surrealdb, "INFO FOR DB")
         db = db[0] if isinstance(db, list) else db
-        assert "classification_log" not in db["tables"]
+        # Het logboek blijft staan, met zijn regels; alleen het event en de
+        # ASSERTs vervallen.
+        assert "classification_log" in db["tables"]
+        assert await _q(live_surrealdb, "SELECT * FROM type::thing($id)", {"id": logregel})
+        log = await _q(live_surrealdb, "INFO FOR TABLE classification_log")
+        log = log[0] if isinstance(log, list) else log
+        assert log["events"] == {}
+        assert not [f for f in log["fields"].values() if "ASSERT" in f]
         assert not [f for f in db["functions"] if "classificatie" in f]
         rows = await _q(live_surrealdb, "SELECT VALUE private FROM source")
         assert rows and all(p is True for p in rows)

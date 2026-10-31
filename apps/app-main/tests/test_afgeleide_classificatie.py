@@ -139,6 +139,22 @@ async def test_een_vermelding_neemt_de_waarde_van_haar_fragment_over(env) -> Non
     assert await _c(await _entiteit([extern], {extern: {"chunk_id": "chunk:onbekend"}})) == "intern"
 
 
+async def test_een_fragment_van_een_andere_bron_maakt_een_interne_vermelding_niet_extern(
+    env,
+) -> None:
+    # Reviewbevinding F2-03: het fragment in `grounding` wijst naar een fragment
+    # van een externe bron B, de vermelding staat in interne bron A.
+    intern, extern = await _bron("intern"), await _bron("extern")
+    vreemd = await _fragment(extern)
+    entiteit = await _entiteit([intern], {intern: {"chunk_id": vreemd}})
+    assert await _c(entiteit) == "intern"
+    assert await _c(await _alias(entiteit)) == "intern"
+    assert await _c(await _triage(entiteit)) == "intern"
+    # Andersom: een intern fragment in een externe bron maakt de vermelding intern.
+    eigen = await _fragment(intern)
+    assert await _c(await _entiteit([extern], {extern: {"chunk_id": eigen}})) == "intern"
+
+
 async def test_zonder_vermelding_intern(env) -> None:
     entiteit = await _entiteit([])
     assert await _c(entiteit) == "intern"

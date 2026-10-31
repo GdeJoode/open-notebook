@@ -1,15 +1,22 @@
 -- ============================================================================
 -- Migratie 89 terug: classificatie intern/extern weg (F2-03, ADR 0001).
 --
--- Eerst de events, dan het logboek, de velden en de functies (de velden
--- gebruiken de functies). Daarna `private = true` op alle bronnen: ook een
--- terugdraaiactie maakt niets extern. Idempotent: IF EXISTS en een UPDATE
--- zonder voorwaarde.
+-- Eerst de events, dan de velden, indexen en functies (de velden gebruiken de
+-- functies). `classification_log` blijft staan met al zijn regels: alleen het
+-- event en de ASSERTs vervallen, zodat een terugdraaiactie geen herkomst van
+-- herclassificaties wist. Daarna `private = true` op alle bronnen: ook een
+-- terugdraaiactie maakt niets extern. Idempotent: IF EXISTS, OVERWRITE en een
+-- UPDATE zonder voorwaarde.
 -- ============================================================================
 
 REMOVE EVENT IF EXISTS strengste_classificatie ON source;
 REMOVE EVENT IF EXISTS afgeleide_classificatie ON entity;
-REMOVE TABLE IF EXISTS classification_log;
+REMOVE EVENT IF EXISTS alleen_aanvullen ON classification_log;
+DEFINE FIELD OVERWRITE from_classification ON classification_log TYPE string READONLY;
+DEFINE FIELD OVERWRITE to_classification ON classification_log TYPE string READONLY;
+DEFINE FIELD OVERWRITE reason ON classification_log TYPE string READONLY;
+DEFINE FIELD OVERWRITE agent_key ON classification_log TYPE string READONLY;
+DEFINE FIELD OVERWRITE person ON classification_log TYPE string READONLY;
 
 REMOVE FIELD IF EXISTS classification ON source;
 REMOVE FIELD IF EXISTS classification ON note;
@@ -22,6 +29,11 @@ REMOVE FIELD IF EXISTS classification ON entity;
 REMOVE FIELD IF EXISTS classification ON relation;
 REMOVE FIELD IF EXISTS classification ON entity_alias;
 REMOVE FIELD IF EXISTS classification ON triage_queue;
+
+REMOVE INDEX IF EXISTS idx_source_embedding_source ON source_embedding;
+REMOVE INDEX IF EXISTS idx_entity_alias_source_document ON entity_alias;
+REMOVE INDEX IF EXISTS idx_entity_source_documents ON entity;
+REMOVE INDEX IF EXISTS idx_relation_source_documents ON relation;
 
 REMOVE FUNCTION IF EXISTS fn::afgeleide_classificatie;
 REMOVE FUNCTION IF EXISTS fn::vermelding_classificatie;

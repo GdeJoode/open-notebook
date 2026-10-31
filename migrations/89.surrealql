@@ -7,13 +7,16 @@
 --    schrijven de waarde van zijn bron over (embedding: van zijn fragment) en
 --    mag niet losser zijn dan die bron (ASSERT; de fork geeft dan HTTP 409).
 -- 2. Van 'intern' naar 'extern' kan alleen binnen een herclassificatie: de
---    `ClassificationService` zet daarvoor `$herclassificatie = true` in haar
---    transactie. Elk ander pad (import, poortwachter, gewone update) faalt
---    op de ASSERT.
+--    `SourceRepository.reclassify` zet daarvoor `$herclassificatie = true` in
+--    zijn transactie. `execute_query` en `execute_transaction` weigeren die
+--    vlag in elke andere query, en `tests/test_herclassificatievlag.py` faalt
+--    als de vlag elders in de code voorkomt. Een import, de poortwachter of een
+--    gewone update faalt dus op de ASSERT. Een rechtstreekse rootverbinding
+--    met de database (buiten de fork) kan de vlag wel zetten.
 -- 3. Afgeleide classificatie (ADR 0001): een vermelding (PC.3-herkomst: een
 --    bron in `source_documents`, met het fragment uit
---    `properties.grounding[bron].chunk_id`) neemt de waarde van haar fragment
---    over, zonder fragment die van haar bron; onbekend is 'intern'.
+--    `properties.grounding[bron].chunk_id`) krijgt de strengste waarde van
+--    haar fragment en haar bron; onbekend is 'intern'.
 --    `entity`, `entity_alias`, `relation` en `triage_queue` zijn 'intern'
 --    zodra een onderliggende vermelding 'intern' is, en 'intern' zonder
 --    vermelding. De database berekent dat bij elk schrijven (VALUE); een
@@ -43,11 +46,14 @@ DEFINE FUNCTION OVERWRITE fn::classificatie_van($ref: any) {
     RETURN IF $waarde = 'extern' { 'extern' } ELSE { 'intern' };
 };
 
--- Een vermelding neemt de waarde van haar fragment over; zonder fragment die
--- van haar bron.
+-- Een vermelding krijgt de strengste waarde van haar fragment en haar bron:
+-- een fragment dat naar een andere (externe) bron wijst, maakt een vermelding
+-- in een interne bron niet extern.
 DEFINE FUNCTION OVERWRITE fn::vermelding_classificatie($bron: any, $grounding: any) {
     LET $fragment = IF type::is::object($grounding) { $grounding[<string> $bron].chunk_id } ELSE { NONE };
-    RETURN IF $fragment { fn::classificatie_van($fragment) } ELSE { fn::classificatie_van($bron) };
+    RETURN IF fn::classificatie_van($bron) = 'intern' { 'intern' }
+        ELSE IF $fragment { fn::classificatie_van($fragment) }
+        ELSE { 'extern' };
 };
 
 -- 'extern' alleen als er waarden zijn en ze allemaal 'extern' zijn.
@@ -120,23 +126,36 @@ DEFINE FIELD OVERWRITE classification ON triage_queue TYPE string DEFAULT ALWAYS
 DEFINE EVENT OVERWRITE afgeleide_classificatie ON entity
     WHEN $event = 'UPDATE' AND $before.classification != $after.classification
     THEN {
-        UPDATE relation WHERE in = $after.id OR out = $after.id RETURN NONE;
+        UPDATE $after.id->relation RETURN NONE;
+        UPDATE $after.id<-relation RETURN NONE;
         UPDATE entity_alias WHERE canonical_entity = $after.id RETURN NONE;
         UPDATE triage_queue WHERE entity = $after.id RETURN NONE;
     };
 
--- 4. De strengste waarde wint.
+-- 4. De strengste waarde wint. Binnen de herclassificatie doet
+-- `SourceRepository.reclassify` dit zelf; het event slaat het dan over.
 DEFINE EVENT OVERWRITE strengste_classificatie ON source
     WHEN $event = 'UPDATE' AND $before.classification = 'extern' AND $after.classification = 'intern'
+        AND $herclassificatie != true
     THEN {
         UPDATE chunk SET classification = 'intern' WHERE source = $after.id AND classification != 'intern' RETURN NONE;
         UPDATE source_embedding SET classification = 'intern' WHERE source = $after.id AND classification != 'intern' RETURN NONE;
         UPDATE doc_node SET classification = 'intern' WHERE source = $after.id AND classification != 'intern' RETURN NONE;
         UPDATE source_insight SET classification = 'intern' WHERE source = $after.id AND classification != 'intern' RETURN NONE;
-        UPDATE entity WHERE source_documents CONTAINS <string> $after.id RETURN NONE;
-        UPDATE relation WHERE source_documents CONTAINS <string> $after.id RETURN NONE;
+        UPDATE entity WHERE source_documents CONTAINSANY [<string> $after.id] RETURN NONE;
+        UPDATE relation WHERE source_documents CONTAINSANY [<string> $after.id] RETURN NONE;
         UPDATE entity_alias WHERE source_document = <string> $after.id RETURN NONE;
     };
+
+-- Indexen voor de herberekening. CONTAINSANY gebruikt een index op een
+-- arrayveld (per element); CONTAINS doet dat onder v2.7.0 niet.
+DEFINE INDEX OVERWRITE idx_source_embedding_source ON source_embedding FIELDS source;
+-- Geen index op `source_insight.source`: onder v2.7.0 verandert die de vorm
+-- van `SELECT VALUE count() ... GROUP ALL` (een object in plaats van een
+-- getal), en daarop leunt `sources_crud.py`. Een bron heeft weinig inzichten.
+DEFINE INDEX OVERWRITE idx_entity_alias_source_document ON entity_alias FIELDS source_document;
+DEFINE INDEX OVERWRITE idx_entity_source_documents ON entity FIELDS source_documents;
+DEFINE INDEX OVERWRITE idx_relation_source_documents ON relation FIELDS source_documents;
 
 -- 5. Het logboek van herclassificaties: alleen aanvullen.
 DEFINE TABLE OVERWRITE classification_log SCHEMAFULL;
