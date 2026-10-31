@@ -72,7 +72,7 @@ class ProcessingRunService:
     @property
     def flow_register(self) -> FlowRegister:
         if self._flow_register is None:
-            self._flow_register = FlowRegister.from_env()
+            self._flow_register = FlowRegister.standaard()
         return self._flow_register
 
     async def _invoer(self, source_map_rule_id: Optional[str]) -> tuple[str, Optional[int]]:
@@ -111,6 +111,7 @@ class ProcessingRunService:
             source_map_rule_id=source_map_rule_id,
             source_map_rule_rev=rev,
             label_schema=label_schema,
+            flow_vastgelegd=vastgelegd,
         )
         if vastgelegd:
             return await self.run_repo.create(**velden, log=[_regel("flow", "vastgelegd")])

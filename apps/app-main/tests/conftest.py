@@ -496,3 +496,47 @@ def model_manager():
     mm.set_defaults = MagicMock()
     mm.clear_cache = MagicMock()
     return mm
+
+
+@pytest.fixture
+def git_flows(tmp_path):
+    """Een Git-repository met één flow in ``services/langflow/flows`` (F2-04).
+
+    Geeft ``map``, ``head``, ``hash`` (SHA-256 van de flow in HEAD) en een
+    ``register`` op die map. ``commit(naam, inhoud)`` legt een flow vast en
+    werkt ``head`` bij. De flow is synthetisch.
+    """
+    import hashlib
+    import json
+    import subprocess
+    from types import SimpleNamespace
+
+    from app_main.services.flow_register import FlowRegister
+
+    root = tmp_path / "repo"
+    map_ = root / "services" / "langflow" / "flows"
+    map_.mkdir(parents=True)
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.org",
+             *args],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+    git("init", "-q")
+    ns = SimpleNamespace(map=map_, git=git)
+
+    def commit(naam: str, inhoud: dict) -> str:
+        pad = map_ / f"{naam}.json"
+        pad.write_text(json.dumps(inhoud), encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-q", "-m", f"flow {naam}")
+        ns.head = git("rev-parse", "HEAD")
+        return hashlib.sha256(pad.read_bytes()).hexdigest()
+
+    ns.commit = commit
+    ns.hash = commit("inname_pdf", {"id": "inname-pdf", "name": "Inname PDF",
+                                    "data": {"nodes": [], "edges": []}})
+    ns.register = FlowRegister(map_)
+    return ns

@@ -16,7 +16,6 @@ Alle testdata is synthetisch.
 from __future__ import annotations
 
 import hashlib
-import json
 import uuid
 from unittest.mock import AsyncMock
 
@@ -29,15 +28,11 @@ from app_main.api.app import create_app
 from app_main.dependencies import get_processing_run_service
 from app_main.services.agents.audit_service import AgentAuditService
 from app_main.services.classification_service import ClassificationService
-from app_main.services.flow_register import FlowRegister
 from app_main.services.processing_run_service import ProcessingRunService
 from shared.models.agents import Right
 from surrealdb_service.repositories.source_version import SourceVersionRepository
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.requires_docker]
-
-COMMIT = "89abcdef0123456789abcdef0123456789abcdef"
-
 
 @pytest.fixture(scope="module")
 def app():
@@ -45,14 +40,7 @@ def app():
 
 
 @pytest.fixture
-def flow(tmp_path) -> tuple[FlowRegister, str]:
-    pad = tmp_path / "inname_pdf.json"
-    pad.write_text(json.dumps({"id": "inname_pdf", "data": {}}), encoding="utf-8")
-    return FlowRegister.from_dir(tmp_path, COMMIT), hashlib.sha256(pad.read_bytes()).hexdigest()
-
-
-@pytest.fixture
-async def env(live_surrealdb, monkeypatch, app, flow):
+async def env(live_surrealdb, monkeypatch, app, git_flows):
     monkeypatch.setattr(surreal_config, "_config", live_surrealdb)
     monkeypatch.setattr(AgentAuditService, "record", AsyncMock())
     ctx = agent_auth.AgentKeyContext(
@@ -63,7 +51,7 @@ async def env(live_surrealdb, monkeypatch, app, flow):
         return ctx
 
     monkeypatch.setattr(agent_auth, "authenticate_request", _pijplijn)
-    reg, _ = flow
+    reg = git_flows.register
     app.dependency_overrides[get_processing_run_service] = lambda: ProcessingRunService(
         flow_register=reg
     )
@@ -88,10 +76,9 @@ async def _q(sql: str, params: dict | None = None):
 
 
 async def _start(client, flow) -> str:
-    _, h = flow
     resp = await client.post("/api/v1/runs", json={
         "trigger": "schema", "pipeline_id": "inname_pdf",
-        "pipeline_version": {"git_commit": COMMIT, "flow_hash": h},
+        "pipeline_version": {"git_commit": flow.head, "flow_hash": flow.hash},
     })
     assert resp.status_code == 201, resp.text
     assert resp.json()["status"] == "bezig"
@@ -113,10 +100,10 @@ def _hash(tekst: str) -> str:
 # --------------------------------------------------------------------------
 
 
-async def test_run_zonder_nieuwe_inhoud_eindigt_als_niets_nieuws(env, app, flow) -> None:
+async def test_run_zonder_nieuwe_inhoud_eindigt_als_niets_nieuws(env, app, git_flows) -> None:
     bron = await _bron()
     async with _client(app) as client:
-        eerste = await _start(client, flow)
+        eerste = await _start(client, git_flows)
         versie, nieuw = await SourceVersionRepository().register(bron, _hash(bron), eerste)
         assert nieuw
         resp = await client.patch(f"/api/v1/runs/{eerste}", json={"status": "geslaagd"})
@@ -124,7 +111,7 @@ async def test_run_zonder_nieuwe_inhoud_eindigt_als_niets_nieuws(env, app, flow)
         assert resp.json()["ended_at"]
 
         # Dezelfde inhoud nog eens: de bekende hash geeft de bestaande versie.
-        tweede = await _start(client, flow)
+        tweede = await _start(client, git_flows)
         weer, nieuw = await SourceVersionRepository().register(bron, _hash(bron), tweede)
         assert not nieuw and weer.id == versie.id
         resp = await client.patch(f"/api/v1/runs/{tweede}", json={
@@ -138,9 +125,9 @@ async def test_run_zonder_nieuwe_inhoud_eindigt_als_niets_nieuws(env, app, flow)
     assert len(await SourceVersionRepository().list_by_source(bron)) == 1
 
 
-async def test_patch_op_een_afgesloten_run_geeft_409(env, app, flow) -> None:
+async def test_patch_op_een_afgesloten_run_geeft_409(env, app, git_flows) -> None:
     async with _client(app) as client:
-        run_id = await _start(client, flow)
+        run_id = await _start(client, git_flows)
         assert (await client.patch(f"/api/v1/runs/{run_id}", json={"status": "mislukt",
                                                                     "error": "docling"})).status_code == 200
         for body in ({"status": "geslaagd"}, {"log": [{"step": "x", "status": "ok"}]}):
@@ -150,9 +137,9 @@ async def test_patch_op_een_afgesloten_run_geeft_409(env, app, flow) -> None:
     assert run["status"] == "mislukt" and run["error"] == "docling"
 
 
-async def test_lopende_run_bijwerken_en_onbekende_run(env, app, flow) -> None:
+async def test_lopende_run_bijwerken_en_onbekende_run(env, app, git_flows) -> None:
     async with _client(app) as client:
-        run_id = await _start(client, flow)
+        run_id = await _start(client, git_flows)
         resp = await client.patch(f"/api/v1/runs/{run_id}",
                                   json={"log": [{"step": "extractie", "status": "ok"}]})
         assert resp.status_code == 200 and resp.json()["status"] == "bezig"
@@ -163,9 +150,23 @@ async def test_lopende_run_bijwerken_en_onbekende_run(env, app, flow) -> None:
                                    json={"status": "geslaagd"})).status_code == 404
 
 
-async def test_models_niet_overgenomen_van_langflow(env, app, flow) -> None:
+async def test_patch_met_een_kale_run_id(env, app, git_flows) -> None:
     async with _client(app) as client:
-        run_id = await _start(client, flow)
+        run_id = await _start(client, git_flows)
+        kaal = run_id.split(":", 1)[1]
+        resp = await client.patch(f"/api/v1/runs/{kaal}", json={
+            "log": [{"step": "extractie", "status": "ok"}],
+            "models": [{"name": "qwen3.5-9b"}],
+        })
+        assert resp.status_code == 200 and resp.json()["log"][-1]["status"] == "waarschuwing"
+        resp = await client.patch(f"/api/v1/runs/{kaal}", json={"status": "mislukt"})
+        assert resp.status_code == 200 and resp.json()["status"] == "mislukt"
+        assert (await client.get(f"/api/v1/runs/{run_id}")).json()["status"] == "mislukt"
+
+
+async def test_models_niet_overgenomen_van_langflow(env, app, git_flows) -> None:
+    async with _client(app) as client:
+        run_id = await _start(client, git_flows)
         resp = await client.patch(f"/api/v1/runs/{run_id}", json={
             "status": "mislukt",
             "models": [{"name": "qwen3.5-9b", "version": "Q4_K_M", "aanroepwijze": "lokaal"}],
@@ -214,3 +215,26 @@ async def test_mentions_wordt_intern_na_herclassificatie_naar_intern(env) -> Non
     [waarde] = await _q("SELECT VALUE classification FROM mentions WHERE in = $b",
                         {"b": conn.ensure_record_id(bron)})
     assert waarde == "intern"
+
+
+# --------------------------------------------------------------------------
+# Een handmatig fragment: 409 tot F2-29
+# --------------------------------------------------------------------------
+
+
+async def test_handmatig_fragment_toevoegen_geeft_409(app) -> None:
+    from types import SimpleNamespace
+
+    from app_main.dependencies import get_source_service
+
+    bron = SimpleNamespace(id="source:s1")
+    app.dependency_overrides[get_source_service] = lambda: SimpleNamespace(
+        get=AsyncMock(return_value=bron)
+    )
+    try:
+        async with _client(app) as client:
+            resp = await client.post("/api/sources/source:s1/chunks", json={"text": "x", "physical_page": 0})
+    finally:
+        app.dependency_overrides.pop(get_source_service, None)
+    assert resp.status_code == 409
+    assert "handmatige run" in resp.json()["detail"]
