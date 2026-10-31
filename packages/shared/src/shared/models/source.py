@@ -77,6 +77,10 @@ class Chunk(ObjectModel):
     classification: Optional[Classification] = Field(
         None, description="intern of extern; standaard die van de bron (F2-03)"
     )
+    # Herkomst (F2-04, ADR 0003): verplicht in de database (migratie 90).
+    source_version: Optional[str] = Field(None, description="De bronversie van het fragment")
+    run: Optional[str] = Field(None, description="De verwerkingsrun die het fragment maakte")
+    extractor: Optional[str] = Field(None, description="De extractor, met versie")
 
 
 class SourceInsight(ObjectModel):
@@ -116,6 +120,8 @@ class SourceEmbedding(ObjectModel):
     classification: Optional[Classification] = Field(
         None, description="intern of extern; standaard die van de bron (F2-03)"
     )
+    run: Optional[str] = Field(None, description="De verwerkingsrun (F2-04)")
+    embedding_model: Optional[str] = Field(None, description="Embeddingmodel met versie (F2-04)")
 
 
 class Source(ObjectModel):
@@ -200,6 +206,7 @@ class Source(ObjectModel):
     classification: Optional[Classification] = Field(
         None, description="intern of extern; standaard intern (F2-03)"
     )
+    current_version: Optional[str] = Field(None, description="De nieuwste bronversie (F2-04)")
 
     @field_validator("topics", mode="before")
     @classmethod

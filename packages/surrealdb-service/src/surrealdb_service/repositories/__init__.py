@@ -34,6 +34,7 @@ from surrealdb_service.repositories.podcast import (
     PodcastEpisodeRepository,
     SpeakerProfileRepository,
 )
+from surrealdb_service.repositories.processing_run import ProcessingRunRepository
 from surrealdb_service.repositories.reference_entity import (
     ReferenceEntityRepository,
 )
@@ -45,6 +46,7 @@ from surrealdb_service.repositories.source import (
     SourceInsightRepository,
     SourceRepository,
 )
+from surrealdb_service.repositories.source_version import SourceVersionRepository
 from surrealdb_service.repositories.summary import SummaryRepository
 from surrealdb_service.repositories.transformation import (
     DefaultPromptsRepository,
@@ -88,6 +90,9 @@ __all__ = [
     "ChunkRepository",
     "SourceInsightRepository",
     "SourceEmbeddingRepository",
+    # Bronversie en verwerkingsrun (F2-04)
+    "SourceVersionRepository",
+    "ProcessingRunRepository",
     # Settings
     "ContentSettingsRepository",
     # Search

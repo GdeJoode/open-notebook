@@ -51,8 +51,10 @@ from shared.models.notebook_schema import (
     Pass1Result,
 )
 from shared.models.podcast import EpisodeProfile, PodcastEpisode, SpeakerProfile
+from shared.models.processing_run import PipelineVersion, ProcessingRun, RunLogEntry
 from shared.models.settings import ContentSettings
 from shared.models.source import Asset, Chunk, Source, SourceEmbedding, SourceInsight
+from shared.models.source_version import SourceVersion
 from shared.models.transformation import DefaultPrompts, Transformation
 
 __all__ = [
@@ -82,6 +84,11 @@ __all__ = [
     "SourceInsight",
     "SourceEmbedding",
     "Asset",
+    # Bronversie en verwerkingsrun (F2-04)
+    "SourceVersion",
+    "ProcessingRun",
+    "PipelineVersion",
+    "RunLogEntry",
     # Transformation models
     "Transformation",
     "DefaultPrompts",

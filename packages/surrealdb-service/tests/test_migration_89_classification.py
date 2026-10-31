@@ -75,8 +75,9 @@ async def _bron(config: SurrealDBConfig, classification: str | None = None) -> s
 
 _KIND = {
     "chunk": "{source: $bron, text: 'x', order: 0, physical_page: 0, element_type: 'paragraph',"
-    " metadata: {}, positions: []}",
-    "doc_node": "{source: $bron, element_type: 'paragraph', self_ref: '#/texts/0', sequence: 0}",
+    " metadata: {}, positions: [], source_version: $versie, run: $run}",
+    "doc_node": "{source: $bron, element_type: 'paragraph', self_ref: '#/texts/0', sequence: 0,"
+    " source_version: $versie, run: $run}",
     "source_insight": "{source: $bron, content: 'x', insight_type: 'summary', embedding: []}",
     "source_embedding": "{source: $bron, content: 'x', order: 0, embedding: []}",
 }
@@ -85,11 +86,11 @@ _KIND = {
 async def _maak(config: SurrealDBConfig, tabel: str, bron: str | None, extra: dict | None = None) -> str:
     rid = _id(tabel)
     if tabel in _KIND:
-        await _q(
-            config,
-            f"CREATE type::thing($id) CONTENT {_KIND[tabel]}",
-            {"id": rid, "bron": _rec(bron) if bron else None},
-        )
+        params = {"id": rid, "bron": _rec(bron) if bron else None}
+        if tabel in ("chunk", "doc_node"):
+            # Sinds migratie 90 (F2-04) verplicht: bronversie en run.
+            params["versie"], params["run"] = await _versie_en_run(config, bron)
+        await _q(config, f"CREATE type::thing($id) CONTENT {_KIND[tabel]}", params)
     elif tabel == "note":
         await _q(config, "CREATE type::thing($id) CONTENT {title: 'x', embedding: []}", {"id": rid})
     else:
@@ -97,6 +98,15 @@ async def _maak(config: SurrealDBConfig, tabel: str, bron: str | None, extra: di
     if extra:
         await _q(config, "UPDATE type::thing($id) MERGE $data", {"id": rid, "data": extra})
     return rid
+
+
+async def _versie_en_run(config: SurrealDBConfig, bron: str) -> tuple[RecordID, RecordID]:
+    from surrealdb_service.repositories.processing_run import ProcessingRunRepository
+    from surrealdb_service.repositories.source_version import SourceVersionRepository
+
+    run = await ProcessingRunRepository(config).create(trigger="handmatig", pipeline_id="test")
+    versie, _ = await SourceVersionRepository(config).register(bron, uuid.uuid4().hex * 2, str(run.id))
+    return _rec(str(versie.id)), _rec(str(run.id))
 
 
 def _rec(rid: str) -> RecordID:

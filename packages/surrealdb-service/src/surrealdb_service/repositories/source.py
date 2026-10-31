@@ -27,10 +27,12 @@ STAGE_IN = "processing_stage IN $stages"
 # (migratie 89) weigert 'intern' naar 'extern' zonder die vlag, en
 # ``execute_query``/``execute_transaction`` weigeren de vlag in elke andere
 # query (``tests/test_herclassificatievlag.py`` bewaakt dat in de code). De bron,
-# fragmenten, embeddings en ``doc_node`` krijgen de nieuwe waarde; inzichten
+# versies, fragmenten, embeddings en ``doc_node`` krijgen de nieuwe waarde (F2-04:
+# versies); inzichten
 # alleen naar 'intern' (een afgeleide tekst wordt niet losser). De afgeleide
 # records worden opnieuw berekend (VALUE in migratie 89; een entiteit werkt
-# via een EVENT haar relaties, aliassen en triage-items bij). Daarna precies
+# via een EVENT haar relaties, aliassen en triage-items bij), net als de
+# graafrelatie ``mentions`` (migratie 90). Daarna precies
 # één logregel. Faalt één stap, dan verandert niets.
 _HERCLASSIFICATIE = """
 BEGIN TRANSACTION;
@@ -38,6 +40,7 @@ LET $herclassificatie = true;
 LET $huidig = (SELECT VALUE classification FROM ONLY $bron);
 IF $huidig != $van { THROW 'classificatie is intussen gewijzigd' };
 UPDATE $bron SET classification = $naar RETURN NONE;
+UPDATE source_version SET classification = $naar WHERE source = $bron RETURN NONE;
 UPDATE chunk SET classification = $naar WHERE source = $bron RETURN NONE;
 UPDATE source_embedding SET classification = $naar WHERE source = $bron RETURN NONE;
 UPDATE doc_node SET classification = $naar WHERE source = $bron RETURN NONE;
@@ -47,6 +50,7 @@ IF $naar = 'intern' {
 UPDATE entity WHERE source_documents CONTAINSANY [<string> $bron] RETURN NONE;
 UPDATE relation WHERE source_documents CONTAINSANY [<string> $bron] RETURN NONE;
 UPDATE entity_alias WHERE source_document = <string> $bron RETURN NONE;
+UPDATE $bron->mentions RETURN NONE;
 CREATE classification_log CONTENT {
     source: $bron,
     from_classification: $van,

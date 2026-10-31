@@ -21,6 +21,8 @@ VLAG = re.compile(r"\$herclassificatie\b|\b_herclassificatie\b|[\"']herclassific
 CONNECTION = "packages/surrealdb-service/src/surrealdb_service/connection.py"
 SOURCE_REPO = "packages/surrealdb-service/src/surrealdb_service/repositories/source.py"
 MIGRATIE = "migrations/89.surrealql"
+#: Migratie 90 (F2-04) geeft `source_version` dezelfde regel als een fragment.
+MIGRATIE_90 = "migrations/90.surrealql"
 MIGRATIELOADER = "packages/surrealdb-service/src/surrealdb_service/migrations.py"
 
 
@@ -40,7 +42,7 @@ def test_de_vlag_staat_alleen_op_de_toegestane_plekken() -> None:
         rel for rel, pad in _bestanden()
         if VLAG.search(pad.read_text(encoding="utf-8", errors="ignore"))
     }
-    assert gevonden == {CONNECTION, SOURCE_REPO, MIGRATIE, MIGRATIELOADER}
+    assert gevonden == {CONNECTION, SOURCE_REPO, MIGRATIE, MIGRATIE_90, MIGRATIELOADER}
 
 
 def test_de_migratieloader_gebruikt_de_route_alleen_voor_de_up_migratie() -> None:

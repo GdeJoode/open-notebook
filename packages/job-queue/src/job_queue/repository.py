@@ -58,6 +58,8 @@ class JobRepository(BaseRepository[Job]):
             "source_id": submission.source_id,
             "retry_count": 0,
         }
+        if submission.run:
+            data["run"] = ensure_record_id(submission.run)
         return await self.create(data)
 
     async def update_status(

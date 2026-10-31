@@ -32,6 +32,7 @@ class Job(ObjectModel):
     retry_count: int = 0
     max_retries: int = 2
     source_id: Optional[str] = None
+    run: Optional[str] = None  # de verwerkingsrun (F2-04, ADR 0003)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
@@ -74,6 +75,7 @@ class JobSubmitRequest(BaseModel):
     payload: Dict[str, Any] = {}
     max_retries: int = 2
     source_id: Optional[str] = None
+    run: Optional[str] = None  # de verwerkingsrun (F2-04, ADR 0003)
 
 
 class JobListResponse(BaseModel):

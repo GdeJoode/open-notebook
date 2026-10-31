@@ -1,0 +1,56 @@
+-- ============================================================================
+-- Migratie 90 terug: bronversie, verwerkingsrun en herkomst weg (F2-04).
+--
+-- Eerst het event, dan de velden, indexen en functies.
+-- `fn::vermelding_classificatie` krijgt haar vorm uit migratie 89 terug. Het
+-- event `strengste_classificatie` op `source` houdt de vorm van migratie 90
+-- (ook versies en `mentions` worden intern): de tabellen blijven bestaan, en de
+-- migratieloader voert een `_down` uit zonder de herclassificatievlag die het
+-- event noemt. De oude unieke index op `doc_node` (bron en
+-- `self_ref`) komt terug; die faalt als een bron meer dan één run met
+-- structuur heeft, en dan draait de hele migratie niet terug.
+-- `processing_run` en `source_version` blijven staan met hun records, en de
+-- herkomstvelden op fragmenten, `doc_node`, embeddings, jobs en bronnen
+-- blijven als optioneel veld bestaan: een terugdraaiactie wist geen herkomst
+-- (harde eis 2), net zoals `89_down` `classification_log` laat staan.
+-- Idempotent: IF EXISTS en OVERWRITE.
+-- ============================================================================
+
+REMOVE EVENT IF EXISTS strengste_versie ON source_version;
+
+REMOVE FIELD IF EXISTS classification ON mentions;
+REMOVE FIELD IF EXISTS properties.grounding ON entity;
+
+DEFINE FUNCTION OVERWRITE fn::vermelding_classificatie($bron: any, $grounding: any) {
+    LET $fragment = IF type::is::object($grounding) { $grounding[<string> $bron].chunk_id } ELSE { NONE };
+    RETURN IF fn::classificatie_van($bron) = 'intern' { 'intern' }
+        ELSE IF $fragment { fn::classificatie_van($fragment) }
+        ELSE { 'extern' };
+};
+REMOVE FUNCTION IF EXISTS fn::vermeldingen_met_waarde;
+REMOVE FUNCTION IF EXISTS fn::vermeldingen_kloppen;
+REMOVE FUNCTION IF EXISTS fn::fragment_hoort_bij_bron;
+REMOVE FUNCTION IF EXISTS fn::vermelding_waarde;
+
+-- De herkomst blijft: de velden worden optioneel en zonder ASSERT, zodat code
+-- van voor migratie 90 weer fragmenten zonder herkomst kan schrijven, en een
+-- schrijfactie op een SCHEMAFULL-tabel de bestaande waarden niet weglaat.
+DEFINE FIELD OVERWRITE run ON job TYPE option<record<processing_run>>;
+DEFINE FIELD OVERWRITE run ON source_embedding TYPE option<record<processing_run>>;
+DEFINE FIELD OVERWRITE embedding_model ON source_embedding TYPE option<string>;
+
+REMOVE INDEX IF EXISTS idx_doc_node_run ON doc_node;
+REMOVE INDEX IF EXISTS dn_run_ref ON doc_node;
+DEFINE INDEX OVERWRITE dn_ref ON doc_node FIELDS source, self_ref UNIQUE;
+DEFINE FIELD OVERWRITE run ON doc_node TYPE option<record<processing_run>>;
+DEFINE FIELD OVERWRITE source_version ON doc_node TYPE option<record<source_version>>;
+
+REMOVE INDEX IF EXISTS idx_chunk_source_version ON chunk;
+REMOVE INDEX IF EXISTS idx_chunk_run ON chunk;
+DEFINE FIELD OVERWRITE extractor ON chunk TYPE option<string>;
+DEFINE FIELD OVERWRITE run ON chunk TYPE option<record<processing_run>>;
+DEFINE FIELD OVERWRITE source_version ON chunk TYPE option<record<source_version>>;
+
+DEFINE FIELD OVERWRITE current_version ON source TYPE option<record<source_version>>;
+
+RETURN NONE;

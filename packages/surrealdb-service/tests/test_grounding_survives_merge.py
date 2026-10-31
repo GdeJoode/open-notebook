@@ -24,16 +24,43 @@ from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.entity import EntityRepository
 
 
-def _entity(name: str, source: str, page: int) -> Entity:
+def _entity(name: str, source: str, page: int, chunk_id: str) -> Entity:
     return Entity(
         canonical_name=name,
         entity_type="topic",
         confidence=0.8,
         source_documents=[source],
         properties={
-            "grounding": {source: {"chunk_id": f"chunk:{page}", "grounding": {"page": page}}}
+            "grounding": {source: {"chunk_id": chunk_id, "grounding": {"page": page}}}
         },
     )
+
+
+async def _bron_met_fragment(config: SurrealDBConfig) -> tuple[str, str]:
+    """Een bron met één fragment. Sinds migratie 90 (F2-04) hoort het fragment
+    van een vermelding bij haar bron, met bronversie en run."""
+    import hashlib
+
+    from surrealdb_service.connection import ensure_record_id
+    from surrealdb_service.repositories.processing_run import ProcessingRunRepository
+    from surrealdb_service.repositories.source_version import SourceVersionRepository
+
+    [bron] = await execute_query("CREATE source SET title = 'Openbare testbron' RETURN id",
+                                 config=config)
+    bron = str(bron["id"])
+    run = await ProcessingRunRepository(config).create(trigger="handmatig", pipeline_id="test")
+    versie, _ = await SourceVersionRepository(config).register(
+        bron, hashlib.sha256(bron.encode()).hexdigest(), str(run.id)
+    )
+    [chunk] = await execute_query(
+        "CREATE chunk CONTENT $c RETURN id",
+        {"c": {"source": ensure_record_id(bron), "text": "x", "order": 0, "physical_page": 0,
+               "element_type": "paragraph", "positions": [], "metadata": {},
+               "source_version": ensure_record_id(str(versie.id)),
+               "run": ensure_record_id(str(run.id))}},
+        config,
+    )
+    return bron, str(chunk["id"])
 
 
 @pytest.mark.requires_docker
@@ -45,21 +72,24 @@ async def test_two_documents_both_keep_their_grounding(
     repo = EntityRepository(config=live_surrealdb)
     name = f"Brede Welvaart {uuid.uuid4().hex[:6]}"
 
-    first = await repo.upsert_entity(_entity(name, "source:a", 3))
-    second = await repo.upsert_entity(_entity(name, "source:b", 7))
+    (a, chunk_a), (b, chunk_b) = (await _bron_met_fragment(live_surrealdb),
+                                  await _bron_met_fragment(live_surrealdb))
+
+    first = await repo.upsert_entity(_entity(name, a, 3, chunk_a))
+    second = await repo.upsert_entity(_entity(name, b, 7, chunk_b))
     assert first == second, "setup: the two mentions did not resolve to one row"
 
     rows = await execute_query(
         f"SELECT properties, source_documents FROM {first};", config=live_surrealdb
     )
     grounding = rows[0]["properties"]["grounding"]
-    assert set(grounding) == {"source:a", "source:b"}, (
+    assert set(grounding) == {a, b}, (
         "a document's grounding was overwritten by the next one — the merge is "
         "an overlay, not a union by source"
     )
-    assert grounding["source:a"]["grounding"]["page"] == 3
-    assert grounding["source:b"]["grounding"]["page"] == 7
-    assert set(rows[0]["source_documents"]) == {"source:a", "source:b"}
+    assert grounding[a]["grounding"]["page"] == 3
+    assert grounding[b]["grounding"]["page"] == 7
+    assert set(rows[0]["source_documents"]) == {a, b}
 
 
 @pytest.mark.requires_docker
@@ -75,16 +105,19 @@ async def test_a_second_write_from_the_same_source_replaces_its_own_entry(
     repo = EntityRepository(config=live_surrealdb)
     name = f"Regio Deal {uuid.uuid4().hex[:6]}"
 
-    await repo.upsert_entity(_entity(name, "source:a", 3))
-    await repo.upsert_entity(_entity(name, "source:b", 7))
-    row_id = await repo.upsert_entity(_entity(name, "source:a", 99))
+    (a, chunk_a), (b, chunk_b) = (await _bron_met_fragment(live_surrealdb),
+                                  await _bron_met_fragment(live_surrealdb))
+
+    await repo.upsert_entity(_entity(name, a, 3, chunk_a))
+    await repo.upsert_entity(_entity(name, b, 7, chunk_b))
+    row_id = await repo.upsert_entity(_entity(name, a, 99, chunk_a))
 
     rows = await execute_query(
         f"SELECT properties FROM {row_id};", config=live_surrealdb
     )
     grounding = rows[0]["properties"]["grounding"]
-    assert grounding["source:a"]["grounding"]["page"] == 99, "own entry not updated"
-    assert grounding["source:b"]["grounding"]["page"] == 7, "other source disturbed"
+    assert grounding[a]["grounding"]["page"] == 99, "own entry not updated"
+    assert grounding[b]["grounding"]["page"] == 7, "other source disturbed"
 
 
 @pytest.mark.requires_docker

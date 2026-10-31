@@ -1,0 +1,201 @@
+-- ============================================================================
+-- Migratie 90: bronversie, verwerkingsrun en herkomst (F2-04, ADR 0003, 0001,
+-- 0020, 0022 E).
+--
+-- 1. `processing_run`: de verwerkingsrun (PROV-O activiteit). Status `bezig`,
+--    `geslaagd`, `mislukt` of `niets_nieuws`; een afgesloten run gaat niet
+--    meer terug naar een andere status. `source_map_rule_id` en `_rev` worden
+--    gevuld vanaf F2-13 (ADR 0020).
+-- 2. `source_version`: een versie van een bron, uniek op (`source`,
+--    `content_hash`). De classificatie volgt dezelfde regels als die van een
+--    fragment (migratie 89): standaard die van de bron, nooit losser, en van
+--    'intern' naar 'extern' alleen binnen de herclassificatie.
+--    De strengste waarde wint: een interne versie maakt haar bron intern, en
+--    daarmee (event `strengste_classificatie`) alle versies, fragmenten,
+--    embeddings, `doc_node`-records, inzichten en afgeleide records. Events
+--    draaien in dezelfde transactie als het schrijven van de versie.
+-- 3. `source.current_version`; op `chunk` en `doc_node` de verplichte velden
+--    `source_version` en `run` (lege database, B3), die bij de eigen bron
+--    horen en niet meer veranderen; op `chunk` ook `extractor`. `doc_node` is
+--    uniek per bron, run en `self_ref`: een nieuwe run maakt een nieuwe
+--    structuur naast de oude (ADR 0003, herverwerking zonder overschrijven).
+-- 4. `source_embedding.run` en `embedding_model`; `job.run`.
+-- 5. Vermeldingen (PC.3: `entity.properties.grounding[bron]`): de database
+--    slaat per vermelding de classificatie op (de strengste van fragment en
+--    bron, ADR 0001 "Uitwerking in F2-03") en weigert een vermelding waarvan
+--    het fragment (`chunk_id`) niet bij die bron hoort, of waarvan de bron niet
+--    in `source_documents` staat. Een bestaande vermelding met een ongewijzigd
+--    fragment wordt niet opnieuw gecontroleerd. De run van een vermelding
+--    (`run`) schrijft de fork mee.
+-- 6. De graafrelatie `mentions` (bron naar entiteit) krijgt een afgeleide
+--    classificatie: die van haar bron, 'intern' zonder waarde.
+--
+-- Lege database (B3): geen omzetting van bestaande records. Idempotent via
+-- OVERWRITE en IF EXISTS. Alleen hele regels commentaar: de migratieloader
+-- plakt de regels aan elkaar.
+-- ============================================================================
+
+-- 1. De verwerkingsrun.
+DEFINE TABLE OVERWRITE processing_run SCHEMAFULL;
+DEFINE FIELD OVERWRITE started_at ON processing_run TYPE datetime DEFAULT time::now() READONLY;
+DEFINE FIELD OVERWRITE ended_at ON processing_run TYPE option<datetime>;
+DEFINE FIELD OVERWRITE status ON processing_run TYPE string DEFAULT 'bezig'
+    ASSERT $value IN ['bezig', 'geslaagd', 'mislukt', 'niets_nieuws']
+        AND ($before = NONE OR $before = 'bezig' OR $value = $before);
+DEFINE FIELD OVERWRITE trigger ON processing_run TYPE string READONLY
+    ASSERT $value IN ['schema', 'mapcontrole', 'feed', 'handmatig', 'herverwerking'];
+DEFINE FIELD OVERWRITE pipeline_id ON processing_run TYPE string READONLY
+    ASSERT string::len(string::trim($value)) > 0;
+DEFINE FIELD OVERWRITE pipeline_version ON processing_run TYPE option<object> READONLY;
+DEFINE FIELD OVERWRITE pipeline_version.git_commit ON processing_run TYPE option<string> READONLY;
+DEFINE FIELD OVERWRITE pipeline_version.flow_hash ON processing_run TYPE option<string> READONLY;
+DEFINE FIELD OVERWRITE input_classification ON processing_run TYPE string DEFAULT 'onbekend' READONLY
+    ASSERT $value IN ['intern', 'extern', 'onbekend'];
+DEFINE FIELD OVERWRITE label_schema ON processing_run FLEXIBLE TYPE option<object> READONLY;
+DEFINE FIELD OVERWRITE models ON processing_run TYPE array<object> FLEXIBLE DEFAULT [];
+DEFINE FIELD OVERWRITE log ON processing_run TYPE array<object> FLEXIBLE DEFAULT [];
+DEFINE FIELD OVERWRITE error ON processing_run TYPE option<string>;
+DEFINE FIELD OVERWRITE attempts ON processing_run TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE notified_at ON processing_run TYPE option<datetime>;
+DEFINE FIELD OVERWRITE source_map_rule_id ON processing_run TYPE option<string> READONLY;
+DEFINE FIELD OVERWRITE source_map_rule_rev ON processing_run TYPE option<int> READONLY;
+DEFINE INDEX OVERWRITE idx_processing_run_status ON processing_run FIELDS status;
+
+-- 2. De bronversie.
+DEFINE TABLE OVERWRITE source_version SCHEMAFULL;
+DEFINE FIELD OVERWRITE source ON source_version TYPE record<source> READONLY;
+DEFINE FIELD OVERWRITE version_no ON source_version TYPE int READONLY ASSERT $value >= 1;
+DEFINE FIELD OVERWRITE content_hash ON source_version TYPE string READONLY
+    ASSERT string::matches($value, '^[0-9a-f]{64}$');
+DEFINE FIELD OVERWRITE fetched_at ON source_version TYPE datetime DEFAULT time::now() READONLY;
+DEFINE FIELD OVERWRITE original ON source_version TYPE option<string> READONLY;
+DEFINE FIELD OVERWRITE predecessor ON source_version TYPE option<record<source_version>> READONLY
+    ASSERT $value = NONE OR $value.source = $this.source;
+DEFINE FIELD OVERWRITE created_by_run ON source_version TYPE record<processing_run> READONLY
+    ASSERT record::exists($value);
+DEFINE FIELD OVERWRITE current_run ON source_version TYPE record<processing_run>
+    DEFAULT created_by_run
+    ASSERT record::exists($value);
+DEFINE FIELD OVERWRITE classification ON source_version TYPE string DEFAULT ALWAYS fn::classificatie_van(source)
+    ASSERT $value IN ['intern', 'extern']
+        AND ($value = 'intern' OR fn::classificatie_van(source) = 'extern')
+        AND ($before = NONE OR $before = 'extern' OR $value = 'intern' OR $herclassificatie = true);
+DEFINE INDEX OVERWRITE idx_source_version_hash ON source_version FIELDS source, content_hash UNIQUE;
+DEFINE INDEX OVERWRITE idx_source_version_no ON source_version FIELDS source, version_no UNIQUE;
+DEFINE INDEX OVERWRITE idx_source_version_source ON source_version FIELDS source;
+
+-- 2. De strengste waarde wint: een interne versie maakt haar bron intern.
+DEFINE EVENT OVERWRITE strengste_versie ON source_version
+    WHEN $event IN ['CREATE', 'UPDATE'] AND $after.classification = 'intern'
+        AND fn::classificatie_van($after.source) = 'extern'
+    THEN {
+        UPDATE $after.source SET classification = 'intern' RETURN NONE;
+    };
+
+-- 3. De bron wijst naar haar nieuwste versie.
+DEFINE FIELD OVERWRITE current_version ON source TYPE option<record<source_version>>
+    ASSERT $value = NONE OR $value.source = $this.id;
+
+-- 3. Fragmenten en documentstructuur horen bij één bronversie en één run.
+DEFINE FIELD OVERWRITE source_version ON chunk TYPE record<source_version> READONLY
+    ASSERT $value.source = $this.source;
+DEFINE FIELD OVERWRITE run ON chunk TYPE record<processing_run> READONLY
+    ASSERT record::exists($value);
+DEFINE FIELD OVERWRITE extractor ON chunk TYPE option<string> READONLY;
+DEFINE INDEX OVERWRITE idx_chunk_run ON chunk FIELDS run;
+DEFINE INDEX OVERWRITE idx_chunk_source_version ON chunk FIELDS source_version;
+
+DEFINE FIELD OVERWRITE source_version ON doc_node TYPE record<source_version> READONLY
+    ASSERT $value.source = $this.source;
+DEFINE FIELD OVERWRITE run ON doc_node TYPE record<processing_run> READONLY
+    ASSERT record::exists($value);
+REMOVE INDEX IF EXISTS dn_ref ON doc_node;
+DEFINE INDEX OVERWRITE dn_run_ref ON doc_node FIELDS source, run, self_ref UNIQUE;
+DEFINE INDEX OVERWRITE idx_doc_node_run ON doc_node FIELDS run;
+
+-- 4. Embeddings en jobs.
+DEFINE FIELD OVERWRITE run ON source_embedding TYPE option<record<processing_run>> READONLY;
+DEFINE FIELD OVERWRITE embedding_model ON source_embedding TYPE option<string> READONLY;
+DEFINE FIELD OVERWRITE run ON job TYPE option<record<processing_run>>;
+
+-- 5. Vermeldingen. De waarde van één vermelding: de strengste van haar bron en
+-- haar fragment; onbekend is 'intern'.
+DEFINE FUNCTION OVERWRITE fn::vermelding_waarde($bron: any, $vermelding: any) {
+    LET $fragment = IF type::is::object($vermelding) { $vermelding.chunk_id } ELSE { NONE };
+    RETURN IF fn::classificatie_van($bron) = 'intern' { 'intern' }
+        ELSE IF $fragment { fn::classificatie_van($fragment) }
+        ELSE { 'extern' };
+};
+
+-- Dezelfde regel als in migratie 89, nu via `fn::vermelding_waarde`.
+DEFINE FUNCTION OVERWRITE fn::vermelding_classificatie($bron: any, $grounding: any) {
+    RETURN fn::vermelding_waarde($bron,
+        IF type::is::object($grounding) { $grounding[<string> $bron] } ELSE { NONE });
+};
+
+-- Hoort het fragment bij de bron? Een onbekend fragment hoort nergens bij.
+DEFINE FUNCTION OVERWRITE fn::fragment_hoort_bij_bron($bron: any, $fragment: any) {
+    LET $rid = IF type::is::record($fragment) { $fragment }
+        ELSE IF type::is::string($fragment) AND string::is::record($fragment) { type::thing($fragment) }
+        ELSE { NONE };
+    IF $rid = NONE OR record::tb($rid) != 'chunk' { RETURN false };
+    LET $van = (SELECT VALUE source FROM ONLY $rid);
+    RETURN $van != NONE AND <string> $van = <string> $bron;
+};
+
+-- Elke vermelding hoort bij een bron uit `source_documents`, en een nieuw of
+-- gewijzigd fragment hoort bij die bron. Een closure ziet geen variabelen van
+-- buiten; daarom een FOR-lus.
+DEFINE FUNCTION OVERWRITE fn::vermeldingen_kloppen($nieuw: any, $oud: any, $bronnen: any) {
+    IF !type::is::object($nieuw) { RETURN true };
+    LET $lijst = IF type::is::array($bronnen) { $bronnen.map(|$b| <string> $b) } ELSE { [] };
+    FOR $e IN object::entries($nieuw) {
+        IF $e[0] NOTINSIDE $lijst { RETURN false };
+        LET $fragment = IF type::is::object($e[1]) { $e[1].chunk_id } ELSE { NONE };
+        LET $vorig = IF type::is::object($oud) AND type::is::object($oud[$e[0]]) { $oud[$e[0]].chunk_id } ELSE { NONE };
+        IF $fragment != NONE AND $fragment != $vorig AND !fn::fragment_hoort_bij_bron($e[0], $fragment) {
+            RETURN false
+        };
+    };
+    RETURN true;
+};
+
+-- Elke vermelding krijgt haar berekende classificatie; een meegegeven waarde
+-- telt niet.
+DEFINE FUNCTION OVERWRITE fn::vermeldingen_met_waarde($grounding: object) {
+    RETURN object::from_entries(object::entries($grounding).map(|$e| [$e[0],
+        IF type::is::object($e[1]) {
+            object::from_entries(array::concat(
+                object::entries($e[1]).filter(|$kv| $kv[0] != 'classification'),
+                [['classification', fn::vermelding_waarde($e[0], $e[1])]]
+            ))
+        } ELSE { $e[1] }
+    ]));
+};
+
+DEFINE FIELD OVERWRITE properties.grounding ON entity FLEXIBLE TYPE option<object>
+    VALUE IF type::is::object($value) { fn::vermeldingen_met_waarde($value) } ELSE { $value }
+    ASSERT fn::vermeldingen_kloppen($value, $before, $this.source_documents);
+
+-- 6. De graafrelatie `mentions` volgt haar bron.
+DEFINE FIELD OVERWRITE classification ON mentions TYPE string DEFAULT ALWAYS 'intern'
+    VALUE fn::classificatie_van($this.in)
+    ASSERT $value IN ['intern', 'extern'];
+
+-- 2 en 6. Het event uit migratie 89, aangevuld met de versies en `mentions`.
+DEFINE EVENT OVERWRITE strengste_classificatie ON source
+    WHEN $event = 'UPDATE' AND $before.classification = 'extern' AND $after.classification = 'intern'
+        AND $herclassificatie != true
+    THEN {
+        UPDATE source_version SET classification = 'intern' WHERE source = $after.id AND classification != 'intern' RETURN NONE;
+        UPDATE chunk SET classification = 'intern' WHERE source = $after.id AND classification != 'intern' RETURN NONE;
+        UPDATE source_embedding SET classification = 'intern' WHERE source = $after.id AND classification != 'intern' RETURN NONE;
+        UPDATE doc_node SET classification = 'intern' WHERE source = $after.id AND classification != 'intern' RETURN NONE;
+        UPDATE source_insight SET classification = 'intern' WHERE source = $after.id AND classification != 'intern' RETURN NONE;
+        UPDATE entity WHERE source_documents CONTAINSANY [<string> $after.id] RETURN NONE;
+        UPDATE relation WHERE source_documents CONTAINSANY [<string> $after.id] RETURN NONE;
+        UPDATE entity_alias WHERE source_document = <string> $after.id RETURN NONE;
+        UPDATE $after.id->mentions RETURN NONE;
+    };
+
+RETURN NONE;
