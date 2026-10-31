@@ -282,7 +282,7 @@ Doel volgens FO 15: PDF en lokale map, docling-serve, fragmentatie, importeindpu
 - *Agent:* `signaal-bouwer`, daarna `signaal-reviewer`.
 
 **F2-23 Verwijderen: oude GPU-diensten, oude export en `docker-compose.yml`**
-- *Wat:* weg gaan `services/docling/`, `services/whisperx/`, `services/mineru/`, `services/summarization/`; in `pipelines/ingestion` `parsers/docling_parser.py`, `workflow.py`, `cli.py`, `audio/transcriber.py` en de exporters als niets ze meer gebruikt; `obsidian_export_service.py`, `vault_sync_service.py` en de schrijvende routes in `vault.py`. `docker-compose.signaalsysteem.yml` vervangt `docker-compose.yml`; er blijven geen twee Compose-bestanden. Volumes en gegevens blijven staan; `./surreal_data` blijft het archief van de oude database (B3).
+- *Wat:* weg gaan `services/docling/`, `services/whisperx/`, `services/mineru/`, `services/summarization/`; in `pipelines/ingestion` `parsers/docling_parser.py`, `workflow.py`, `cli.py`, `audio/transcriber.py` en de exporters als niets ze meer gebruikt; `obsidian_export_service.py`, `vault_sync_service.py` en de schrijvende routes in `vault.py`. `docker-compose.signaalsysteem.yml` vervangt `docker-compose.yml`; er blijven geen twee Compose-bestanden. Volumes en gegevens blijven staan; `./surreal_data` blijft het archief van de oude database (B3). Ook weg: `apps/app-main/tests/test_source_related_hybrid_staging.py` (Track R.3), dat alleen tegen de oude database `staging` draait en in de nieuwe, lege omgeving geen betekenis heeft (Geert, 31-10).
 - *Hangt af van:* F2-21, F2-22, F2-24 geslaagd. B6 besloten: de bestaande omgeving stopt na een geslaagde F2-24.
 - *Bestanden:* genoemde mappen en bestanden; `docker-compose.yml`; `ARCHITECTURE.md` §1 en §4.
 - *ADR:* 0014, 0015, 0018, 0002.
