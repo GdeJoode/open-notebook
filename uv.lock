@@ -308,6 +308,7 @@ dependencies = [
     { name = "networkx" },
     { name = "ontology-extraction" },
     { name = "python-dotenv" },
+    { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "retrieval" },
     { name = "shared" },
@@ -345,6 +346,7 @@ requires-dist = [
     { name = "networkx", specifier = ">=3.0" },
     { name = "ontology-extraction", editable = "pipelines/ontology-extraction" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
+    { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "retrieval", editable = "pipelines/retrieval" },
     { name = "shared", editable = "packages/shared" },
@@ -1635,9 +1637,9 @@ dependencies = [
     { name = "aiofiles" },
     { name = "fastapi" },
     { name = "loguru" },
-    { name = "mcp" },
     { name = "pydantic-settings" },
     { name = "python-magic" },
+    { name = "python-multipart" },
     { name = "shared" },
     { name = "surrealdb-service" },
     { name = "watchfiles" },
@@ -1663,11 +1665,11 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.25.0" },
     { name = "job-queue", marker = "extra == 'queue'", editable = "packages/job-queue" },
     { name = "loguru", specifier = ">=0.7.0" },
-    { name = "mcp", specifier = ">=1.0.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "python-magic", specifier = ">=0.4.27" },
+    { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "shared", editable = "packages/shared" },
     { name = "streamlit", marker = "extra == 'ui'", specifier = ">=1.30.0" },
     { name = "surrealdb-service", editable = "packages/surrealdb-service" },
@@ -3247,7 +3249,6 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "loguru" },
-    { name = "mcp" },
     { name = "pydantic-settings" },
     { name = "shared" },
     { name = "surrealdb-service" },
@@ -3295,7 +3296,6 @@ requires-dist = [
     { name = "langchain-openai", marker = "extra == 'all-providers'", specifier = ">=0.2.3" },
     { name = "langchain-openai", marker = "extra == 'openai'", specifier = ">=0.2.3" },
     { name = "loguru", specifier = ">=0.7.0" },
-    { name = "mcp", specifier = ">=1.0.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
@@ -3733,31 +3733,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/99/5b/a36a337438a14116b16480db471ad061c36c3694df7c2084a0da7ba538b7/matplotlib_inline-0.1.7.tar.gz", hash = "sha256:8423b23ec666be3d16e16b60bdd8ac4e86e840ebd1dd11a30b9f117f2fa0ab90", size = 8159, upload-time = "2024-04-15T13:44:44.803Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8f/8e/9ad090d3553c280a8060fbf6e24dc1c0c29704ee7d1c372f0c174aa59285/matplotlib_inline-0.1.7-py3-none-any.whl", hash = "sha256:df192d39a4ff8f21b1895d72e6a13f5fcc5099f00fa84384e0ea28c2cc0653ca", size = 9899, upload-time = "2024-04-15T13:44:43.265Z" },
-]
-
-[[package]]
-name = "mcp"
-version = "1.26.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "anyio" },
-    { name = "httpx" },
-    { name = "httpx-sse" },
-    { name = "jsonschema" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "pyjwt", extra = ["crypto"] },
-    { name = "python-multipart" },
-    { name = "pywin32", marker = "sys_platform == 'win32'" },
-    { name = "sse-starlette" },
-    { name = "starlette" },
-    { name = "typing-extensions" },
-    { name = "typing-inspection" },
-    { name = "uvicorn", marker = "sys_platform != 'emscripten'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/fc/6d/62e76bbb8144d6ed86e202b5edd8a4cb631e7c8130f3f4893c3f90262b10/mcp-1.26.0.tar.gz", hash = "sha256:db6e2ef491eecc1a0d93711a76f28dec2e05999f93afd48795da1c1137142c66", size = 608005, upload-time = "2026-01-24T19:40:32.468Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fd/d9/eaa1f80170d2b7c5ba23f3b59f766f3a0bb41155fbc32a69adfa1adaaef9/mcp-1.26.0-py3-none-any.whl", hash = "sha256:904a21c33c25aa98ddbeb47273033c435e595bbacfdb177f4bd87f6dceebe1ca", size = 233615, upload-time = "2026-01-24T19:40:30.652Z" },
 ]
 
 [[package]]
@@ -6026,20 +6001,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pyjwt"
-version = "2.13.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3b/81/58d0ac84e1ef3a3843791d6954d94c0b33d526c75eeb1efbce9d0a4c4077/pyjwt-2.13.0.tar.gz", hash = "sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423", size = 107515, upload-time = "2026-05-21T19:54:36.618Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/5e/ecf12fdb62546d64385c158514e9b2b671f7832108ef2ecd2020ce0af2d1/pyjwt-2.13.0-py3-none-any.whl", hash = "sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728", size = 31274, upload-time = "2026-05-21T19:54:35.362Z" },
-]
-
-[package.optional-dependencies]
-crypto = [
-    { name = "cryptography" },
-]
-
-[[package]]
 name = "pylatexenc"
 version = "2.10"
 source = { registry = "https://pypi.org/simple" }
@@ -7849,18 +7810,6 @@ wheels = [
 ]
 
 [[package]]
-name = "sse-starlette"
-version = "3.0.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "anyio" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/42/6f/22ed6e33f8a9e76ca0a412405f31abb844b779d52c5f96660766edcd737c/sse_starlette-3.0.2.tar.gz", hash = "sha256:ccd60b5765ebb3584d0de2d7a6e4f745672581de4f5005ab31c3a25d10b52b3a", size = 20985, upload-time = "2025-07-27T09:07:44.565Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/10/c78f463b4ef22eef8491f218f692be838282cd65480f6e423d7730dfd1fb/sse_starlette-3.0.2-py3-none-any.whl", hash = "sha256:16b7cbfddbcd4eaca11f7b586f3b8a080f1afe952c15813455b162edea619e5a", size = 11297, upload-time = "2025-07-27T09:07:43.268Z" },
-]
-
-[[package]]
 name = "stack-data"
 version = "0.6.3"
 source = { registry = "https://pypi.org/simple" }
@@ -7981,12 +7930,9 @@ name = "surrealdb-service"
 version = "0.1.0"
 source = { editable = "packages/surrealdb-service" }
 dependencies = [
-    { name = "fastapi" },
     { name = "httpx" },
-    { name = "mcp" },
     { name = "shared" },
     { name = "surrealdb" },
-    { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.optional-dependencies]
@@ -8007,9 +7953,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", specifier = ">=0.104.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "mcp", specifier = ">=1.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
@@ -8017,7 +7961,6 @@ requires-dist = [
     { name = "streamlit", marker = "extra == 'ui'", specifier = ">=1.30.0" },
     { name = "surrealdb", specifier = "==1.0.6" },
     { name = "testcontainers", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
 ]
 provides-extras = ["ui", "dev"]
 

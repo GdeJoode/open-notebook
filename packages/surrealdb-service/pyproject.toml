@@ -1,17 +1,14 @@
 [project]
 name = "surrealdb-service"
 version = "0.1.0"
-description = "SurrealDB service layer with REST API and MCP server"
+description = "SurrealDB service layer: connection, repositories and migrations"
 requires-python = ">=3.10"
 dependencies = [
     "shared",
     # connection.py relies on 1.0.6 internals (recv_task) and works around its
     # cancel race; re-test it before moving the pin.
     "surrealdb==1.0.6",
-    "fastapi>=0.104.0",
-    "uvicorn[standard]>=0.24.0",
     "httpx>=0.27.0",
-    "mcp>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -24,10 +21,6 @@ dev = [
     # tests (Track B.0 harness). Gated behind the `requires_docker` marker.
     "testcontainers>=4.0.0",
 ]
-
-[project.scripts]
-surrealdb-service = "surrealdb_service.api.app:main"
-surrealdb-mcp = "surrealdb_service.mcp.server:main"
 
 [build-system]
 requires = ["hatchling"]

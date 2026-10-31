@@ -17,6 +17,8 @@ dependencies = [
     "retrieval",
     "zotero-integration",
     "fastapi>=0.104.0",
+    # Form/UploadFile; kwam eerder alleen mee via mcp (F2-02).
+    "python-multipart>=0.0.20",
     "uvicorn[standard]>=0.24.0",
     "langgraph>=0.2.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
