@@ -270,7 +270,10 @@ async def test_trigger_handmatig_alleen_voor_beheerder(env, app, git_flows, monk
 
 async def test_flow_vastgelegd_in_de_body_telt_niet(env, app, git_flows) -> None:
     [regel] = await _q("CREATE source_map_rule CONTENT {classification: 'extern',"
-                       " classification_confirmed_by: 'Testpersoon', active: true} RETURN id")
+                       " classification_confirmed_by: 'Testpersoon', active: true,"
+                       " name: 'Openbare testbron', route_type: 'api', source_type: 'api',"
+                       " location: 'https://example.org/api', pipeline_start: 'automatisch',"
+                       " route: 'inname_pdf', fetch_content: 'volledig_document'} RETURN id")
     async with _client(app) as client:
         resp = await client.post("/api/v1/runs", json={
             "trigger": "schema", "pipeline_id": "inname_pdf",

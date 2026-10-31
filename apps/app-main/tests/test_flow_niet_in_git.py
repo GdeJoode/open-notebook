@@ -191,9 +191,12 @@ def _client(app) -> httpx.AsyncClient:
 
 
 async def _regel(classification: str, bevestigd: bool = True) -> str:
-    """Een bronkaartregel volgens plan §5.2 (de tabel zelf komt met F2-13)."""
+    """Een bronkaartregel volgens plan §5.2 (migratie 93, F2-13)."""
     rid = f"source_map_rule:t{uuid.uuid4().hex[:10]}"
-    data = {"classification": classification, "active": True, "rev": 4}
+    data = {"name": "Openbare testbron", "route_type": "api", "source_type": "api",
+            "location": "https://example.org/api", "pipeline_start": "automatisch",
+            "route": "inname_pdf", "fetch_content": "volledig_document",
+            "classification": classification, "active": True}
     if bevestigd:
         data["classification_confirmed_by"] = "Testpersoon"
     await conn.execute_query("CREATE type::thing($id) CONTENT $d", {"id": rid, "d": data})
@@ -278,7 +281,7 @@ async def test_flow_buiten_git_met_externe_invoer_geeft_201_met_waarschuwing(
     assert [r["status"] for r in run["log"]] == ["niet_vastgelegd"]
     assert run["flow_vastgelegd"] is False
     # De fork legt de regel en haar `rev` vast (ADR 0020).
-    assert (run["source_map_rule_id"], run["source_map_rule_rev"]) == (regel, 4)
+    assert (run["source_map_rule_id"], run["source_map_rule_rev"]) == (regel, 0)
 
     # Zo'n run mag een versie en fragment van een externe bron schrijven, niet
     # van een interne (migratie 90).

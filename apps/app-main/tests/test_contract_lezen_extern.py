@@ -5,7 +5,8 @@ met een sleutel ``lezen_extern`` (de sleutel van open-notebook-mcp):
 
 * synthetische interne en externe gegevens voor bronnen, versies, fragmenten,
   embeddings, ``doc_node``, inzichten, notities, notebooknamen en
-  -beschrijvingen, entiteiten, aliassen, relaties en ``mentions``;
+  -beschrijvingen, entiteiten, aliassen, relaties en ``mentions``, en
+  bronkaartregels, batches en een wachtrij-item (F2-13);
 * elke route voor ``lezen_extern`` wordt aangeroepen, ook met interne,
   ongeldige en vreemde id's, ongeldige invoer, ``history=true`` en een
   geforceerde fout in de repositorylaag;
@@ -217,6 +218,30 @@ async def _randgevallen(g: Gegevens) -> None:
     )
 
 
+async def _bronkaart(g: Gegevens) -> None:
+    """F2-13: bronkaartregels, een batch en een wachtrij-item, intern en extern
+    (bevestigd), met het kenmerk in naam, locatie en pad. Geen antwoord voor
+    ``lezen_extern`` mag die tonen (ADR 0020)."""
+    for soort in ("intern", "extern"):
+        doel = g.intern if soort == "intern" else g.extern
+        regel = {"name": f"Regel {g.kenmerk}", "route_type": "api", "source_type": "api",
+                 "location": f"https://example.org/{g.kenmerk}/{soort}",
+                 "pipeline_start": "automatisch", "route": "inname_api",
+                 "fetch_content": "volledig_document", "classification": soort}
+        if soort == "extern":
+            regel["classification_confirmed_by"] = "Beheerder Test"
+        [rij] = await _q("CREATE source_map_rule CONTENT $d RETURN id", {"d": regel})
+        doel["source_map_rule"] = str(rij["id"])
+        [batch] = await _q("CREATE intake_batch CONTENT $d RETURN id", {"d": {
+            "route": "inname_pdf", "created_by": "Beheerder Test", "classification": soort,
+            "files": [f"/data/batch/{g.kenmerk}.pdf"]}})
+        doel["intake_batch"] = str(batch["id"])
+    [item] = await _q("CREATE intake_item CONTENT $d RETURN id", {"d": {
+        "origin": "watchfolder", "path": f"/data/inbox/{g.kenmerk}.pdf",
+        "content_hash": "sha256:" + "d" * 64, "registered_by": "langflow"}})
+    g.intern["intake_item"] = str(item["id"])
+
+
 @pytest.fixture(scope="module")
 def app():
     return create_app()
@@ -240,11 +265,12 @@ async def gegevens(env) -> Gegevens:
     g.intern = await _bron_met_alles(g, "intern")
     await _graaf(g)
     await _randgevallen(g)
+    await _bronkaart(g)
     g.intern_ids = set(g.intern.values())
     # Controle op de testdata zelf: interne records zijn echt intern.
     rijen = await _q("SELECT VALUE classification FROM $ids",
                      {"ids": [_rid(i) for i in g.intern_ids
-                              if not i.startswith("processing_run:")]})
+                              if not i.startswith(("processing_run:", "intake_item:"))]})
     assert set(rijen) == {"intern"}, rijen
     # Controle op de lekdetectie zelf.
     assert g.lekken(f'{{"id": "{g.intern["note"]}"}}') and g.lekken(g.kenmerk.upper())
@@ -378,6 +404,21 @@ async def test_extern_is_zichtbaar(lezen_extern, gegevens) -> None:
     r = await c.post("/api/search", json={"query": g.woord, "type": "text", "history": True})
     hit = next(h for h in r.json()["results"] if h["id"] == g.extern["source"])
     assert {g.extern["chunk_oud"], g.extern["chunk_huidig"]} <= set(hit["chunks"])
+
+
+async def test_bronkaart_niet_leesbaar(lezen_extern, gegevens) -> None:
+    """F2-13 (ADR 0020): ook een externe, bevestigde regel blijft onzichtbaar."""
+    g, c = gegevens, lezen_extern
+    paden = ["/api/v1/source-map-rules", "/api/v1/intake/batches",
+             "/api/v1/intake/items?status=besloten"]
+    for soort in (g.intern, g.extern):
+        paden += [f"/api/v1/source-map-rules/{soort['source_map_rule']}",
+                  f"/api/v1/intake/batches/{soort['intake_batch']}"]
+    for pad in paden:
+        r = await c.get(pad)
+        assert r.status_code == 403, (pad, r.status_code)
+        _geen_lek(g, r, pad)
+        assert g.extern["source_map_rule"] not in r.text
 
 
 @pytest.mark.parametrize("sleutel", ["source", "note", "notebook"])

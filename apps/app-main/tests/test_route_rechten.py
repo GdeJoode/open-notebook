@@ -42,6 +42,15 @@ LAGER_DAN_BEHEERDER = {
     ("POST", "/api/v1/runs"): Right.PIJPLIJN,
     ("PATCH", "/api/v1/runs/{run_id}"): Right.PIJPLIJN,
     ("GET", "/api/v1/runs/{run_id}"): Right.PIJPLIJN,
+    # F2-13: bronkaart en batches lezen, wachtrij-items aanmelden, ophalen en
+    # op `verwerkt` zetten (ADR 0020).
+    ("GET", "/api/v1/source-map-rules"): Right.PIJPLIJN,
+    ("GET", "/api/v1/source-map-rules/{rule_id}"): Right.PIJPLIJN,
+    ("GET", "/api/v1/intake/batches"): Right.PIJPLIJN,
+    ("GET", "/api/v1/intake/batches/{batch_id}"): Right.PIJPLIJN,
+    ("POST", "/api/v1/intake/items"): Right.PIJPLIJN,
+    ("GET", "/api/v1/intake/items"): Right.PIJPLIJN,
+    ("PATCH", "/api/v1/intake/items/{item_id}"): Right.PIJPLIJN,
 }
 
 

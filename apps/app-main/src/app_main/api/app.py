@@ -318,6 +318,7 @@ def create_app() -> FastAPI:
         exports,
         health,
         insights,
+        intake,
         knowledge_graph,
         model_routes,
         models,
@@ -334,6 +335,7 @@ def create_app() -> FastAPI:
         search,
         settings,
         source_chat,
+        source_map,
         sources,
         speaker_profiles,
         structure_graph,
@@ -374,6 +376,8 @@ def create_app() -> FastAPI:
         classification.router, prefix="/api", tags=["classification"]
     )
     application.include_router(runs.router, prefix="/api", tags=["runs"])
+    application.include_router(source_map.router, prefix="/api", tags=["source-map"])
+    application.include_router(intake.router, prefix="/api", tags=["intake"])
     application.include_router(
         structure_graph.router, prefix="/api", tags=["structure-graph"]
     )

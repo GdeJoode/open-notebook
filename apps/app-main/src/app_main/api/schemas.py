@@ -922,3 +922,211 @@ class SourceStatusResponse(BaseModel):
 class ErrorResponse(BaseModel):
     error: str
     message: str
+
+
+# ---------------------------------------------------------------------------
+# Bronkaart, innamebatch en innamewachtrij (F2-13, ADR 0020, plan §5.2)
+# ---------------------------------------------------------------------------
+
+_Classificatie = Literal["intern", "extern"]
+_RouteType = Literal["api", "mcp", "feed", "website", "bulkupload", "watchfolder", "upload"]
+_SourceType = Literal["pdf", "map", "website", "api", "video", "podcast", "mcp"]
+_FetchContent = Literal["metadata", "transcript", "volledige_media", "volledig_document"]
+
+
+class ScheduleModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cron: str = Field(..., min_length=1)
+    timezone: str = "Europe/Amsterdam"
+    catch_up: Literal["coalesce", "skip"] = "coalesce"
+
+
+class LabelSchemaModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_name: str = Field(..., alias="schema", min_length=1)
+    version: str = Field(..., min_length=1)
+
+    def opslag(self) -> Dict[str, str]:
+        return {"schema": self.schema_name, "version": self.version}
+
+
+class SourceMapRuleCreate(BaseModel):
+    """``POST /api/v1/source-map-rules`` (beheerder). Zonder ``classification``
+    geldt de standaard van de route (ADR 0019); ``confirm`` legt ``extern``
+    meteen vast met de persoon van de sleutel."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1)
+    route_type: _RouteType
+    source_type: _SourceType
+    location: str = Field(..., min_length=1)
+    schedule: Optional[ScheduleModel] = None
+    classification: Optional[_Classificatie] = None
+    document_type: Optional[List[str]] = None
+    route: str = Field(..., min_length=1)
+    selection: Optional[List[str]] = None
+    label_schema: Optional[LabelSchemaModel] = None
+    owner: Optional[str] = None
+    fetch_content: Optional[_FetchContent] = None
+    active: Optional[bool] = None
+    confirm: bool = False
+    reason: Optional[str] = None
+
+
+class SourceMapRulePatch(BaseModel):
+    """``PATCH /api/v1/source-map-rules/{id}`` (beheerder), met ``rev``.
+    Alleen meegestuurde velden veranderen; ``null`` wist een optioneel veld."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rev: int
+    name: Optional[str] = Field(None, min_length=1)
+    route_type: Optional[_RouteType] = None
+    source_type: Optional[_SourceType] = None
+    location: Optional[str] = Field(None, min_length=1)
+    schedule: Optional[ScheduleModel] = None
+    classification: Optional[_Classificatie] = None
+    document_type: Optional[List[str]] = None
+    route: Optional[str] = Field(None, min_length=1)
+    selection: Optional[List[str]] = None
+    label_schema: Optional[LabelSchemaModel] = None
+    owner: Optional[str] = Field(None, min_length=1)
+    fetch_content: Optional[_FetchContent] = None
+    active: Optional[bool] = None
+    confirm: bool = False
+    reason: Optional[str] = None
+
+
+class ConfirmRequest(BaseModel):
+    """Bevestiging van ``extern`` door de beheerder, met ``rev``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rev: int
+    reason: Optional[str] = None
+
+
+class SourceMapRuleResponse(BaseModel):
+    id: str
+    name: str
+    route_type: str
+    source_type: str
+    location: str
+    schedule: Optional[Dict[str, Any]] = None
+    classification: str
+    classification_confirmed_by: Optional[str] = None
+    classification_confirmed_at: Optional[datetime] = None
+    effective_classification: str
+    pipeline_start: str
+    document_type: Optional[List[str]] = None
+    route: str
+    selection: Optional[List[str]] = None
+    label_schema: Optional[Dict[str, Any]] = None
+    owner: str
+    fetch_content: str
+    active: bool
+    rev: int
+    modified_by: Optional[str] = None
+    modified_at: Optional[datetime] = None
+
+
+class IntakeBatchCreate(BaseModel):
+    """``POST /api/v1/intake/batches`` (beheerder); zonder keuze ``intern``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    route: str = Field(..., min_length=1)
+    files: List[str] = Field(default_factory=list)
+    classification: Optional[_Classificatie] = None
+    source_map_rule_id: Optional[str] = None
+    confirm: bool = False
+    reason: Optional[str] = None
+
+
+class IntakeBatchPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rev: int
+    route: Optional[str] = Field(None, min_length=1)
+    files: Optional[List[str]] = None
+    classification: Optional[_Classificatie] = None
+    confirm: bool = False
+    reason: Optional[str] = None
+
+
+class IntakeBatchResponse(BaseModel):
+    id: str
+    classification: str
+    classification_confirmed_by: Optional[str] = None
+    classification_confirmed_at: Optional[datetime] = None
+    effective_classification: str
+    route: str
+    source_map_rule: Optional[str] = None
+    files: List[str] = Field(default_factory=list)
+    created_by: str
+    rev: int
+    modified_by: Optional[str] = None
+    modified_at: Optional[datetime] = None
+
+
+class GatekeeperModel(BaseModel):
+    """Het voorstel van de poortwachter: kenmerken, geen tekst uit het document."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: _Classificatie
+    internal_markers: Optional[List[str]] = None
+    method: Optional[str] = None
+    text_source: Optional[str] = None
+    probability: Optional[float] = None
+    model: Optional[str] = None
+
+
+class IntakeItemCreate(BaseModel):
+    """``POST /api/v1/intake/items`` (pijplijn)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    origin: Literal["watchfolder", "upload", "zonder_regel"]
+    path: str = Field(..., min_length=1)
+    content_hash: str = Field(..., min_length=1)
+    gatekeeper: Optional[GatekeeperModel] = None
+
+
+class IntakeItemPatch(BaseModel):
+    """``PATCH /api/v1/intake/items/{id}`` (pijplijn): alleen ``verwerkt``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rev: int
+    status: Literal["verwerkt"]
+    run_id: Optional[str] = None
+
+
+class IntakeDecisionRequest(BaseModel):
+    """``POST /api/v1/intake/items/{id}/decision`` (beheerder)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rev: int
+    route: str = Field(..., min_length=1)
+    classification: _Classificatie
+    reason: Optional[str] = None
+
+
+class IntakeItemResponse(BaseModel):
+    id: str
+    origin: str
+    path: str
+    content_hash: str
+    proposed_classification: Optional[str] = None
+    gatekeeper: Optional[Dict[str, Any]] = None
+    decision: Optional[Dict[str, Any]] = None
+    effective_classification: str
+    status: str
+    run: Optional[str] = None
+    rev: int
+    modified_at: Optional[datetime] = None

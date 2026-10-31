@@ -50,6 +50,8 @@ from app_main.services.audit.chunk_audit import ChunkAuditService
 from app_main.services.chunking.chunk_mutator import ChunkMutator
 from app_main.services.classification_service import ClassificationService
 from app_main.services.processing_run_service import ProcessingRunService
+from app_main.services.intake_service import IntakeService
+from app_main.services.source_map_service import SourceMapService
 from app_main.services.cites_materialization_service import (
     CitesMaterializationService,
 )
@@ -934,3 +936,11 @@ def get_classification_service() -> ClassificationService:
 
 def get_processing_run_service() -> ProcessingRunService:
     return ProcessingRunService()
+
+
+def get_source_map_service() -> SourceMapService:
+    return SourceMapService()
+
+
+def get_intake_service() -> IntakeService:
+    return IntakeService()

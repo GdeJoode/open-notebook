@@ -231,3 +231,32 @@ def get_inbox_debounce_seconds() -> int:
     LAST event before ingesting, so a file is enqueued once, fully written.
     """
     return _int_env("INBOX_DEBOUNCE_SECONDS", 3)
+
+
+# ---------------------------------------------------------------------------
+# Signaalsysteem: verboden locaties voor een bronkaartregel (F2-13, ADR 0004, 0020)
+# ---------------------------------------------------------------------------
+# Een bronkaartregel mag niet naar de vault of de exportmap van de export naar
+# Obsidian wijzen: afgeleide teksten tellen nooit als bron. Beide zijn een lijst
+# paden, gescheiden door ``;`` (een Windows-pad bevat ``:``). De vault staat op
+# de host en, vanaf F5-05, op een koppelpunt in een container; beide horen in
+# de lijst.
+
+_STANDAARD_VAULT_PADEN = (r"D:\# Vault", "/vault")
+
+
+def _paden_env(name: str, default: tuple[str, ...]) -> list[str]:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return list(default)
+    return [p.strip() for p in raw.split(";") if p.strip()]
+
+
+def get_vault_paden() -> list[str]:
+    """De vault, op de host en als koppelpunt (``SIGNAAL_VAULT_PADEN``)."""
+    return _paden_env("SIGNAAL_VAULT_PADEN", _STANDAARD_VAULT_PADEN)
+
+
+def get_exportmap_paden() -> list[str]:
+    """De exportmap van de export naar Obsidian (``SIGNAAL_EXPORTMAP_PADEN``)."""
+    return _paden_env("SIGNAAL_EXPORTMAP_PADEN", ())

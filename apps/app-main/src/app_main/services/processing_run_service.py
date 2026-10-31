@@ -8,7 +8,7 @@ blijft het een waarschuwing ``niet_vastgelegd`` in het runlogboek.
 
 De invoer is alleen extern als de bronkaartregel van de run extern is, door een
 beheerder bevestigd en actief (ADR 0001, 0020). Zonder regel is de invoer
-onbekend; de tabel ``source_map_rule`` komt met F2-13.
+onbekend. De run legt id en ``rev`` van zijn regel vast (F2-13).
 
 ``PATCH /api/v1/runs/{id}`` sluit een run af. Een afgesloten run geeft 409. Een
 run die ``geslaagd`` meldt maar geen bronversie, fragment of ``doc_node`` maakte,
@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from shared.models.processing_run import AFGESLOTEN, ProcessingRun
+from shared.models.source_map import effectieve_classificatie
 from surrealdb_service.repositories.processing_run import (
     ProcessingRunRepository,
     source_map_rule_snapshot,
@@ -83,12 +84,11 @@ class ProcessingRunService:
         if not regel:
             return "onbekend", None
         rev = regel.get("rev") if isinstance(regel.get("rev"), int) else None
-        extern = (
-            regel.get("classification") == "extern"
-            and bool(str(regel.get("classification_confirmed_by") or "").strip())
-            and regel.get("active") is not False
-        )
-        return ("extern" if extern else "intern"), rev
+        return effectieve_classificatie(
+            regel.get("classification"),
+            regel.get("classification_confirmed_by"),
+            active=regel.get("active"),
+        ), rev
 
     async def start(
         self,

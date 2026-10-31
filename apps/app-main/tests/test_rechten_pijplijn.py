@@ -1,7 +1,9 @@
 """Wat de sleutel ``pijplijn`` (Langflow) niet mag (F2-01, ADR 0002 B).
 
-Groeit mee met F2-13 en F2-30. Nu: sleutelbeheer (``/api/agent-keys``), de
-besluiten in de triage en de herclassificatie (F2-03) geven 403.
+Groeit mee met F2-30. Nu: sleutelbeheer (``/api/agent-keys``), de besluiten in
+de triage, de herclassificatie (F2-03), en aanmaken, wijzigen en bevestigen van
+bronkaartregels en batches en het besluit over een wachtrij-item (F2-13) geven
+403.
 """
 
 from __future__ import annotations
@@ -73,6 +75,28 @@ def test_pijplijn_krijgt_403_op_herclassificatie(app) -> None:
     verzoeken = _routes_onder(app, "/api/v1/sources", {"POST", "PUT", "PATCH", "DELETE"})
     assert ("POST", "/api/v1/sources/x/classification") in verzoeken
     _alle_403(app, verzoeken)
+
+
+def test_pijplijn_krijgt_403_op_beheer_van_bronkaart_en_batches(app) -> None:
+    verzoeken = (
+        _routes_onder(app, "/api/v1/source-map-rules", {"POST", "PUT", "PATCH", "DELETE"})
+        + _routes_onder(app, "/api/v1/intake/batches", {"POST", "PUT", "PATCH", "DELETE"})
+    )
+    for verwacht in (("POST", "/api/v1/source-map-rules"),
+                     ("PATCH", "/api/v1/source-map-rules/x"),
+                     ("POST", "/api/v1/source-map-rules/x/confirm"),
+                     ("POST", "/api/v1/intake/batches"),
+                     ("PATCH", "/api/v1/intake/batches/x"),
+                     ("POST", "/api/v1/intake/batches/x/confirm")):
+        assert verwacht in verzoeken
+    _alle_403(app, verzoeken)
+
+
+def test_pijplijn_krijgt_403_op_het_besluit_over_een_wachtrij_item(app) -> None:
+    # Ook een lijst met items die nog wachten is alleen voor de beheerder.
+    _alle_403(app, [("POST", "/api/v1/intake/items/x/decision"),
+                    ("GET", "/api/v1/intake/items"),
+                    ("GET", "/api/v1/intake/items?status=wacht")])
 
 
 def test_pijplijn_mag_de_leesroutes(app) -> None:
