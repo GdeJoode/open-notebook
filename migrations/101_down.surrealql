@@ -1,0 +1,14 @@
+-- ============================================================================
+-- Migratie 101 terug: auditlog van modelaanroepen (F2-07).
+--
+-- `model_call` blijft staan met al zijn regels, net als `classification_log`
+-- in `89_down`: een terugdraaiactie wist geen herkomst (harde eis 2). Alleen
+-- het event en de index gaan weg. De velden blijven schemavast, zodat ook na
+-- het terugdraaien geen prompt- of antwoordtekst in de tabel kan.
+-- Idempotent: IF EXISTS.
+-- ============================================================================
+
+REMOVE EVENT IF EXISTS alleen_aanvullen ON model_call;
+REMOVE INDEX IF EXISTS idx_model_call_run ON model_call;
+
+RETURN NONE;

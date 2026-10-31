@@ -1,0 +1,53 @@
+-- ============================================================================
+-- Migratie 101: auditlog van modelaanroepen, `model_call` (F2-07, ADR 0007).
+--
+-- Eén regel per aanroep van een model of verwerkingsdienst, ook bij een
+-- weigering of een fout. Alleen aanvulbaar (EVENT weigert UPDATE en DELETE)
+-- en schemavast. De tabel heeft geen tekstveld voor prompt of antwoord:
+-- `model`, `task` en `error_code` zijn korte codes, geen vrije tekst.
+-- `processing_run.models` wordt afgeleid uit deze tabel (ADR 0003).
+--
+-- Idempotent via OVERWRITE. Alleen hele regels commentaar: de migratieloader
+-- plakt de regels aan elkaar.
+-- ============================================================================
+
+DEFINE TABLE OVERWRITE model_call SCHEMAFULL;
+DEFINE FIELD OVERWRITE at ON model_call TYPE datetime DEFAULT time::now() READONLY;
+DEFINE FIELD OVERWRITE recorded_at ON model_call TYPE datetime VALUE time::now() READONLY;
+DEFINE FIELD OVERWRITE run ON model_call TYPE option<record<processing_run>> READONLY
+    ASSERT $value = NONE OR record::exists($value);
+DEFINE FIELD OVERWRITE model ON model_call TYPE string READONLY
+    ASSERT $value = /^[A-Za-z0-9_.:\/@-]{1,128}$/;
+DEFINE FIELD OVERWRITE model_version ON model_call TYPE option<string> READONLY
+    ASSERT $value = NONE OR string::len($value) <= 256;
+DEFINE FIELD OVERWRITE invocation ON model_call TYPE string READONLY
+    ASSERT $value IN ['llama-swap', 'api', 'cli'];
+DEFINE FIELD OVERWRITE location ON model_call TYPE string READONLY
+    ASSERT $value IN ['lokaal', 'cloud'];
+DEFINE FIELD OVERWRITE task ON model_call TYPE string READONLY
+    ASSERT $value = /^[a-z0-9_.:-]{1,64}$/;
+DEFINE FIELD OVERWRITE classification ON model_call TYPE string READONLY
+    ASSERT $value IN ['intern', 'extern', 'onbekend'];
+DEFINE FIELD OVERWRITE input_tokens ON model_call TYPE option<int> READONLY
+    ASSERT $value = NONE OR $value >= 0;
+DEFINE FIELD OVERWRITE output_tokens ON model_call TYPE option<int> READONLY
+    ASSERT $value = NONE OR $value >= 0;
+DEFINE FIELD OVERWRITE duration_ms ON model_call TYPE option<int> READONLY
+    ASSERT $value = NONE OR $value >= 0;
+DEFINE FIELD OVERWRITE status ON model_call TYPE string READONLY
+    ASSERT $value IN ['geslaagd', 'mislukt', 'geweigerd'];
+DEFINE FIELD OVERWRITE attempts ON model_call TYPE int DEFAULT 1 READONLY
+    ASSERT $value >= 0;
+DEFINE FIELD OVERWRITE error_code ON model_call TYPE option<string> READONLY
+    ASSERT $value = NONE OR $value = /^[a-z0-9_.:-]{1,64}$/;
+DEFINE FIELD OVERWRITE origin ON model_call TYPE string READONLY
+    ASSERT $value IN ['fork', 'langflow'];
+
+-- Enkelvoudige index: opvragen met gelijkheid op `run` (ADR 0021).
+DEFINE INDEX OVERWRITE idx_model_call_run ON model_call FIELDS run;
+
+DEFINE EVENT OVERWRITE alleen_aanvullen ON model_call
+    WHEN $event IN ['UPDATE', 'DELETE']
+    THEN { THROW 'model_call is alleen aanvulbaar' };
+
+RETURN NONE;

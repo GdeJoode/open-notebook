@@ -162,17 +162,32 @@ class ProcessingRunRepository:
         return bool(waarde)
 
     async def models_from_model_calls(self, run_id: str) -> List[Dict[str, Any]]:
-        """De modellen uit ``model_call`` van deze run (ADR 0003, 0007).
+        """De modellen uit ``model_call`` van deze run (ADR 0003, 0007, migratie 101).
 
-        De tabel ``model_call`` komt met ADR 0007; tot dan is de lijst leeg.
+        Een geweigerde aanroep telt niet mee: dat model heeft de invoer niet gezien.
         """
         rows = await execute_query(
-            "SELECT model, model_version, invocation FROM model_call WHERE run = $id "
-            "GROUP BY model, model_version, invocation",
+            _MODELLEN_UIT_MODEL_CALL, {"id": _run_id_of_fout(run_id)}, self.config
+        )
+        return [r for r in rows or [] if isinstance(r, dict)]
+
+    async def ververs_models(self, run_id: str) -> None:
+        """Leid ``models`` opnieuw af uit ``model_call``, in één statement.
+
+        Na elke nieuwe auditregel met deze run, ook na het afsluiten (ADR 0003).
+        """
+        await execute_query(
+            f"UPDATE $id SET models = ({_MODELLEN_UIT_MODEL_CALL}) RETURN NONE",
             {"id": _run_id_of_fout(run_id)},
             self.config,
         )
-        return [r for r in rows or [] if isinstance(r, dict)]
+
+
+_MODELLEN_UIT_MODEL_CALL = (
+    "SELECT model, model_version, invocation FROM model_call "
+    "WHERE run = $id AND status != 'geweigerd' "
+    "GROUP BY model, model_version, invocation"
+)
 
 
 def _run_id_of_fout(run_id: str):
