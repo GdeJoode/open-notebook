@@ -20,9 +20,10 @@ extraction path stamps onto persisted entities.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import List, Optional
 
-from llm_manager.gate import ModelCallRegel
+from llm_manager.gate import ONGELDIGE_NAAM, ModelCallRegel
 from llm_manager.register import ModelRegister, get_register
 from loguru import logger
 from surrealdb_service.repositories import ModelCallRepository, ProcessingRunRepository
@@ -34,7 +35,7 @@ _MODELS_POGINGEN = 3
 
 
 class ModelNietInRegisterError(ValueError):
-    """Een uitgevoerde aanroep met een model dat niet (zo) in het register staat."""
+    """Een regel met een model dat niet (zo) in het register staat."""
 
 
 class NietDeAanmakerVanDeRunError(PermissionError):
@@ -67,20 +68,27 @@ class ModelCallTelemetry:
     async def schrijf_van_langflow(self, regel: ModelCallRegel, *, key_id: Optional[str]) -> str:
         """Een regel van ``POST /api/v1/model-calls``; geeft het id.
 
-        Een uitgevoerde aanroep (niet ``geweigerd``) moet een model uit het
-        register noemen, met dezelfde aanroepwijze en locatie. Een regel bij een
-        run mag alleen de sleutel die de run aanmaakte schrijven.
+        Het model moet in het register staan, met dezelfde aanroepwijze en
+        locatie. Alleen bij een weigering mag het onbekend zijn; dan gaat het als
+        ``ongeldige_naam`` in de regel. De versie komt uit het register: een
+        afwijkende opgave van Langflow telt niet en wordt een waarschuwing in het
+        runlogboek. Een regel bij een run mag alleen de sleutel die de run
+        aanmaakte schrijven. Een uitgevoerde cloudaanroep met interne of
+        onbekende invoer wordt vastgelegd, met een ``beheer_melding``.
         """
-        regel = regel.model_copy(update={"origin": "langflow"})
-        if regel.status != "geweigerd":
-            model = self.register.zoek(regel.model)
-            if (model is None or model.aanroepwijze != regel.invocation
-                    or model.locatie != regel.location):
-                raise ModelNietInRegisterError("Model niet zo in het register")
-            if model.locatie == "cloud" and regel.classification != "extern":
-                # Harde eis 1 is dan al geschonden; de regel wordt wel vastgelegd.
-                logger.error("Cloudaanroep met invoer {} gemeld door Langflow (model {})",
-                             regel.classification, regel.model)
+        model = self.register.zoek(regel.model)
+        if model is None:
+            if regel.status != "geweigerd":
+                raise ModelNietInRegisterError("Model niet in het register")
+        elif model.aanroepwijze != regel.invocation or model.locatie != regel.location:
+            raise ModelNietInRegisterError("Model niet zo in het register")
+        versie_wijkt_af = (regel.model_version is not None
+                           and regel.model_version != (model.versie if model else None))
+        regel = regel.model_copy(update={
+            "origin": "langflow",
+            "model": model.naam if model else ONGELDIGE_NAAM,
+            "model_version": model.versie if model else None,
+        })
         if regel.run:
             run = await self.runs.get(regel.run)
             if run is None:
@@ -89,9 +97,27 @@ class ModelCallTelemetry:
                 raise NietDeAanmakerVanDeRunError("Alleen de aanmaker van de run")
             regel = regel.model_copy(update={"run": str(run.id)})
         rij = await self.repo.create(regel.model_dump())
+        regel_id = str(rij["id"])
+
+        if (model is not None and model.locatie == "cloud"
+                and regel.classification != "extern" and regel.status != "geweigerd"):
+            # Harde eis 1 is dan al geschonden; de regel blijft staan.
+            logger.error("Cloudaanroep met invoer {} gemeld door Langflow (model {})",
+                         regel.classification, regel.model)
+            await self.repo.meld_cloudaanroep_intern(regel_id, regel.run)
+        if versie_wijkt_af:
+            if regel.run:
+                await self.runs.append_log(regel.run, [{
+                    "at": datetime.now(timezone.utc), "step": "model_call",
+                    "status": "waarschuwing",
+                    "message": "Opgegeven modelversie wijkt af van het register; niet overgenomen",
+                }])
+            else:
+                logger.warning("Opgegeven versie van model {} wijkt af van het register",
+                               regel.model)
         if regel.run:
             await self._ververs_models(regel.run)
-        return str(rij["id"])
+        return regel_id
 
     async def _ververs_models(self, run_id: str) -> None:
         """Werk ``models`` bij; een fout laat de auditregel staan.

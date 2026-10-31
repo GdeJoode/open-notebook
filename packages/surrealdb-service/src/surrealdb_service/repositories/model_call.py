@@ -27,6 +27,19 @@ class ModelCallRepository:
         )
         return rows[0] if isinstance(rows, list) else rows
 
+    async def meld_cloudaanroep_intern(self, model_call_id: str, run_id: Optional[str]) -> None:
+        """Een ``beheer_melding``: Langflow meldt een cloudaanroep met interne of
+        onbekende invoer (harde eis 1, migratie 102)."""
+        data: Dict[str, Any] = {
+            "soort": "cloudaanroep_intern",
+            "melding": "Cloudaanroep met interne of onbekende invoer gemeld",
+            "model_call": ensure_record_id(model_call_id),
+        }
+        if run_id:
+            data["run"] = ensure_record_id(run_id)
+        await execute_query("CREATE beheer_melding CONTENT $d RETURN NONE", {"d": data},
+                            self.config)
+
     async def for_run(self, run_id: str) -> List[Dict[str, Any]]:
         rows = await execute_query(
             "SELECT * FROM model_call WHERE run = $run ORDER BY at",

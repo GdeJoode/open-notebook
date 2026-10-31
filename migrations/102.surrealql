@@ -1,0 +1,23 @@
+-- ============================================================================
+-- Migratie 102: restpunten van de review van F2-07 (ADR 0007).
+--
+-- 1. `model_call.model_version` is een korte code met een vast patroon, zodat
+--    er geen vrije tekst in past. De fork vult de versie zelf in uit het
+--    modelregister.
+-- 2. `beheer_melding`: soort `cloudaanroep_intern` en veld `model_call`. Meldt
+--    Langflow een cloudaanroep met interne of onbekende invoer, dan legt de
+--    fork de regel vast en krijgt de beheerder een melding (harde eis 1).
+--
+-- Idempotent via OVERWRITE. Alleen hele regels commentaar: de migratieloader
+-- plakt de regels aan elkaar.
+-- ============================================================================
+
+DEFINE FIELD OVERWRITE model_version ON model_call TYPE option<string> READONLY
+    ASSERT $value = NONE OR $value = /^[A-Za-z0-9_.:\/@+-]{1,128}$/;
+
+DEFINE FIELD OVERWRITE soort ON beheer_melding TYPE string READONLY
+    ASSERT $value IN ['handmatige_run_beschermd', 'vastgezet_overgeslagen', 'inhoud_intern',
+        'batchhash_ontbreekt', 'batch_inhoud_extern', 'cloudaanroep_intern'];
+DEFINE FIELD OVERWRITE model_call ON beheer_melding TYPE option<record<model_call>> READONLY;
+
+RETURN NONE;

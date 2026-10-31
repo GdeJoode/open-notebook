@@ -25,12 +25,13 @@ import surrealdb_service.config as surreal_config
 import surrealdb_service.connection as conn
 from app_main.api import agent_auth
 from app_main.api.app import create_app
+from app_main.api.routers.model_calls import get_model_call_telemetry
 from app_main.dependencies import get_processing_run_service
 from app_main.services.agents.audit_service import AgentAuditService
 from app_main.services.model_routing.telemetry import ModelCallTelemetry
 from app_main.services.processing_run_service import ProcessingRunService
 from llm_manager.gate import ModelCallRegel, ModelGate, ModelGeweigerd
-from llm_manager.register import get_register
+from llm_manager.register import ModelRegister, RegisterModel, get_register
 from shared.models.agents import Right
 from surrealdb_service.repositories import ProcessingRunRepository
 
@@ -164,6 +165,54 @@ async def test_uitgevoerde_aanroep_vraagt_een_model_uit_het_register(env, app) -
         resp = await client.post("/api/v1/model-calls", json=_regel(
             model="bestaat-niet", status="geweigerd", attempts=0, error_code="model_onbekend"))
         assert resp.status_code == 201
+        [rij] = await conn.execute_query("SELECT model FROM $id",
+                                         {"id": conn.ensure_record_id(resp.json()["id"])})
+        assert rij["model"] == "ongeldige_naam"
+        # Ook een weigering moet aanroepwijze en locatie uit het register noemen.
+        resp = await client.post("/api/v1/model-calls", json=_regel(
+            invocation="api", location="cloud", status="geweigerd", attempts=0,
+            error_code="niet_toegestaan_intern"))
+        assert resp.status_code == 422
+
+
+async def test_versie_komt_uit_het_register(env, app, git_flows) -> None:
+    async with _client(app) as client:
+        run_id = await _start(client, git_flows)
+        resp = await client.post("/api/v1/model-calls", json=_regel(
+            run=run_id, model_version="een-andere-versie"))
+        assert resp.status_code == 201
+        resp = await client.post("/api/v1/model-calls", json=_regel(
+            run=run_id, model_version="v1 met vrije tekst"))
+        assert resp.status_code == 422
+        run = (await client.get(f"/api/v1/runs/{run_id}")).json()
+    [regel] = await _regels(run_id)
+    assert regel["model_version"] == get_register().zoek("werkmodel").versie
+    assert run["models"][0]["model_version"] == regel["model_version"]
+    assert any(r["step"] == "model_call" and r["status"] == "waarschuwing" for r in run["log"])
+
+
+async def test_cloudaanroep_met_interne_invoer_geeft_een_melding(env, app, git_flows) -> None:
+    register = ModelRegister(versie=1, modellen=[*get_register().modellen, RegisterModel(
+        naam="cloudmodel", versie="2026-10", aanroepwijze="api", locatie="cloud",
+        taken=["chat"])])
+    app.dependency_overrides[get_model_call_telemetry] = lambda: ModelCallTelemetry(
+        register=register)
+    try:
+        async with _client(app) as client:
+            run_id = await _start(client, git_flows)
+            for klasse, status in (("intern", "geslaagd"), ("onbekend", "mislukt"),
+                                   ("extern", "geslaagd"), ("intern", "geweigerd")):
+                resp = await client.post("/api/v1/model-calls", json=_regel(
+                    run=run_id, model="cloudmodel", invocation="api", location="cloud",
+                    task="chat", classification=klasse, status=status))
+                assert resp.status_code == 201
+    finally:
+        app.dependency_overrides.pop(get_model_call_telemetry, None)
+    assert len(await _regels(run_id)) == 4
+    meldingen = await conn.execute_query(
+        "SELECT soort, model_call FROM beheer_melding WHERE run = $r",
+        {"r": conn.ensure_record_id(run_id)})
+    assert [m["soort"] for m in meldingen] == ["cloudaanroep_intern"] * 2
 
 
 @pytest.mark.echte_sleutels

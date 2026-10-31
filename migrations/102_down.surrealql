@@ -1,0 +1,11 @@
+-- ============================================================================
+-- Migratie 102 terug (F2-07): `model_call.model_version` weer zoals in
+-- migratie 101. De soort `cloudaanroep_intern` en het veld `model_call` op
+-- `beheer_melding` blijven, zodat bestaande meldingen geldig blijven (zoals
+-- `97_down` en `100_down`). Idempotent.
+-- ============================================================================
+
+DEFINE FIELD OVERWRITE model_version ON model_call TYPE option<string> READONLY
+    ASSERT $value = NONE OR string::len($value) <= 256;
+
+RETURN NONE;
