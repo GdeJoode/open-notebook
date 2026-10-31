@@ -190,16 +190,6 @@ class Source(ObjectModel):
         description="Pipeline stage: ingested|embedded|extracted|awaiting_schema_review|graphed|complete|failed",
     )
 
-    # Per-document privacy override (Track J.3). When True, every LLM stage for
-    # this source is forced LOCAL and is NEVER routed to a cloud provider —
-    # this is the STICKY, most-specific layer that wins over the notebook and
-    # global privacy mode. Mirrors ``migrations/52.surrealql``
-    # (``source.private TYPE bool DEFAULT false``). Legacy rows read back False.
-    private: bool = Field(
-        default=False,
-        description="Force this source's LLM stages local (sticky privacy override)",
-    )
-
     # Classificatie intern/extern (F2-03, ADR 0001); standaard 'intern'. Van
     # 'intern' naar 'extern' kan alleen via de ClassificationService.
     classification: Optional[Classification] = Field(

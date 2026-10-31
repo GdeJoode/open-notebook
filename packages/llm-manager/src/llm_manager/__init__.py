@@ -1,32 +1,14 @@
 """
-LLM Manager - LLM provider management, routing, and usage tracking.
+LLM Manager: de modelpoort, het modelregister en usage tracking.
 
-This package provides a unified interface for working with different LLM providers,
-model instance management, and usage tracking.
+Elke modelaanroep loopt via :mod:`llm_manager.aanroep` en
+:class:`llm_manager.gate.ModelGate` naar llama-swap (ADR 0006). Welke modellen
+er zijn, staat in het register (:mod:`llm_manager.register`, ADR 0007).
 """
 
-from llm_manager.config import LLMManagerConfig, get_config, set_config
-from llm_manager.manager import ModelManager, get_model_manager
-from llm_manager.providers import (
-    ProviderConfig,
-    get_provider_config,
-    list_providers,
-)
 from llm_manager.usage import UsageMetrics, UsageTracker
 
 __all__ = [
-    # Config
-    "LLMManagerConfig",
-    "get_config",
-    "set_config",
-    # Manager
-    "ModelManager",
-    "get_model_manager",
-    # Providers
-    "ProviderConfig",
-    "get_provider_config",
-    "list_providers",
-    # Usage
     "UsageTracker",
     "UsageMetrics",
 ]

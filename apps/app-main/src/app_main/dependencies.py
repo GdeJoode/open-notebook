@@ -4,9 +4,6 @@ FastAPI dependency injection for app-main.
 Provides repository and service instances via FastAPI's Depends() mechanism.
 """
 
-from functools import lru_cache
-
-from llm_manager import ModelManager, get_model_manager
 from shared.references.footnote_reference_extractor import (
     FootnoteReferenceExtractor,
 )
@@ -18,12 +15,9 @@ from surrealdb_service.repositories import (
     ChatSessionRepository,
     ChunkRepository,
     ContentSettingsRepository,
-    DefaultModelsRepository,
     DefaultPromptsRepository,
     EntityRepository,
     EpisodeProfileRepository,
-    ModelRepository,
-    ModelRouteRepository,
     NotebookRepository,
     NoteRepository,
     PodcastEpisodeRepository,
@@ -69,7 +63,6 @@ from app_main.services.knowledge_graph_service import KnowledgeGraphService
 from app_main.services.mentions_projection_service import (
     MentionsProjectionService,
 )
-from app_main.services.model_service import ModelService
 from app_main.services.networkx_export_service import NetworkxExportService
 from app_main.services.note_auto_link_service import NoteAutoLinkService
 from app_main.services.note_service import NoteService
@@ -153,94 +146,6 @@ def get_embedding_repo() -> SourceEmbeddingRepository:
 
 def get_search_repo() -> SearchRepository:
     return SearchRepository()
-
-
-def get_model_repo() -> ModelRepository:
-    return ModelRepository()
-
-
-def get_default_models_repo() -> DefaultModelsRepository:
-    return DefaultModelsRepository()
-
-
-def get_model_route_repo() -> ModelRouteRepository:
-    """Provider for the per-task model_route rows (Track J.1)."""
-    return ModelRouteRepository()
-
-
-def get_route_resolver():
-    """Provider for the privacy-aware route resolver (Track J.1).
-
-    Returns a :class:`RouteResolver` wired with the model_route + model repos.
-    Constructed per-call (the repos are cheap, stateless handles) — matches the
-    repo-factory convention above rather than caching a singleton.
-    """
-    from app_main.services.model_routing.route_resolver import RouteResolver
-
-    return RouteResolver(
-        model_route_repo=get_model_route_repo(),
-        model_repo=get_model_repo(),
-    )
-
-
-@lru_cache(maxsize=1)
-def get_circuit_breaker_registry():
-    """Process-singleton per-provider circuit-breaker registry (Track J.2).
-
-    Cached so every failover execution in this worker shares the same breaker
-    state. In-memory / per-process (J-D3 multi-worker caveat documented on
-    :class:`CircuitBreakerRegistry`).
-    """
-    from app_main.services.model_routing.circuit_breaker import (
-        CircuitBreakerRegistry,
-    )
-
-    return CircuitBreakerRegistry()
-
-
-@lru_cache(maxsize=1)
-def get_rate_limiter_registry():
-    """Process-singleton per-provider fair-use rate limiter (Track J.2).
-
-    Conservative cloud default (~20 rpm) so the NIM endpoint is not overloaded;
-    local providers are effectively unthrottled. Cached so the sliding windows
-    are shared across all routed calls in this worker.
-    """
-    from app_main.services.model_routing.rate_limiter import (
-        ProviderRateLimiter,
-        resolve_per_provider_rpm,
-    )
-
-    # Track M.2: per-PROVIDER request-rate caps (the per-MODEL context window is
-    # a separate axis handled by the context packer). Caps pace each cloud
-    # provider under its quota so batch extraction does not burst into 429 /
-    # RESOURCE_EXHAUSTED — the limiter blocks/waits for a slot, and combined with
-    # ``default_is_rate_limit`` a transient 429 backoff-retries on the SAME
-    # provider before failing over (pace, not instant-skip; Decision M-D1).
-    #
-    #   google ~ 6/min   (Gemini free tier ~10; stay conservatively under it)
-    #   nvidia ~ 30/min  (NIM fair-use ~40; headroom under the ceiling)
-    #   ollama  unlimited (local GPU has no fair-use concern)
-    #
-    # Env-overridable (Decision M-D2: DI/env map, no registry schema change):
-    # GOOGLE_RPM / NVIDIA_RPM / OLLAMA_RPM.
-    return ProviderRateLimiter(per_provider_rpm=resolve_per_provider_rpm())
-
-
-def get_failover_executor():
-    """Provider for the per-document failover executor (Track J.2).
-
-    Wired with the process-singleton circuit-breaker + rate-limiter registries.
-    Constructed per-call (cheap; holds references to the shared singletons) with
-    the default failover-eligibility whitelist; J.4 supplies the concrete
-    error-mapping predicates.
-    """
-    from app_main.services.model_routing.failover_executor import FailoverExecutor
-
-    return FailoverExecutor(
-        circuit_breakers=get_circuit_breaker_registry(),
-        rate_limiter=get_rate_limiter_registry(),
-    )
 
 
 def get_transformation_repo() -> TransformationRepository:
@@ -500,14 +405,6 @@ def get_chat_service() -> ChatService:
 
 def get_search_service() -> SearchService:
     return SearchService(search_repo=get_search_repo())
-
-
-def get_model_service() -> ModelService:
-    return ModelService(
-        model_repo=get_model_repo(),
-        defaults_repo=get_default_models_repo(),
-        model_manager=get_model_manager(),
-    )
 
 
 def get_transformation_service() -> TransformationService:

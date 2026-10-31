@@ -58,46 +58,6 @@ class TestUpdateSettings:
 
         assert resp.status_code == 200
 
-
-class TestDefaultPrivacyMode:
-    """Track J.3: global default_privacy_mode is read + writable via the API."""
-
-    def test_get_defaults_to_cloud(self):
-        svc = AsyncMock(spec=SettingsService)
-        svc.get.return_value = make_settings()
-        client = _make_app(svc)
-
-        resp = client.get("/api/settings")
-
-        assert resp.status_code == 200
-        assert resp.json()["default_privacy_mode"] == "cloud"
-
-    @pytest.mark.parametrize("mode", ["cloud", "private"])
-    def test_put_accepts_valid_mode(self, mode):
-        svc = AsyncMock(spec=SettingsService)
-        svc.update.return_value = make_settings(default_privacy_mode=mode)
-        client = _make_app(svc)
-
-        resp = client.put("/api/settings", json={"default_privacy_mode": mode})
-
-        assert resp.status_code == 200
-        assert resp.json()["default_privacy_mode"] == mode
-        svc.update.assert_awaited_once()
-        assert svc.update.await_args.args[0]["default_privacy_mode"] == mode
-
-    def test_put_rejects_invalid_mode(self):
-        svc = AsyncMock(spec=SettingsService)
-        svc.update.return_value = make_settings()
-        client = _make_app(svc)
-
-        resp = client.put(
-            "/api/settings", json={"default_privacy_mode": "hybrid"}
-        )
-
-        assert resp.status_code == 422
-        svc.update.assert_not_awaited()
-
-
 class TestParserEngineValidation:
     """Phase A.1b attempt-2: parser_engine must be one of the literal set.
 

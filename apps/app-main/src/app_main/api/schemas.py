@@ -67,12 +67,6 @@ class NotebookUpdate(BaseModel):
     archived: Optional[bool] = Field(
         None, description="Whether the notebook is archived"
     )
-    # Track J.3: per-notebook privacy layer. 'cloud' | 'private' set it; the
-    # value persists through notebook_service.update. (The 'inherit'/None reset
-    # affordance is a J.5 UI concern — PUT here uses exclude_none.)
-    privacy_mode: Optional[str] = Field(
-        None, description="Per-notebook privacy mode: 'cloud' | 'private'"
-    )
     # Track PL.3: per-notebook auto-INSIGHTS toggle. True keeps the LLM-cost
     # INSIGHTS stage auto-chaining off ingest (the default); False opts the
     # notebook out (it still gets the free document graph). Persists through
@@ -95,8 +89,6 @@ class NotebookResponse(BaseModel):
     updated: str
     source_count: int
     note_count: int
-    # Track J.3: None = inherit global default; 'cloud' | 'private' otherwise.
-    privacy_mode: Optional[str] = None
     # Track PL.3: per-notebook auto-INSIGHTS toggle (default True).
     auto_insights: bool = True
     # Track F.5: per-notebook librarian opt-in (default False).
@@ -181,63 +173,6 @@ class AskResponse(BaseModel):
             "(Track X.2): [{source, page, chunk_id, section}]. Additive — may "
             "be empty when no provenance is available."
         ),
-    )
-
-
-# Models API schemas
-class ModelCreate(BaseModel):
-    name: str = Field(..., description="Model name (e.g., gpt-5-mini, claude, gemini)")
-    provider: str = Field(
-        ..., description="Provider name (e.g., openai, anthropic, gemini)"
-    )
-    type: str = Field(
-        ...,
-        description="Model type (language, embedding, text_to_speech, speech_to_text)",
-    )
-
-
-class ModelResponse(BaseModel):
-    id: str
-    name: str
-    provider: str
-    type: str
-    created: str
-    updated: str
-
-
-class DefaultModelsResponse(BaseModel):
-    default_chat_model: Optional[str] = None
-    default_transformation_model: Optional[str] = None
-    large_context_model: Optional[str] = None
-    default_text_to_speech_model: Optional[str] = None
-    default_speech_to_text_model: Optional[str] = None
-    default_embedding_model: Optional[str] = None
-    default_tools_model: Optional[str] = None
-    default_extraction_model: Optional[str] = None
-
-
-class ProviderAvailabilityResponse(BaseModel):
-    available: List[str] = Field(..., description="List of available providers")
-    unavailable: List[str] = Field(..., description="List of unavailable providers")
-    supported_types: Dict[str, List[str]] = Field(
-        ..., description="Provider to supported model types mapping"
-    )
-
-
-class ModelStatusIssue(BaseModel):
-    type: Literal["ollama_unreachable", "model_unavailable", "provider_unavailable", "no_defaults"] = Field(
-        ..., description="Issue type"
-    )
-    message: str = Field(..., description="Human-readable issue description")
-    model_name: Optional[str] = Field(None, description="Affected model name")
-    provider: Optional[str] = Field(None, description="Affected provider")
-    default_slot: Optional[str] = Field(None, description="Affected default slot name")
-
-
-class ModelStatusResponse(BaseModel):
-    valid: bool = Field(..., description="Whether model configuration is valid")
-    issues: List[ModelStatusIssue] = Field(
-        default_factory=list, description="List of configuration issues"
     )
 
 
@@ -529,8 +464,6 @@ class SettingsResponse(BaseModel):
     output_directory_path: Optional[str] = None
     file_operation: Optional[str] = None
     output_naming_scheme: Optional[str] = None
-    # Track J.3: global default privacy mode for LLM routing.
-    default_privacy_mode: Optional[Literal["cloud", "private"]] = None
 
 
 class SettingsUpdate(BaseModel):
@@ -569,8 +502,6 @@ class SettingsUpdate(BaseModel):
     output_directory_path: Optional[str] = None
     file_operation: Optional[str] = None
     output_naming_scheme: Optional[str] = None
-    # Track J.3: global default privacy mode for LLM routing ('cloud' | 'private').
-    default_privacy_mode: Optional[Literal["cloud", "private"]] = None
 
 
 # Sources API schemas
@@ -603,13 +534,6 @@ class SourceCreate(BaseModel):
     )
     processing_overrides: Optional[Dict[str, Any]] = Field(
         None, description="Per-submission overrides for processing settings"
-    )
-    private: bool = Field(
-        False,
-        description=(
-            "Force this source's LLM stages local (Track J.3 sticky privacy "
-            "override). When True the document is never routed to a cloud provider."
-        ),
     )
 
     @model_validator(mode="after")
@@ -737,9 +661,6 @@ class SourceResponse(BaseModel):
     status: Optional[str] = None
     processing_info: Optional[Dict] = None
     notebooks: Optional[List[str]] = None
-    # Track J.3/J.5: per-document privacy override. True forces the document's
-    # LLM stages local (sticky). Surfaced as a read-only "Private" badge.
-    private: bool = False
     # Track PL.4: the per-source pipeline stage (ingested | embedded | extracted
     # | awaiting_schema_review | graphed | complete | failed) so the UI can show
     # per-document progress. Defaults "ingested" (migration 71 backfill).

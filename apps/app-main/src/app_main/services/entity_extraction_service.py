@@ -254,78 +254,12 @@ def _avg_entity_confidence(entities: Iterable[Any]) -> float:
     return sum(scores) / len(scores)
 
 
-# Maps the B.8 ``default_field`` selector to the J.1 routing task whose
-# head-of-chain default model id is the same. ``resolve_default_model_id`` is
-# now the HEAD of an ordered route (J.1) rather than a standalone resolver, but
-# its single-id contract is preserved for B.8 callers.
+# Het B.8-veld ``default_field`` bepaalt de taak in het register.
 _DEFAULT_FIELD_TO_TASK = {
     "default_extraction_model": "ENTITY_EXTRACTION",
     "default_transformation_model": "SUMMARIZATION",
     "default_chat_model": "CHAT",
 }
-
-
-async def resolve_default_model_id(
-    default_field: str = "default_chat_model",
-    model_id: Optional[str] = None,
-) -> Optional[str]:
-    """Resolve the single model id for a use case — the head of the J.1 route.
-
-    Thin B.8-compat shim: it now delegates to the privacy-aware route resolver
-    (:func:`app_main.services.model_routing.resolve_route`) and returns
-    ``route.ordered_candidates[0].model_id`` — the FIRST candidate the chain
-    would try. The precedence it encodes is unchanged from B.8:
-
-    explicit ``model_id`` override → the requested per-function default (e.g.
-    ``default_extraction_model``) → ``default_chat_model`` as the universal
-    fallback. Returns ``None`` if nothing is configured.
-
-    Keeping this signature/behavior stable is a hard requirement: B.8's
-    extraction tests and the provenance call sites depend on it returning one
-    id. The richer ordered API is :func:`resolve_route`.
-    """
-    task_name = _DEFAULT_FIELD_TO_TASK.get(default_field)
-    if task_name is not None:
-        try:
-            from app_main.services.model_routing.route_resolver import (
-                LLMTask,
-                PrivacyMode,
-                resolve_route,
-            )
-
-            route = await resolve_route(
-                LLMTask[task_name], PrivacyMode.CLOUD, model_id=model_id
-            )
-            if route.ordered_candidates:
-                return route.ordered_candidates[0].model_id
-        except Exception as e:
-            # Routing must never regress the B.8 single-id contract. On any
-            # failure fall through to the inline precedence below (identical
-            # to the pre-J.1 implementation).
-            logger.debug(
-                f"resolve_default_model_id: route resolution failed for "
-                f"{default_field!r} ({e}); using inline precedence"
-            )
-
-    # Inline B.8 precedence — the fallback path and the source of truth for
-    # ``default_field`` values that are not routed tasks (e.g. embedding/STT).
-    from llm_manager import get_model_manager
-
-    from app_main.dependencies import get_default_models_repo
-
-    mm = get_model_manager()
-    defaults = mm.get_defaults()
-    if not defaults or not defaults.default_chat_model:
-        defaults = await get_default_models_repo().get()
-        mm.set_defaults(defaults)
-
-    if not defaults:
-        return model_id
-    return (
-        model_id
-        or getattr(defaults, default_field, None)
-        or defaults.default_chat_model
-    )
 
 
 class RoutedLLMCaller:
@@ -338,7 +272,6 @@ class RoutedLLMCaller:
 
     Na elke aanroep geven :attr:`served_provider` (altijd ``llama-swap``) en
     :attr:`served_model_id` (het registermodel) de herkomst voor de KG.
-    ``was_failover`` en ``fallback_from`` blijven leeg; ze vervallen in F2-09.
     """
 
     def __init__(
@@ -357,8 +290,6 @@ class RoutedLLMCaller:
         self._json_mode = json_mode
         self.served_provider: Optional[str] = None
         self.served_model_id: Optional[str] = None
-        self.was_failover: bool = False
-        self.fallback_from: List[str] = []
 
     async def __call__(
         self, system_prompt: str, user_prompt: str, _model: str = "default"
@@ -386,15 +317,13 @@ async def make_default_llm_caller(
     default_field: str = "default_chat_model",
     run_id: Optional[str] = None,
     json_mode: Optional[bool] = None,
-    **_vervallen: Any,
 ):
     """Een async ``LLMCaller`` via de modelpoort (F2-08, ADR 0006).
 
     ``default_field`` bepaalt de taak (extractie, samenvatten of chat); het
     model komt uit het register bij die taak. ``classificatie`` is die van de
-    invoer (verplicht; ``onbekend`` telt als intern). ``model_id`` en de
-    Track J-argumenten (``privacy_mode``, ``source_id``, ``notebook_id``) tellen
-    niet meer en vervallen in F2-09.
+    invoer (verplicht; ``onbekend`` telt als intern). ``model_id`` telt niet:
+    het register beslist.
 
     ``json_mode``: ``None`` zet JSON-uitvoer aan voor de extractie en uit voor
     chat en samenvatten.
@@ -490,17 +419,9 @@ class EntityExtractionService:
         # tests can inject a fake via ``self._triage`` before running. ``None``
         # until first use; ``_run_triage`` builds it from the DI factory.
         self._triage: Any = None
-        # Run-scoped routing context (Track J.4), set at the top of
-        # ``run_extraction`` and consumed by the LLM-caller builders so the
-        # whole run shares one resolved privacy mode + source/notebook ids for
-        # routing telemetry. Defaults keep the legacy CLOUD behavior for any
-        # caller that invokes a builder without going through ``run_extraction``.
-        self._privacy_mode: Any = None
         # F2-08: de classificatie van de fragmenten van deze run, voor de poort.
         # ``None`` (geen run) telt als intern.
         self._classificatie: Optional[str] = None
-        self._routing_source_id: Optional[str] = None
-        self._routing_notebook_id: Optional[str] = None
         # Run-scoped applied schemas (Track L.1). Set in ``_run_multi_schema``
         # after ``detect_applicable_schemas`` and consumed at the persist site
         # so the canonical bridge has them WITHOUT re-detecting. Reset at the
@@ -520,64 +441,6 @@ class EntityExtractionService:
         # actually answered (J-Q7) — read at provenance-stamp time so the KG
         # records the SERVED model, not just the resolved head.
         self._last_routed_caller: Any = None
-        # Track M: context-derived Pass-2 token budget for this run's head
-        # model, set by ``_pack_chunks_for_route_head``. ``None`` keeps Pass-2's
-        # legacy fixed 2400-token cap (the graceful-degrade default).
-        self._pass2_token_budget: Optional[int] = None
-
-    async def _resolve_privacy_mode(
-        self, source_id: str, notebook_id: Optional[str]
-    ) -> Any:
-        """Resolve the J.3 layered ``PrivacyMode`` for this extraction run.
-
-        J.4 makes this LIVE: the returned mode is threaded into every
-        ``make_default_llm_caller`` for this run so a PRIVATE document pins the
-        whole extraction route to local providers (no cloud LanguageModel is
-        ever constructed) and a CLOUD document tries the cloud provider chain
-        with local as the last-resort fallback.
-
-        Best-effort: any failure resolving the mode is logged and swallowed
-        (returns CLOUD) so a privacy-resolution hiccup never fails extraction.
-        Note CLOUD is the safe degrade direction only because a *private*
-        document's ``source.private`` flag short-circuits to PRIVATE before any
-        of the fallible reads below.
-        """
-        from app_main.services.model_routing.privacy_resolver import (
-            resolve_privacy_mode,
-        )
-        from app_main.services.model_routing.route_resolver import PrivacyMode
-
-        source_private: Optional[bool] = None
-        try:
-            source = await self._source_repo.get(source_id)
-            if source is not None:
-                source_private = bool(getattr(source, "private", False))
-        except Exception as e:  # noqa: BLE001 — never fail extraction on this
-            logger.warning(
-                f"privacy: could not read source.private for "
-                f"{source_id} ({e}); assuming not private"
-            )
-
-        try:
-            mode = await resolve_privacy_mode(
-                source_private=source_private, notebook_id=notebook_id
-            )
-        except Exception as e:  # noqa: BLE001 — degrade to cloud, log loudly
-            logger.warning(
-                f"privacy: resolve_privacy_mode failed for {source_id} "
-                f"({e}); defaulting to CLOUD"
-            )
-            mode = PrivacyMode.CLOUD
-
-        logger.info(
-            "privacy (J.4, live): source={src} notebook={nb} "
-            "source_private={priv} -> mode={mode}",
-            src=source_id,
-            nb=notebook_id,
-            priv=source_private,
-            mode=mode.value,
-        )
-        return mode
 
     async def _llm_chat(self, messages: List[Dict[str, Any]]):
         """De chatfunctie voor de LLM-matcher van de filtering (F2-08).
@@ -595,12 +458,10 @@ class EntityExtractionService:
         )
 
     async def _make_routed_caller(self, *, model_id: Optional[str] = None):
-        """Build a J.4-routed LLM caller bound to this run's privacy context.
+        """De LLM-aanroeper van deze run, via de modelpoort.
 
-        Central builder so every extraction call site (single-schema, Pass-1/
-        Pass-2 multi-schema, B.5b orphan retry) shares the same resolved
-        :class:`PrivacyMode` + source/notebook ids. A PRIVATE run thus pins the
-        whole route to local providers at every call site, not just one.
+        Eén bouwer voor elke extractieaanroep (single-schema, Pass-1/Pass-2,
+        B.5b-herhaling), zodat ze allemaal de classificatie van de run meegeven.
         """
         caller = await make_default_llm_caller(
             model_id=model_id,
@@ -609,87 +470,6 @@ class EntityExtractionService:
         )
         self._last_routed_caller = caller
         return caller
-
-    async def _pack_chunks_for_route_head(
-        self, chunk_dicts: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """Re-pack ingestion chunks for the HEAD candidate's context window (M.3).
-
-        Resolves this run's extraction route, reads the head candidate's
-        ``model.context_window`` / ``max_output_tokens``, and packs the
-        per-ingestion-chunk dicts into model-sized windows so a big-context
-        model issues a few large LLM calls instead of one-per-2000-char-chunk.
-
-        Degrades gracefully: any resolution failure, a missing head model row,
-        or a null ``context_window`` falls back to the un-packed chunks (the
-        pre-M behaviour) — extraction must never crash because routing/seed
-        state is incomplete.
-        """
-        from app_main.services.extraction_chunking import (
-            pack_chunks_for_model,
-            pass2_token_cap,
-        )
-
-        # Reset per-run so a prior run's budget never leaks into a packing
-        # fallback (degrade path leaves the legacy fixed Pass-2 cap in force).
-        self._pass2_token_budget = None
-
-        if not chunk_dicts:
-            return chunk_dicts
-
-        head_model = None
-        try:
-            from app_main.dependencies import get_route_resolver
-            from app_main.services.model_routing.route_resolver import LLMTask
-
-            resolver = get_route_resolver()
-            route = await resolver.resolve(
-                LLMTask.ENTITY_EXTRACTION, self._privacy_mode
-            )
-            if route.ordered_candidates:
-                head_model = route.ordered_candidates[0].model
-        except Exception as e:  # noqa: BLE001 — never block extraction on routing
-            logger.warning(
-                f"context-pack: route resolution failed ({e}); "
-                "using un-packed ingestion chunks."
-            )
-            return chunk_dicts
-
-        if head_model is None or head_model.context_window is None:
-            logger.info(
-                "context-pack: head model has no context_window "
-                "(model={m}); using un-packed ingestion chunks.",
-                m=getattr(head_model, "model_id", None)
-                or getattr(head_model, "name", None),
-            )
-            return chunk_dicts
-
-        packed = pack_chunks_for_model(
-            chunk_dicts,
-            context_window=head_model.context_window,
-            max_output_tokens=head_model.max_output_tokens,
-        )
-        # Thread the Pass-2 per-prompt cap so it matches what Pass-2 MEASURES
-        # (ontology block + chunk_text together), not the packing budget. The
-        # packer already reserves the prompt overhead inside ``input_budget``;
-        # threading that same budget would double-subtract the overhead and
-        # falsely abort a window packed up to ``input_budget`` (the ontology
-        # gets re-added on top). The cap that fits Pass-2's whole-prompt guard
-        # is the full input space minus reserved output (M rev2).
-        self._pass2_token_budget = pass2_token_cap(
-            context_window=head_model.context_window,
-            max_output_tokens=head_model.max_output_tokens,
-        )
-        logger.info(
-            "context-pack: {n_in} ingestion chunks -> {n_out} model-sized "
-            "windows for head {prov}/{name} (ctx={ctx})",
-            n_in=len(chunk_dicts),
-            n_out=len(packed),
-            prov=head_model.provider,
-            name=head_model.name,
-            ctx=head_model.context_window,
-        )
-        return packed
 
     async def _run_triage(
         self, source_id: str, persist_result: Any
@@ -740,18 +520,17 @@ class EntityExtractionService:
         """The model id to stamp as extraction provenance (J-Q7).
 
         Prefers the provider that ACTUALLY served the run (the routed caller's
-        ``served_model_id`` after extraction); falls back to the resolved
-        head-of-chain default (B.8 behavior) when nothing was served — e.g. a
+        ``served_model_id`` after extraction); falls back to the register model
+        for ``entity_extraction`` when nothing was served — e.g. a
         zero-entity run where the caller was never invoked, or a caller-build
         failure.
         """
         served = getattr(self._last_routed_caller, "served_model_id", None)
         if served:
             return served
-        return await resolve_default_model_id(
-            "default_extraction_model",
-            config.llm_model if config.llm_model != "default" else None,
-        )
+        from app_main.services.model_routing.llm_call import registermodel
+
+        return registermodel("entity_extraction")
 
     async def _embed_entities(
         self, result: "ExtractionResult"
@@ -1580,7 +1359,6 @@ class EntityExtractionService:
             notebook_id=notebook_id,
             pass1_repo=pass1_repo,
             llm_caller=llm_caller,
-            pass2_token_budget=self._pass2_token_budget,
         )
         await self._record_pass1_outcome(
             result, notebook_id, notebook_schema_repo, pass1_repo, source_id,
@@ -1677,15 +1455,7 @@ class EntityExtractionService:
                 d["section_heading"] = c.section_path[-1]
             chunk_dicts.append(d)
 
-        # 2b. Resolve the J.3 layered privacy mode and make it LIVE (J.4): stash
-        # it as run-scoped routing context so every LLM-caller built below
-        # (single-schema, Pass-1/Pass-2, B.5b retry) routes through the failover
-        # executor under this mode. A PRIVATE source pins the whole run local.
-        self._privacy_mode = await self._resolve_privacy_mode(
-            source_id, notebook_id
-        )
-        self._routing_source_id = source_id
-        self._routing_notebook_id = notebook_id
+        # 2b. De classificatie van de fragmenten gaat mee naar de modelpoort.
         self._classificatie = classificatie_van(
             getattr(c, "classification", None) for c in chunks
         )
@@ -1704,13 +1474,6 @@ class EntityExtractionService:
         if config_overrides:
             config_kwargs.update(config_overrides)
         config = ExtractionConfig(**config_kwargs)
-
-        # 3b. Track M: re-pack the fixed-size ingestion chunks into windows
-        # sized to the active extraction model's context_window, so a
-        # big-context model issues a few large LLM calls instead of one per
-        # 2000-char chunk. Degrades to the un-packed chunks when the head model
-        # has no context_window (graceful — see helper).
-        chunk_dicts = await self._pack_chunks_for_route_head(chunk_dicts)
 
         # 4. Run extraction — branch on multi-schema vs single-schema.
         use_multi_schema = (
@@ -1958,9 +1721,9 @@ class EntityExtractionService:
                     merge_groups=merge_groups,
                     match_candidates=[c.model_dump() for c in filtered.match_candidates] if filtered.match_candidates else None,
                     extraction_method=extractor_type,
-                    # Record the model that actually SERVED this run (J-Q7): the
-                    # routed caller's served_model_id after failover, falling
-                    # back to the resolved head (B.8) when nothing was served.
+                    # Record the model that actually SERVED this run (J-Q7),
+                    # falling back to the register model for the task when
+                    # nothing was served.
                     # Not config.llm_model, which is "default" on the common path
                     # and would stamp None even though a model produced the rows.
                     extraction_model=await self._served_extraction_model(config),

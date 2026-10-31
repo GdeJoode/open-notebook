@@ -130,8 +130,7 @@ async def test_de_classificatie_is_verplicht_voor_de_chatgrafen():
 async def test_extractie_aanroeper_via_de_poort(poort, veld, taak, json_verwacht):
     from app_main.services.entity_extraction_service import make_default_llm_caller
 
-    caller = await make_default_llm_caller(default_field=veld, classificatie="intern",
-                                           privacy_mode="cloud")
+    caller = await make_default_llm_caller(default_field=veld, classificatie="intern")
     tekst = await caller("systeem", "gebruiker", "model:oude-keuze")
 
     assert tekst

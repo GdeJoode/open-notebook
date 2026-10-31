@@ -407,5 +407,5 @@ class TestLLMExtractorCallerWiring:
             ):
                 raise AssertionError(
                     "Pre-B.1f broken method call ``manager.generate(...)`` "
-                    "resurfaced — the ModelManager API is achat_complete."
+                    "resurfaced — model calls go through the model gate."
                 )

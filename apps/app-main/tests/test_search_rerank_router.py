@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 
 import app_main.services.rerank_orchestrator as orch
 from app_main.api.routers.search import router
-from app_main.dependencies import get_model_service, get_search_service
+from app_main.dependencies import get_search_service
 from surrealdb_service.repositories.source import ChunkRepository
 from app_main.services.reranker_http_client import (
     RerankerHttpClient,
@@ -37,12 +37,6 @@ from app_main.services.reranker_http_client import (
 # ---------------------------------------------------------------------------
 
 
-def _model_svc(embedding_model: str | None = "model:embed") -> SimpleNamespace:
-    defaults = SimpleNamespace(default_embedding_model=embedding_model)
-    manager = SimpleNamespace(get_defaults=lambda: defaults)
-    return SimpleNamespace(model_manager=manager)
-
-
 def _search_svc(hybrid) -> SimpleNamespace:
     svc = SimpleNamespace()
     svc.text_search = AsyncMock(return_value=[])
@@ -51,11 +45,10 @@ def _search_svc(hybrid) -> SimpleNamespace:
     return svc
 
 
-def _make_client(search_svc, model_svc) -> TestClient:
+def _make_client(search_svc) -> TestClient:
     app = FastAPI()
     app.include_router(router, prefix="/api")
     app.dependency_overrides[get_search_service] = lambda: search_svc
-    app.dependency_overrides[get_model_service] = lambda: model_svc
     return TestClient(app)
 
 
@@ -94,7 +87,7 @@ class TestRerankTrue:
         monkeypatch.setattr(RerankerHttpClient, "rerank", fake_rerank)
 
         search_svc = _search_svc(_fused())
-        client = _make_client(search_svc, _model_svc())
+        client = _make_client(search_svc)
 
         resp = client.post(
             "/api/search",
@@ -115,7 +108,7 @@ class TestRerankTrue:
         monkeypatch.setattr(RerankerHttpClient, "rerank", fake_rerank)
 
         search_svc = _search_svc(_fused())
-        client = _make_client(search_svc, _model_svc())
+        client = _make_client(search_svc)
 
         resp = client.post(
             "/api/search",
@@ -153,14 +146,14 @@ class TestRerankFalseByteIdentical:
         fused = _fused()
         # Capture the exact bytes W.1 would return for this same fused output.
         baseline_svc = _search_svc(copy.deepcopy(fused))
-        baseline_client = _make_client(baseline_svc, _model_svc())
+        baseline_client = _make_client(baseline_svc)
         baseline = baseline_client.post(
             "/api/search", json={"query": "q", "type": "hybrid"}
         )
 
         # Now the same request WITHOUT rerank (explicit false).
         svc = _search_svc(copy.deepcopy(fused))
-        client = _make_client(svc, _model_svc())
+        client = _make_client(svc)
         resp = client.post(
             "/api/search",
             json={"query": "q", "type": "hybrid", "rerank": False},
@@ -195,7 +188,7 @@ class TestRerankServiceDownFallback:
             {"id": "c", "content": "gamma", "score": 0.5, "_combined_score": 0.3},
         ]
         search_svc = _search_svc(fused)
-        client = _make_client(search_svc, _model_svc())
+        client = _make_client(search_svc)
 
         resp = client.post(
             "/api/search",

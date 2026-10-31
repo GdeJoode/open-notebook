@@ -32,12 +32,8 @@ B.1f wires the production caller via DI inside
 exists for ad-hoc CLI use only — production must not exercise that
 path (it logs a WARNING canary).
 
-Note about the existing ``LLMExtractor``: that class currently
-imports ``llm_manager.manager`` which is the pre-rename API. The
-``LLMManager → ModelManager`` migration is tracked separately and is
-B.1f scope. This module does **not** touch ``llm-manager`` directly —
-all LLM access flows through the injected caller — so the existing
-TODO is unaffected by B.1d.
+This module does **not** touch ``llm-manager`` directly — all LLM
+access flows through the injected caller.
 
 Telemetry (Q-B-6: always on)
 ============================
@@ -531,12 +527,9 @@ def _default_llm_caller() -> LLMCaller:
     callers never trigger the import. Mirrors the lazy-import pattern
     in Pass-1 + ``LLMExtractor``.
     """
-    # B.1f wires ``EntityExtractionService`` and supplies an LLM
-    # caller via DI. This default is a safety net for ad-hoc CLI use
-    # only. The ``llm_manager.manager`` symbol stays the same as
-    # Pass-1's lazy import; the upcoming ``ModelManager`` rename is
-    # B.1f scope and out of B.1d's blast radius.
-    import llm_manager.manager  # noqa: F401  type: ignore[import-not-found]
+    # ``EntityExtractionService`` supplies the LLM caller via DI (it
+    # goes through the model gate). This default is a safety net for
+    # ad-hoc CLI use only.
 
     async def _call(system_prompt: str, user_prompt: str, model: str) -> str:
         # Stub: returns empty JSON and logs WARNING. Production must

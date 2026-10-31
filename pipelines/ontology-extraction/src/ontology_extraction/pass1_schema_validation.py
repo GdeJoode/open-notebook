@@ -360,10 +360,8 @@ class Pass1SchemaValidator:
 
         Args:
             llm_caller: Callable executing the LLM round-trip. If
-                ``None``, the validator will lazy-import
-                ``llm_manager.manager`` at call time (mirroring
-                ``LLMExtractor``). Pass an explicit callable in
-                tests so the import is not attempted.
+                ``None``, the validator uses a stub that returns empty
+                JSON and logs a WARNING (CLI use only).
             default_model: Default model id passed to ``run`` if the
                 caller does not override.
         """
@@ -486,21 +484,13 @@ class Pass1SchemaValidator:
         injected callers never trigger the import. Mirrors the
         lazy-import pattern in ``LLMExtractor.extract``.
         """
-        # NOTE B.1f will wire ``EntityExtractionService`` into
-        # ``Pass1SchemaValidator`` and supply an LLM caller via DI.
-        # This default is a safety net for ad-hoc CLI use only.
-        # The import is kept so the dependency surfaces if missing —
-        # but the manager itself is not instantiated, since B.1f
-        # owns the wiring (the previous attempt-1 code allocated a
-        # ModelManager and threw it away, which was the minor-#4
-        # dead-instantiation finding).
-        import llm_manager.manager  # noqa: F401  type: ignore[import-not-found]
+        # ``EntityExtractionService`` supplies the LLM caller via DI (it
+        # goes through the model gate). This default is a safety net for
+        # ad-hoc CLI use only.
 
         async def _call(system_prompt: str, user_prompt: str, model: str) -> str:
-            # This stub returns empty JSON and logs WARNING. B.1f
-            # replaces it with the real ModelManager round-trip. The
-            # WARNING is the canary — production must not exercise
-            # this path.
+            # This stub returns empty JSON and logs WARNING. The WARNING
+            # is the canary — production must not exercise this path.
             logger.warning(
                 "Pass1SchemaValidator using lazy default LLM caller — "
                 "B.1f integration not yet wired; returning empty JSON."

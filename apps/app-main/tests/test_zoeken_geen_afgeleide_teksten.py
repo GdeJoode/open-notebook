@@ -88,12 +88,9 @@ async def test_notitie_en_inzicht_komen_niet_terug(app, env) -> None:
                          {"b": bron, "w": woord, "v": vector})
     afgeleid = {str(notitie["id"]), str(inzicht["id"])}
 
-    manager = SimpleNamespace(get_defaults=lambda: SimpleNamespace(default_embedding_model="m"))
     app.dependency_overrides[dependencies.get_search_service] = lambda: SearchService(
         search_repo=SearchRepository(),
         embedding_model=SimpleNamespace(aembed=AsyncMock(return_value=[vector])))
-    app.dependency_overrides[dependencies.get_model_service] = lambda: SimpleNamespace(
-        model_manager=manager)
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                      headers={"Authorization": "Bearer ak_test"}) as c:

@@ -66,7 +66,6 @@ def _processed_stub() -> MagicMock:
     src.full_text = "hello world"
     src.created = "2026-06-21T00:00:00Z"
     src.updated = "2026-06-21T00:00:00Z"
-    src.private = False
     return src
 
 

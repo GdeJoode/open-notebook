@@ -206,12 +206,12 @@ class InboxWatcher:
         notebook_id = self._resolve_notebook(p)
         svc = self._source_service()
         source = await svc.create(
-            {"title": p.name, "topics": [], "private": False}
+            {"title": p.name, "topics": []}
         )
         if notebook_id:
             await svc.add_to_notebook(source.id, notebook_id)
 
-        content_state: Dict[str, object] = {"private": False}
+        content_state: Dict[str, object] = {}
         if route == "url":
             url = self._read_url_target(p)
             if not url:
@@ -229,7 +229,6 @@ class InboxWatcher:
                 "content_state": content_state,
                 "notebook_ids": [notebook_id] if notebook_id else [],
                 "processing_overrides": None,
-                "private": False,
             },
         )
         logger.info(

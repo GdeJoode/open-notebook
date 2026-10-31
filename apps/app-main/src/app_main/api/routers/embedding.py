@@ -1,4 +1,8 @@
-"""Embedding router - embed content for vector search."""
+"""Embedding router - embed content for vector search.
+
+``POST /api/embeddings/item`` (F2-09): eerder ``/api/embed``, maar dat pad is ook
+een Ollama-eindpunt; ``tests/test_geen_ollama_eindpunten.py`` weigert het.
+"""
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
@@ -14,7 +18,7 @@ from app_main.api.fouten import fout_zonder_inhoud
 router = APIRouter(tags=["embedding"], dependencies=[RECHT_BEHEERDER])
 
 
-@router.post("/embed", response_model=EmbedResponse)
+@router.post("/embeddings/item", response_model=EmbedResponse)
 async def embed_content(
     embed_request: EmbedRequest,
     source_svc: SourceService = Depends(get_source_service),

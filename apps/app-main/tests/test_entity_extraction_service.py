@@ -11,7 +11,7 @@ Covers the wiring contract:
    ``notebook_id`` set (ops kill-switch).
 
 All paths are mocked at the workflow / orchestrator seam — no LLM,
-no SurrealDB, no esperanto model construction.
+no SurrealDB, no model construction.
 """
 
 from types import SimpleNamespace
@@ -382,8 +382,7 @@ class TestSchemaReviewPendingError:
         assert isinstance(err, JobPausedForReviewError)
 
 
-# TestMakeDefaultLLMCaller (B.1f/J.4: route en ModelManager) vervalt met F2-08;
-# de aanroeper via de modelpoort staat in test_modelpoort_aanroepen.py.
+# De aanroeper via de modelpoort staat in test_modelpoort_aanroepen.py (F2-08).
 
 
 # ---------------------------------------------------------------------------
@@ -624,7 +623,7 @@ class TestRunMultiSchemaBody:
 
     @pytest.mark.asyncio
     async def test_llm_caller_factory_failure_is_non_fatal(self, svc):
-        """When the LLM caller factory raises (e.g. esperanto provider
+        """When the LLM caller factory raises (e.g. the model gate is
         misconfigured), the service logs a warning and continues with
         ``llm_caller=None`` — Pass-1/Pass-2 will use their lazy-default
         empty-result paths rather than blowing up the whole job.
@@ -1437,15 +1436,7 @@ class TestTheCountersCrossOutOfTheService:
             new=AsyncMock(return_value=AsyncMock()),
         ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
             svc, "_embed_entities", AsyncMock()
-        ), patch.object(svc, "_persistence", AsyncMock()), patch.object(
-            EntityExtractionService,
-            "_resolve_privacy_mode",
-            AsyncMock(return_value=None),
-        ), patch.object(
-            EntityExtractionService,
-            "_pack_chunks_for_route_head",
-            AsyncMock(side_effect=lambda chunks: chunks),
-        ):
+        ), patch.object(svc, "_persistence", AsyncMock()        ):
             workflow = MagicMock()
             workflow.extract = AsyncMock(return_value=extracted)
             workflow_cls.return_value = workflow
@@ -1622,15 +1613,7 @@ class TestWhatWasWrittenReachesTheSummary:
             svc, "_save_result", save_mock or AsyncMock()
         ), patch.object(
             svc, "_embed_entities", AsyncMock()
-        ), patch.object(svc, "_persistence", persistence), patch.object(
-            EntityExtractionService,
-            "_resolve_privacy_mode",
-            AsyncMock(return_value=None),
-        ), patch.object(
-            EntityExtractionService,
-            "_pack_chunks_for_route_head",
-            AsyncMock(side_effect=lambda chunks: chunks),
-        ):
+        ), patch.object(svc, "_persistence", persistence        ):
             workflow = MagicMock()
             workflow.extract = AsyncMock(return_value=extracted)
             workflow_cls.return_value = workflow
@@ -1707,15 +1690,7 @@ class TestWhatWasWrittenReachesTheSummary:
             new=AsyncMock(return_value=AsyncMock()),
         ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
             svc, "_embed_entities", AsyncMock()
-        ), patch.object(
-            EntityExtractionService,
-            "_resolve_privacy_mode",
-            AsyncMock(return_value=None),
-        ), patch.object(
-            EntityExtractionService,
-            "_pack_chunks_for_route_head",
-            AsyncMock(side_effect=lambda chunks: chunks),
-        ):
+                ):
             workflow = MagicMock()
             workflow.extract = AsyncMock(
                 return_value=ExtractionResult(
@@ -1973,15 +1948,7 @@ class TestApplicabilitySample:
             new=AsyncMock(return_value=AsyncMock()),
         ), patch.object(svc, "_save_result", AsyncMock()), patch.object(
             svc, "_embed_entities", AsyncMock()
-        ), patch.object(svc, "_persistence", AsyncMock()), patch.object(
-            EntityExtractionService,
-            "_resolve_privacy_mode",
-            AsyncMock(return_value=None),
-        ), patch.object(
-            EntityExtractionService,
-            "_pack_chunks_for_route_head",
-            AsyncMock(side_effect=lambda chunks: chunks),
-        ):
+        ), patch.object(svc, "_persistence", AsyncMock()        ):
             workflow = MagicMock()
             workflow.extract = AsyncMock(
                 return_value=ExtractionResult(entities=[], relations=[], metadata={})
@@ -2289,22 +2256,7 @@ class TestPass1OutcomeReachesTheCurator:
             # they made a single test take minutes instead of milliseconds, and
             # the assertions here are about the Pass-1 queue, not about either.
             svc, "_embed_entities", AsyncMock()
-        ), patch.object(svc, "_persistence", AsyncMock()), patch.object(
-            # `_resolve_privacy_mode` reads the database and swallows failure.
-            # With a reachable DB that is milliseconds; with an unreachable one
-            # it waits out the connection timeout — measured at 43.6s, which was
-            # the ENTIRE cost of each test here. A unit test about the Pass-1
-            # queue must not depend on a database being up to run quickly.
-            EntityExtractionService, "_resolve_privacy_mode", AsyncMock(return_value=None)
-        ), patch.object(
-            # Same shape, second call site: the context packer resolves a model
-            # route, and on failure logs a WARNING and falls back to un-packed
-            # chunks. Measured at 45.2s against an unreachable database. Neither
-            # of these two is what this class asserts.
-            EntityExtractionService,
-            "_pack_chunks_for_route_head",
-            AsyncMock(side_effect=lambda chunks: chunks),
-        ):
+        ), patch.object(svc, "_persistence", AsyncMock()):
             workflow = MagicMock()
             workflow.extract = AsyncMock(return_value=extracted)
             workflow_cls.return_value = workflow

@@ -4,7 +4,6 @@ import pytest
 from pydantic import ValidationError
 
 from app_main.api.schemas import (
-    ModelCreate,
     NotebookCreate,
     NoteCreate,
     SearchRequest,
@@ -74,17 +73,6 @@ class TestSearchRequest:
         # krijgt geen fout.
         assert "search_notes" not in SearchRequest.model_fields
         assert SearchRequest(query="x", search_notes=True).query == "x"
-
-
-class TestModelCreate:
-
-    def test_all_fields_required(self):
-        with pytest.raises(ValidationError):
-            ModelCreate(name="gpt-4o")
-
-    def test_valid_create(self):
-        schema = ModelCreate(name="gpt-4o", provider="openai", type="language")
-        assert schema.name == "gpt-4o"
 
 
 class TestTransformationCreate:

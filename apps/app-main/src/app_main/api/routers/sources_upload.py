@@ -199,7 +199,6 @@ def parse_source_form_data(
     delete_source: str = Form("false"),
     async_processing: str = Form("false"),
     processing_overrides: Optional[str] = Form(None),
-    private: str = Form("false"),
     file: Optional[UploadFile] = File(None),
 ) -> tuple[SourceCreate, Optional[UploadFile]]:
     """Parse form data into SourceCreate model and return upload file."""
@@ -211,10 +210,6 @@ def parse_source_form_data(
     embed_bool = str_to_bool(embed)
     delete_source_bool = str_to_bool(delete_source)
     async_processing_bool = str_to_bool(async_processing)
-    # Track J.3: the layered privacy flag. ``str_to_bool`` mirrors the other
-    # boolean form fields; the resolved bool rides on SourceCreate.private and
-    # is threaded onto the persisted source + the process_source command args.
-    private_bool = str_to_bool(private)
 
     notebooks_list = None
     if notebooks:
@@ -250,7 +245,6 @@ def parse_source_form_data(
         delete_source=delete_source_bool,
         async_processing=async_processing_bool,
         processing_overrides=overrides_dict,
-        private=private_bool,
     )
 
     return source_data, file
@@ -360,12 +354,6 @@ async def _create_source_impl(
                 detail="Invalid source type. Must be link, upload, or text",
             )
 
-        # Track J.3: carry the per-document privacy flag through to the worker.
-        # The privacy resolver (run during extraction) reads source.private; we
-        # also stash it on content_state so the process_source command has it
-        # without a re-fetch. Additive — does not touch the I.H1 upload guards.
-        content_state["private"] = source_data.private
-
         # Validate transformations exist
         transformation_ids = source_data.transformations or []
         for trans_id in transformation_ids:
@@ -384,7 +372,6 @@ async def _create_source_impl(
                 {
                     "title": source_data.title or "Processing...",
                     "topics": [],
-                    "private": source_data.private,
                 }
             )
 
@@ -400,7 +387,6 @@ async def _create_source_impl(
                     "content_state": content_state,
                     "notebook_ids": source_data.notebooks,
                     "processing_overrides": source_data.processing_overrides,
-                    "private": source_data.private,
                 }
 
                 command_id = await CommandService.submit_command_job(
@@ -440,7 +426,6 @@ async def _create_source_impl(
                     command_id=command_id,
                     status="new",
                     processing_info={"async": True, "queued": True},
-                    private=bool(getattr(source, "private", False)),
                 )
 
             except Exception as e:
@@ -486,7 +471,6 @@ async def _create_source_impl(
                     {
                         "title": source_data.title or "Processing...",
                         "topics": [],
-                        "private": source_data.private,
                     }
                 )
 
@@ -503,7 +487,6 @@ async def _create_source_impl(
                     "content_state": content_state,
                     "notebook_ids": source_data.notebooks,
                     "processing_overrides": source_data.processing_overrides,
-                    "private": source_data.private,
                 }
 
                 try:
@@ -562,7 +545,6 @@ async def _create_source_impl(
                     embedded_chunks=embedded_chunks,
                     created=str(processed_source.created),
                     updated=str(processed_source.updated),
-                    private=bool(getattr(processed_source, "private", False)),
                 )
 
             except HTTPException:
@@ -753,7 +735,6 @@ async def retry_source_processing(
                 command_id=command_id,
                 status="queued",
                 processing_info={"retry": True, "queued": True},
-                private=bool(getattr(source, "private", False)),
             )
 
         except HTTPException:

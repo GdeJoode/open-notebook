@@ -109,19 +109,6 @@ async def lifespan(app: FastAPI):
 
     get_aanroeper()
 
-    # Track M.1: backfill chain-model context_window / max_output_tokens so the
-    # context-aware chunk packer can size LLM-call windows from the active
-    # model. Idempotent (fill-nulls-only) + best-effort; runs after the NIM seed
-    # so the row it backfills exists.
-    try:
-        from app_main.services.model_routing.seed_chain_models import (
-            backfill_chain_model_params,
-        )
-
-        await backfill_chain_model_params()
-    except Exception as e:
-        logger.warning(f"chain-model param backfill skipped: {e}")
-
     # Register job handlers and start the background worker
     import app_main.handlers  # noqa: F401 — triggers @registry.register()
     from app_main.services.command_service import start_worker, stop_worker
@@ -248,7 +235,6 @@ def create_app() -> FastAPI:
         intake,
         knowledge_graph,
         model_calls,
-        model_routes,
         models,
         notebook_events,
         notebooks,
@@ -286,9 +272,6 @@ def create_app() -> FastAPI:
     )
     application.include_router(search.router, prefix="/api", tags=["search"])
     application.include_router(models.router, prefix="/api", tags=["models"])
-    application.include_router(
-        model_routes.router, prefix="/api", tags=["model-routes"]
-    )
     application.include_router(
         transformations.router, prefix="/api", tags=["transformations"]
     )

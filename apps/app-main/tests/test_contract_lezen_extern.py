@@ -289,11 +289,8 @@ def lezen_extern(app, monkeypatch, gegevens):
                                 "permission": "lezen_extern"}),
     )
     embedding = SimpleNamespace(aembed=AsyncMock(return_value=[gegevens.vector]))
-    manager = SimpleNamespace(get_defaults=lambda: SimpleNamespace(default_embedding_model="model:test"))
     app.dependency_overrides[dependencies.get_search_service] = lambda: SearchService(
         search_repo=SearchRepository(), embedding_model=embedding)
-    app.dependency_overrides[dependencies.get_model_service] = lambda: SimpleNamespace(
-        model_manager=manager)
     client = httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
         base_url="http://t",

@@ -1,14 +1,14 @@
 """§1.2 hard-guardrail canary: embeddings stay LOCAL and FIXED (J.3, F2-08).
 
-Embeddings never go through the Track J route resolver, and since F2-08 they go
-through the model gate only: ``ModelGate`` to ``/v1/embeddings`` of llama-swap,
+Embeddings go through the model gate only (F2-08; the Track J routing is gone
+since F2-09): ``ModelGate`` to ``/v1/embeddings`` of llama-swap,
 with the embedding model from the register (``mxbai-embed-large``, 1 024
 dimensions, ADR 0008) and the classification of the input in the audit row.
 
 Assertions:
   (a) the embedding service source imports nothing from ``model_routing``;
-  (b) ``LLMTask`` has exactly the three routed members — no EMBEDDING/PARSING;
-  (c) calling ``resolve_route`` with a string ``"embedding"`` raises;
+  (b) ``LLMTask`` has exactly the three language-model members — no
+      EMBEDDING/PARSING;
   (d) F2-08: the app's embedding service embeds through the gate to llama-swap,
       with the register's local embedding model; no model library is imported.
 """
@@ -18,11 +18,7 @@ from __future__ import annotations
 import inspect
 
 import pytest
-from app_main.services.model_routing.route_resolver import (
-    LLMTask,
-    PrivacyMode,
-    resolve_route,
-)
+from app_main.services.model_routing.llm_call import LLMTask
 
 # ---------------------------------------------------------------------------
 # (a) The embedding service source must not import model_routing
@@ -85,28 +81,6 @@ def test_llmtask_rejects_embedding_value():
 
 
 # ---------------------------------------------------------------------------
-# (c) resolve_route('embedding') raises instead of silently routing
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_resolve_route_rejects_embedding_string():
-    """``resolve_route("embedding", ...)`` raises (ValueError/KeyError).
-
-    The coercion happens before any repo/DI access, so this never silently
-    builds an embedding route — the call fails loudly at the public surface.
-    """
-    with pytest.raises((ValueError, KeyError)):
-        await resolve_route("embedding", PrivacyMode.CLOUD)
-
-
-@pytest.mark.asyncio
-async def test_resolve_route_rejects_parsing_string():
-    with pytest.raises((ValueError, KeyError)):
-        await resolve_route("parsing", PrivacyMode.PRIVATE)
-
-
-# ---------------------------------------------------------------------------
 # (d) F2-08: embeddings go through the model gate to llama-swap
 # ---------------------------------------------------------------------------
 
@@ -133,7 +107,7 @@ def test_the_embedding_path_imports_no_model_library():
         modules = {
             (k.module or "") for k in ast.walk(boom) if isinstance(k, ast.ImportFrom)
         } | {a.name for k in ast.walk(boom) if isinstance(k, ast.Import) for a in k.names}
-        assert not {m for m in modules if m.split(".")[0] in ("esperanto", "openai", "ollama")}
+        assert not {m for m in modules if m.split(".")[0] in ("openai", "ollama")}
 
 
 @pytest.mark.asyncio

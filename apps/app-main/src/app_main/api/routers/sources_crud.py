@@ -354,7 +354,6 @@ async def get_source(
             status=status,
             processing_info=processing_info,
             notebooks=notebook_ids,
-            private=bool(getattr(source, "private", False)),
             # PL.4: surface the per-source pipeline stage so the UI can show
             # per-document progress (ingested -> ... -> complete, or a parked
             # awaiting_schema_review / failed).
@@ -403,7 +402,6 @@ async def update_source(
             embedded_chunks=embedded_chunks,
             created=str(source.created),
             updated=str(source.updated),
-            private=bool(getattr(source, "private", False)),
             processing_stage=str(
                 getattr(source, "processing_stage", "ingested") or "ingested"
             ),

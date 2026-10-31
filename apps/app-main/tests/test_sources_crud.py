@@ -32,7 +32,6 @@ def _fake_source(processing_stage="complete"):
         created="2026-01-01T00:00:00Z",
         updated="2026-01-02T00:00:00Z",
         command=None,
-        private=False,
         processing_stage=processing_stage,
     )
 

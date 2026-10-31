@@ -17,13 +17,7 @@ from fastapi.testclient import TestClient
 from shared.models.classification import ClassificationScope
 
 from app_main.api.routers.search import router
-from app_main.dependencies import get_model_service, get_search_service
-
-
-def _model_svc(embedding_model: str | None = "model:embed") -> SimpleNamespace:
-    defaults = SimpleNamespace(default_embedding_model=embedding_model)
-    manager = SimpleNamespace(get_defaults=lambda: defaults)
-    return SimpleNamespace(model_manager=manager)
+from app_main.dependencies import get_search_service
 
 
 def _search_svc(**results) -> SimpleNamespace:
@@ -34,11 +28,10 @@ def _search_svc(**results) -> SimpleNamespace:
     return svc
 
 
-def _make_client(search_svc, model_svc) -> TestClient:
+def _make_client(search_svc) -> TestClient:
     app = FastAPI()
     app.include_router(router, prefix="/api")
     app.dependency_overrides[get_search_service] = lambda: search_svc
-    app.dependency_overrides[get_model_service] = lambda: model_svc
     return TestClient(app)
 
 
@@ -50,7 +43,7 @@ class TestSearchHybrid:
             {"id": "source:text", "_search_type": "text", "_combined_score": 0.30},
         ]
         search_svc = _search_svc(hybrid=fused)
-        client = _make_client(search_svc, _model_svc())
+        client = _make_client(search_svc)
 
         resp = client.post("/api/search", json={"query": "regio deal", "type": "hybrid"})
 
@@ -66,7 +59,7 @@ class TestSearchHybrid:
     def test_hybrid_forwards_params(self):
         """text_weight, minimum_score, limit, the key's scope and history reach the service."""
         search_svc = _search_svc(hybrid=[])
-        client = _make_client(search_svc, _model_svc())
+        client = _make_client(search_svc)
 
         resp = client.post(
             "/api/search",
@@ -91,7 +84,7 @@ class TestSearchHybrid:
 
     def test_hybrid_default_text_weight_is_half(self):
         search_svc = _search_svc(hybrid=[])
-        client = _make_client(search_svc, _model_svc())
+        client = _make_client(search_svc)
 
         resp = client.post("/api/search", json={"query": "q", "type": "hybrid"})
 
@@ -102,7 +95,7 @@ class TestSearchHybrid:
     def test_hybrid_empty_results(self):
         """AC3: no-results case returns 200 with an empty list, no 500."""
         search_svc = _search_svc(hybrid=[])
-        client = _make_client(search_svc, _model_svc())
+        client = _make_client(search_svc)
 
         resp = client.post("/api/search", json={"query": "nothing", "type": "hybrid"})
 
@@ -112,15 +105,16 @@ class TestSearchHybrid:
         assert data["total_count"] == 0
         assert data["search_type"] == "hybrid"
 
-    def test_hybrid_no_embedding_model_does_not_error(self):
+    def test_hybrid_no_embedding_model_does_not_error(self, monkeypatch):
         """AC3: with no embedding model configured, hybrid still returns 200.
 
         Unlike pure vector search, hybrid degrades gracefully downstream
         (falls back to text-only), so the router must NOT short-circuit with
         a 400 the way the vector branch does.
         """
+        monkeypatch.setattr("app_main.api.routers.search.registermodel", lambda taak: None)
         search_svc = _search_svc(hybrid=[{"id": "source:1"}])
-        client = _make_client(search_svc, _model_svc(embedding_model=None))
+        client = _make_client(search_svc)
 
         resp = client.post("/api/search", json={"query": "q", "type": "hybrid"})
 
@@ -128,12 +122,12 @@ class TestSearchHybrid:
         search_svc.hybrid_search.assert_awaited_once()
 
     def test_invalid_type_rejected(self):
-        client = _make_client(_search_svc(), _model_svc())
+        client = _make_client(_search_svc())
         resp = client.post("/api/search", json={"query": "q", "type": "fuzzy"})
         assert resp.status_code == 422
 
     def test_text_weight_out_of_range_rejected(self):
-        client = _make_client(_search_svc(), _model_svc())
+        client = _make_client(_search_svc())
         resp = client.post(
             "/api/search",
             json={"query": "q", "type": "hybrid", "text_weight": 1.5},
@@ -146,7 +140,7 @@ class TestSearchBackwardCompatible:
 
     def test_text_branch_unchanged(self):
         search_svc = _search_svc(text=[{"id": "source:t"}])
-        client = _make_client(search_svc, _model_svc())
+        client = _make_client(search_svc)
 
         resp = client.post("/api/search", json={"query": "q", "type": "text"})
 
@@ -163,7 +157,7 @@ class TestSearchBackwardCompatible:
 
     def test_default_type_is_text(self):
         search_svc = _search_svc(text=[])
-        client = _make_client(search_svc, _model_svc())
+        client = _make_client(search_svc)
 
         resp = client.post("/api/search", json={"query": "q"})
 
@@ -173,7 +167,7 @@ class TestSearchBackwardCompatible:
 
     def test_vector_branch_unchanged(self):
         search_svc = _search_svc(vector=[{"id": "source:v"}])
-        client = _make_client(search_svc, _model_svc())
+        client = _make_client(search_svc)
 
         resp = client.post(
             "/api/search",
@@ -195,7 +189,7 @@ class TestSearchBackwardCompatible:
         """The vector branch's 400 guard: F2-08, no embedding model in the register."""
         monkeypatch.setattr("app_main.api.routers.search.registermodel", lambda taak: None)
         search_svc = _search_svc(vector=[])
-        client = _make_client(search_svc, _model_svc(embedding_model=None))
+        client = _make_client(search_svc)
 
         resp = client.post("/api/search", json={"query": "q", "type": "vector"})
 

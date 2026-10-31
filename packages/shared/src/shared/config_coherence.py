@@ -10,8 +10,8 @@ unreachable rather than merely logged.
 
 **One way to a model (F2-08, ADR 0006).** Every model call goes through
 ``ModelGate`` to llama-swap, with the model taken from the register
-(``config/modelregister.yaml``). The checks on ``model_routing.yaml`` and on the
-Ollama runtime (routed models pulled, ``num_ctx`` baked in, the two privacy
+(``config/modelregister.yaml``). The checks on the old routing configuration and
+on the Ollama runtime (routed models pulled, ``num_ctx`` baked in, the two privacy
 defaults agreeing) went with it: nothing reaches a model by those routes any
 more. What remains are the feature dependencies.
 

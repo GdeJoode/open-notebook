@@ -9,7 +9,7 @@ import os
 import re
 from datetime import datetime
 from typing import Any, Dict, Optional
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from shared.models import (
@@ -17,8 +17,6 @@ from shared.models import (
     ChatSession,
     Chunk,
     ContentSettings,
-    DefaultModels,
-    Model,
     Note,
     Notebook,
     Source,
@@ -179,19 +177,6 @@ def make_note(**overrides: Any) -> Note:
     return Note(**defaults)
 
 
-def make_model(**overrides: Any) -> Model:
-    defaults: Dict[str, Any] = {
-        "id": "model:test1",
-        "name": "gpt-4o-mini",
-        "provider": "openai",
-        "type": "language",
-        "created": _NOW,
-        "updated": _NOW,
-    }
-    defaults.update(overrides)
-    return Model(**defaults)
-
-
 def make_chat_session(**overrides: Any) -> ChatSession:
     defaults: Dict[str, Any] = {
         "id": "chat_session:test1",
@@ -233,10 +218,6 @@ def make_transformation(**overrides: Any) -> Transformation:
 
 def make_settings(**overrides: Any) -> ContentSettings:
     return ContentSettings(**overrides)
-
-
-def make_default_models(**overrides: Any) -> DefaultModels:
-    return DefaultModels(**overrides)
 
 
 def make_default_prompts(**overrides: Any) -> DefaultPrompts:
@@ -392,25 +373,6 @@ def search_repo():
 
 
 @pytest.fixture
-def model_repo():
-    repo = AsyncMock()
-    repo.get = AsyncMock(return_value=None)
-    repo.get_all = AsyncMock(return_value=[])
-    repo.get_by_type = AsyncMock(return_value=[])
-    repo.create = AsyncMock()
-    repo.delete = AsyncMock(return_value=True)
-    return repo
-
-
-@pytest.fixture
-def defaults_repo():
-    repo = AsyncMock()
-    repo.get = AsyncMock(return_value=make_default_models())
-    repo.update = AsyncMock()
-    return repo
-
-
-@pytest.fixture
 def transformation_repo():
     repo = AsyncMock()
     repo.get = AsyncMock(return_value=None)
@@ -487,15 +449,6 @@ def speaker_profile_repo():
     repo.update = AsyncMock()
     repo.delete = AsyncMock(return_value=True)
     return repo
-
-
-@pytest.fixture
-def model_manager():
-    mm = MagicMock()
-    mm.get_defaults = MagicMock(return_value=make_default_models())
-    mm.set_defaults = MagicMock()
-    mm.clear_cache = MagicMock()
-    return mm
 
 
 @pytest.fixture

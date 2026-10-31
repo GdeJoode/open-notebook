@@ -16,10 +16,10 @@ Stopconditie F2-08. De test faalt:
    relatieve import en ``importlib.import_module``/``__import__`` met zo'n module
    als tekst tellen;
 4. bij ``import shared.model_routing`` of een aanroep daaruit (``call_llm``,
-   ``embed_text``, ``_call_*``) buiten die module zelf.
+   ``embed_text``, ``_call_*``); die module is in F2-09 verwijderd.
 
-Tijdelijke uitzondering (plan F2-08): ``packages/shared/src/shared/model_routing.py``,
-dat met F2-09 vervalt.
+Er is geen tijdelijke uitzondering meer: ``shared/model_routing.py`` en de
+Track J-foutvertaling (``error_mapping.py``) zijn in F2-09 verwijderd.
 
 Wat geen modelaanroep is en dus mag:
 
@@ -28,8 +28,6 @@ Wat geen modelaanroep is en dus mag:
 - ``host.docker.internal`` in de blokkadelijst van de URL-controle van de
   bronkaart (``source_map_service.py``) en in de test daarvan: die lijst
   weigert zo'n adres juist;
-- de import van ``openai`` in ``error_mapping.py`` (Track J, vervalt in F2-09),
-  zolang die module er alleen de genoemde uitzonderingsklassen uit leest;
 - de import van ``langextract`` in de uitgeschakelde LangExtract-extractor: de
   constructor weigert altijd.
 """
@@ -48,9 +46,6 @@ SOORTEN = {
     ".cfg", ".ini", ".conf", ".env", ".example", ".txt",
 }
 OVERSLAAN = ("node_modules", "__pycache__", ".venv", "/app-main/data/")
-
-#: De enige tijdelijke uitzondering (plan F2-08); vervalt in F2-09.
-TIJDELIJK = {"packages/shared/src/shared/model_routing.py"}
 
 VERBODEN = {
     "Ollama-eindpunt": re.compile(r"/api/(?:generate|chat|embed|embeddings)(?![\w/-])"),
@@ -80,15 +75,6 @@ MODELBIBLIOTHEKEN = (
     "langchain_openai", "langchain_ollama", "langchain_anthropic",
     "langchain_google_genai", "langchain_groq", "langchain_mistralai",
 )
-
-#: Track J, vervalt in F2-09: ``error_mapping.py`` leest uit ``openai`` alleen
-#: deze uitzonderingsklassen, via ``getattr(_openai, "<naam>")``.
-ERROR_MAPPING = "apps/app-main/src/app_main/services/model_routing/error_mapping.py"
-OPENAI_UITZONDERINGEN = {
-    "RateLimitError", "APITimeoutError", "APIConnectionError", "InternalServerError",
-    "AuthenticationError", "PermissionDeniedError", "BadRequestError", "NotFoundError",
-    "UnprocessableEntityError", "ConflictError", "APIStatusError", "APIError",
-}
 
 #: LangExtract is uitgeschakeld: de constructor weigert altijd
 #: (``LangExtractUitgeschakeld``). Voorstel: verwijderen met F2-09.
@@ -175,31 +161,6 @@ def _docstrings(boom: ast.AST) -> set[int]:
     return ids
 
 
-def _openai_buiten_uitzonderingen(boom: ast.AST) -> list[int]:
-    """Regels in ``error_mapping.py`` waar ``_openai`` iets anders doet dan een
-    genoemde uitzonderingsklasse lezen of op ``None`` toetsen."""
-    ouders = {}
-    for knoop in ast.walk(boom):
-        for kind in ast.iter_child_nodes(knoop):
-            ouders[id(kind)] = knoop
-    fout = []
-    for knoop in ast.walk(boom):
-        if not (isinstance(knoop, ast.Name) and knoop.id == "_openai"):
-            continue
-        ouder = ouders.get(id(knoop))
-        if isinstance(ouder, ast.Compare) or (
-            isinstance(ouder, ast.Assign) and knoop in ouder.targets
-        ):
-            continue
-        if (isinstance(ouder, ast.Call) and getattr(ouder.func, "id", None) == "getattr"
-                and len(ouder.args) >= 2 and ouder.args[0] is knoop
-                and isinstance(ouder.args[1], ast.Constant)
-                and ouder.args[1].value in OPENAI_UITZONDERINGEN):
-            continue
-        fout.append(knoop.lineno)
-    return fout
-
-
 def _bevindingen_tekst(rel: str, inhoud: str) -> list[str]:
     gevonden = []
     for nr, regel in enumerate(inhoud.splitlines(), 1):
@@ -235,9 +196,7 @@ def _bevindingen_imports(rel: str, inhoud: str) -> list[str]:
     for nr, module, naam in _imports(boom, rel):
         wortel = module.split(".")[0]
         if wortel in MODELBIBLIOTHEKEN and not test:
-            if rel == ERROR_MAPPING and wortel == "openai":
-                pass  # getoetst hieronder: alleen genoemde uitzonderingsklassen
-            elif rel in LANGEXTRACT_UITGESCHAKELD and wortel == "langextract":
+            if rel in LANGEXTRACT_UITGESCHAKELD and wortel == "langextract":
                 pass
             else:
                 gevonden.append(f"{rel}:{nr}: import {module}")
@@ -252,17 +211,12 @@ def _bevindingen_imports(rel: str, inhoud: str) -> list[str]:
                 naam.startswith("_call")
             ):
                 gevonden.append(f"{rel}:{nr}: {MODEL_ROUTING}.{naam or '*'}")
-    if rel == ERROR_MAPPING:
-        gevonden += [f"{rel}:{nr}: openai buiten de uitzonderingsklassen"
-                     for nr in _openai_buiten_uitzonderingen(boom)]
     return gevonden
 
 
 def test_geen_ollama_eindpunten():
     gevonden = []
     for pad, rel in _bestanden():
-        if rel in TIJDELIJK:
-            continue
         gevonden += _bevindingen_tekst(rel, pad.read_text(encoding="utf-8", errors="ignore"))
     assert not gevonden, "Modelaanroep buiten llama-swap:\n" + "\n".join(gevonden)
 
@@ -270,7 +224,7 @@ def test_geen_ollama_eindpunten():
 def test_geen_model_buiten_de_poort():
     gevonden = []
     for pad, rel in _bestanden():
-        if pad.suffix != ".py" or rel in TIJDELIJK:
+        if pad.suffix != ".py":
             continue
         gevonden += _bevindingen_imports(rel, pad.read_text(encoding="utf-8"))
     assert not gevonden, "Modelaanroep om de poort heen:\n" + "\n".join(gevonden)
@@ -314,9 +268,5 @@ def test_de_omzeilvormen_uit_de_review_worden_gevonden():
     assert not _bevindingen_tekst(CLIENT_BESTAND, 'LLAMA_SWAP_URL = "http://llama-swap:8080/v1"\n')
     # Wat mag, blijft mogen.
     assert not _bevindingen_imports(BRON, "from shared.model_routing import _load_config\n")
-    # error_mapping: alleen de genoemde uitzonderingsklassen.
-    goed = "import openai as _openai\nx = getattr(_openai, 'RateLimitError', None)\n"
-    assert not _bevindingen_imports(ERROR_MAPPING, goed)
-    for fout in ("import openai as _openai\nc = _openai.OpenAI()\n",
-                 "import openai as _openai\nc = getattr(_openai, 'OpenAI')()\n"):
-        assert _bevindingen_imports(ERROR_MAPPING, fout), fout
+    # Een import van ``openai`` telt overal, ook voor alleen een uitzonderingsklasse.
+    assert _bevindingen_imports(BRON, "from openai import RateLimitError\n")

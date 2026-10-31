@@ -2,110 +2,15 @@
 LLM and AI model definitions.
 
 Pure Pydantic models for AI models. Database persistence handled by surrealdb-service.
+Welke modellen er zijn, staat in het modelregister (``config/modelregister.yaml``,
+ADR 0007), niet in de database.
 """
 
-from typing import Any, ClassVar, Dict, List, Literal, Optional
+from typing import ClassVar, Optional
 
 from pydantic import Field
 
-from shared.models.base import ObjectModel, RecordModel
-
-ModelTypeStr = Literal["language", "embedding", "speech_to_text", "text_to_speech"]
-
-
-class Model(ObjectModel):
-    """
-    AI model configuration.
-
-    Represents a configured AI model from a provider.
-    """
-
-    table_name: ClassVar[str] = "model"
-
-    name: str = Field(..., description="Model name/identifier from the provider")
-    provider: str = Field(..., description="Provider name (openai, anthropic, etc.)")
-    type: ModelTypeStr = Field(..., description="Model type")
-    display_name: Optional[str] = Field(None, description="Human-readable display name")
-    description: Optional[str] = Field(None, description="Model description")
-    context_window: Optional[int] = Field(None, description="Context window size in tokens")
-    max_output_tokens: Optional[int] = Field(None, description="Maximum output tokens")
-    supports_vision: Optional[bool] = Field(False, description="Whether model supports vision/images")
-    supports_tools: Optional[bool] = Field(False, description="Whether model supports tool calling")
-    supports_streaming: Optional[bool] = Field(True, description="Whether model supports streaming")
-    input_cost_per_1k: Optional[float] = Field(None, description="Cost per 1K input tokens in USD")
-    output_cost_per_1k: Optional[float] = Field(None, description="Cost per 1K output tokens in USD")
-    is_local: Optional[bool] = Field(False, description="Whether this is a local model")
-    is_enabled: Optional[bool] = Field(True, description="Whether model is enabled for use")
-
-
-class DefaultModels(RecordModel):
-    """
-    Default model configuration for each use case.
-
-    Singleton record with default model selections.
-    """
-
-    record_id: ClassVar[str] = "open_notebook:default_models"
-
-    default_chat_model: Optional[str] = Field(
-        None, description="Default model for chat/conversation"
-    )
-    default_transformation_model: Optional[str] = Field(
-        None, description="Default model for text transformation tasks"
-    )
-    large_context_model: Optional[str] = Field(
-        None, description="Model for large context operations"
-    )
-    default_text_to_speech_model: Optional[str] = Field(
-        None, description="Default text-to-speech model"
-    )
-    default_speech_to_text_model: Optional[str] = Field(
-        None, description="Default speech-to-text model"
-    )
-    default_embedding_model: Optional[str] = Field(
-        None, description="Default embedding model"
-    )
-    default_tools_model: Optional[str] = Field(
-        None, description="Default model for tool-using tasks"
-    )
-    default_extraction_model: Optional[str] = Field(
-        None,
-        description=(
-            "Default model for knowledge-graph entity/relation extraction. "
-            "Independent of the chat model; falls back to default_chat_model "
-            "when unset."
-        ),
-    )
-
-
-class ModelRoute(ObjectModel):
-    """Ordered provider chain for one LLM task (Track J.1).
-
-    Mirrors the ``model_route`` table (migration 51). One row per task; the
-    ordered ``provider_chain`` is what the route resolver walks in CLOUD mode
-    (appending the local model as the final fallback), while ``private_chain``
-    holds local-only providers for PRIVATE mode.
-
-    Chain entries are FLEXIBLE dicts (forward-compat) shaped like
-    ``{"provider": str, "model_id": str, "enabled": bool}``. They are kept as
-    plain dicts rather than a nested model so a future entry field (e.g. a
-    per-entry weight) does not require a migration + model bump.
-    """
-
-    table_name: ClassVar[str] = "model_route"
-
-    task: str = Field(
-        ...,
-        description="LLM task this route serves: entity_extraction | summarization | chat",
-    )
-    provider_chain: List[Dict[str, Any]] = Field(
-        default_factory=list,
-        description="Ordered provider chain tried in CLOUD mode",
-    )
-    private_chain: List[Dict[str, Any]] = Field(
-        default_factory=list,
-        description="Ordered LOCAL-only provider chain for PRIVATE mode",
-    )
+from shared.models.base import ObjectModel
 
 
 class ModelUsageRecord(ObjectModel):

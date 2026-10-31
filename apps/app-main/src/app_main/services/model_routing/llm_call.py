@@ -9,30 +9,37 @@ naar llama-swap. De poort schrijft per aanroep één regel in ``model_call`` met
   ``onbekend`` telt als intern.
 - Het model komt uit het register, per taak. Er is geen terugval naar een ander
   model, naar Ollama of naar een cloudaanbieder.
-- ``LLMTask`` (Track J) blijft alleen de taaknaam; de routering van Track J
-  (failover, providerketens) bereikt geen model meer en vervalt in F2-09.
+- :class:`LLMTask` is alleen nog een taaknaam; de routering van Track J is
+  verwijderd (F2-09).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from llm_manager import aanroep
 from llm_manager.aanroep import ChatAntwoord, PoortAanroeper
 
-#: Track J-taak (``LLMTask.name``) naar de taak in het register.
-TAAK_VAN_LLMTASK = {
-    "ENTITY_EXTRACTION": "entity_extraction",
-    "SUMMARIZATION": "summarization",
-    "CHAT": "chat",
-}
+class LLMTask(str, Enum):
+    """De taalmodeltaken van de pijplijn; de waarde is de taak in het register.
+
+    Embeddings en parsing horen hier niet bij: die hebben een eigen taak in het
+    register en een eigen aanroep (``test_embedding_local_guardrail.py``).
+    """
+
+    ENTITY_EXTRACTION = "entity_extraction"
+    SUMMARIZATION = "summarization"
+    CHAT = "chat"
 
 
 def taak_van(task: Any) -> str:
-    """De registertaak bij een ``LLMTask`` of een taaknaam."""
-    naam = getattr(task, "name", task)
-    return TAAK_VAN_LLMTASK.get(str(naam).upper(), str(naam).lower())
+    """De registertaak bij een ``LLMTask``, de naam daarvan of een taaknaam."""
+    if isinstance(task, LLMTask):
+        return task.value
+    naam = str(task)
+    return LLMTask[naam.upper()].value if naam.upper() in LLMTask.__members__ else naam.lower()
 
 
 def registermodel(taak: str) -> Optional[str]:
