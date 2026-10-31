@@ -27,6 +27,9 @@ from app_main.services.graph.doc_graph_builder import (
     compute_graph,
 )
 
+#: Bronversie en run van de structuur (F2-04).
+HERKOMST = {"source_version": "source_version:v1", "run": "processing_run:r1"}
+
 # ---------------------------------------------------------------------------
 # Fixture builders
 # ---------------------------------------------------------------------------
@@ -268,38 +271,36 @@ class TestIdempotency:
         assert signature(g1) == signature(g2)
 
     @pytest.mark.asyncio
-    async def test_build_deletes_before_inserting(self, fake_db: FakeDB):
+    async def test_build_deletes_nothing_and_stamps_version_and_run(self, fake_db: FakeDB):
+        """F2-04 (ADR 0003): een nieuwe run maakt een structuur naast de oude."""
         chunks = [make_chunk(0, section_path=["A"])]
         builder = DocGraphBuilder()
 
-        await builder.build("source:s1", chunks=chunks)
+        await builder.build("source:s1", chunks=chunks, **HERKOMST)
 
-        delete_idx = [
-            i for i, (q, _) in enumerate(fake_db.queries)
-            if q.strip().startswith("DELETE")
-        ]
-        insert_idx = [
-            i for i, (q, _) in enumerate(fake_db.queries)
-            if q.strip().startswith("INSERT INTO doc_node")
-        ]
-        assert delete_idx, "expected delete-existing queries before insert"
-        assert insert_idx, "expected a doc_node insert"
-        # every delete runs before the first node insert (delete-rebuild order)
-        assert max(delete_idx) < min(insert_idx)
+        assert not [q for q, _ in fake_db.queries if q.strip().startswith("DELETE")]
+        inserts = [p for q, p in fake_db.queries if q.strip().startswith("INSERT INTO doc_node")]
+        assert inserts, "expected a doc_node insert"
+        for node in inserts[0]["nodes"]:
+            assert str(node["source_version"]) == HERKOMST["source_version"]
+            assert str(node["run"]) == HERKOMST["run"]
 
     @pytest.mark.asyncio
     async def test_build_twice_persists_same_edge_counts(self, fake_db: FakeDB):
         chunks = make_50_page_document()
         builder = DocGraphBuilder()
 
-        g_first = await builder.build("source:s1", chunks=chunks)
+        g_first = await builder.build("source:s1", chunks=chunks, **HERKOMST)
         first_parent = fake_db.relate_count("parent_of")
         first_next = fake_db.relate_count("next_node")
         first_derived = fake_db.relate_count("derived_from")
 
         # reset capture and rebuild
         fake_db.transactions.clear()
-        g_second = await builder.build("source:s1", chunks=chunks)
+        g_second = await builder.build(
+            "source:s1", chunks=chunks, source_version=HERKOMST["source_version"],
+            run="processing_run:r2",
+        )
 
         assert len(g_first.nodes) == len(g_second.nodes)
         assert fake_db.relate_count("parent_of") == first_parent
@@ -341,7 +342,7 @@ class TestDerivedFromCoverage:
     ):
         chunks = make_50_page_document()
         builder = DocGraphBuilder()
-        await builder.build("source:s1", chunks=chunks)
+        await builder.build("source:s1", chunks=chunks, **HERKOMST)
 
         assert fake_db.relate_count("derived_from") == len(chunks)
 
@@ -363,7 +364,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_empty_document_skips_inserts(self, fake_db: FakeDB):
         builder = DocGraphBuilder()
-        await builder.build("source:empty", chunks=[])
+        await builder.build("source:empty", chunks=[], **HERKOMST)
 
         # delete-existing still runs (idempotent clear) but no insert/relate
         assert not any(
@@ -410,7 +411,7 @@ class TestEdgeCases:
             make_chunk(1, section_path=["Intro"], text="world"),
         ]
         builder = DocGraphBuilder()
-        graph = await builder.build("source:s1", chunks=chunks)
+        graph = await builder.build("source:s1", chunks=chunks, **HERKOMST)
 
         assert len(graph.nodes) == 3  # 1 section + 2 leaves
         assert fake_db.relate_count("derived_from") == 2
@@ -430,7 +431,7 @@ class TestEdgeCases:
         fake_db.execute_query = patched  # type: ignore[assignment]
         dgb.execute_query = patched  # type: ignore[assignment]
 
-        graph = await builder.build("source:s1")
+        graph = await builder.build("source:s1", **HERKOMST)
         assert len(graph.nodes) == 2  # 1 section + 1 leaf
 
 
@@ -446,7 +447,7 @@ class TestBatching:
         monkeypatch.setattr(dgb, "RELATE_BATCH_SIZE", 50)
         chunks = make_50_page_document()
         builder = DocGraphBuilder()
-        await builder.build("source:s1", chunks=chunks)
+        await builder.build("source:s1", chunks=chunks, **HERKOMST)
 
         # next_node has (leaves-1) edges; with batch 50 that's multiple txns.
         next_txns = [

@@ -16,12 +16,17 @@ Alle testdata is synthetisch.
 
 from __future__ import annotations
 
+import uuid
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 import surrealdb_service.config as surreal_config
 import surrealdb_service.connection as conn
+from app_main.api import agent_auth
+from app_main.api.app import create_app
+from app_main.services.agents.audit_service import AgentAuditService
+from app_main.services.classification_service import ClassificationService
 from fastapi.routing import APIRoute
 from shared.models.agents import Right
 from surrealdb_service.connection import (
@@ -33,11 +38,7 @@ from surrealdb_service.repositories.source import (
     SourceInsightRepository,
     SourceRepository,
 )
-
-from app_main.api import agent_auth
-from app_main.api.app import create_app
-from app_main.services.agents.audit_service import AgentAuditService
-from app_main.services.classification_service import ClassificationService
+from surrealdb_service.testing.herkomst import herkomst
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.requires_docker]
 
@@ -85,10 +86,12 @@ async def _bron(classification: str = "intern") -> str:
 async def _kinderen(bron: str) -> dict[str, str]:
     """Een fragment, embedding, ``doc_node`` en inzicht bij ``bron``."""
     b = conn.ensure_record_id(bron)
+    # Sinds migratie 90 (F2-04) verplicht: bronversie en run.
+    h = await herkomst(bron)
     [chunk] = await _q(
         "CREATE chunk CONTENT $c RETURN id",
         {"c": {"source": b, "text": "t", "order": 0, "physical_page": 0,
-               "element_type": "paragraph", "positions": [], "metadata": {}}},
+               "element_type": "paragraph", "positions": [], "metadata": {}, **h}},
     )
     [emb] = await _q(
         "CREATE source_embedding CONTENT $c RETURN id",
@@ -98,8 +101,8 @@ async def _kinderen(bron: str) -> dict[str, str]:
     )
     [node] = await _q(
         "CREATE doc_node CONTENT $c RETURN id",
-        {"c": {"source": b, "element_type": "paragraph", "self_ref": "#/texts/0",
-               "sequence": 0}},
+        {"c": {"source": b, "element_type": "paragraph",
+               "self_ref": f"#/texts/{uuid.uuid4().hex[:8]}", "sequence": 0, **h}},
     )
     [insight] = await _q(
         "CREATE source_insight CONTENT $c RETURN id",
@@ -143,7 +146,7 @@ async def test_poortwachter_kan_geen_fragment_losser_maken_dan_de_bron(env) -> N
         await ChunkRepository().bulk_create([{
             "source": bron, "text": "t", "order": 0, "physical_page": 0,
             "element_type": "paragraph", "positions": [], "metadata": {},
-            "classification": "extern",
+            "classification": "extern", **await herkomst(bron),
         }])
     kinderen = await _kinderen(bron)
     for tabel in ("chunk", "source_embedding", "doc_node", "source_insight"):

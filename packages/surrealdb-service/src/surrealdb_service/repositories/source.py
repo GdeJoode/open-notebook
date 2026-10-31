@@ -1283,8 +1283,10 @@ class ChunkRepository(BaseRepository[Chunk]):
             prepared = []
             for chunk in chunks:
                 c = dict(chunk)
-                if "source" in c and isinstance(c["source"], str):
-                    c["source"] = ensure_record_id(c["source"])
+                # F2-04: bronversie en run zijn verplicht (migratie 90).
+                for veld in ("source", "source_version", "run"):
+                    if veld in c and isinstance(c[veld], str):
+                        c[veld] = ensure_record_id(c[veld])
                 prepared.append(c)
             result = await execute_query(
                 "INSERT INTO chunk $chunks",

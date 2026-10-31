@@ -24,14 +24,6 @@ import httpx
 import pytest
 import surrealdb_service.config as surreal_config
 import surrealdb_service.connection as conn
-from fastapi import FastAPI
-from job_queue.repository import JobRepository
-from loguru import logger
-from shared.models.notebook_schema import NotebookSchema
-from shared.types.enums import JobStatus
-from surrealdb_service.repositories.notebook_schema import NotebookSchemaRepository
-from surrealdb_service.repositories.source import SourceRepository
-
 from app_main.api.rate_limit import limiter
 from app_main.api.routers import (
     attention,
@@ -47,6 +39,14 @@ from app_main.dependencies import get_attention_service
 from app_main.services.attention_service import AttentionReport, AttentionService
 from app_main.services.notebook_service import NotebookService
 from app_main.services.triage.triage_queue import TriageQueueRepository
+from fastapi import FastAPI
+from job_queue.repository import JobRepository
+from loguru import logger
+from shared.models.notebook_schema import NotebookSchema
+from shared.types.enums import JobStatus
+from surrealdb_service.repositories.notebook_schema import NotebookSchemaRepository
+from surrealdb_service.repositories.source import SourceRepository
+from surrealdb_service.testing.herkomst import herkomst
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.requires_docker]
 
@@ -112,7 +112,8 @@ async def _age(source_id: str, minutes: int = 60) -> None:
 async def _chunk(source_id: str) -> None:
     await _q("CREATE chunk CONTENT $c;", {"c": {
         "source": conn.ensure_record_id(source_id), "text": "t", "order": 0,
-        "physical_page": 1, "element_type": "text", "positions": [], "metadata": {}}})
+        "physical_page": 1, "element_type": "text", "positions": [], "metadata": {},
+        **await herkomst(source_id)}})
 
 
 async def _notebook(name: str) -> str:

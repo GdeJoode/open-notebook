@@ -20,9 +20,8 @@ from __future__ import annotations
 import uuid
 from unittest.mock import patch
 
-import pytest
-
 import app_main.handlers as handlers
+import pytest
 from app_main.services.entity_extraction_service import (
     EntityExtractionService,
     SchemaReviewPendingError,
@@ -32,6 +31,7 @@ from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.notebook_schema import NotebookSchemaRepository
 from surrealdb_service.repositories.source import SourceRepository
+from surrealdb_service.testing.herkomst import herkomst
 
 pytestmark = pytest.mark.asyncio
 
@@ -64,8 +64,9 @@ async def _make_source_with_chunk(cfg: SurrealDBConfig, notebook_id: str) -> str
         "CREATE chunk SET source=type::thing($sid), text=$txt, order=0, "
         "physical_page=1, element_type='paragraph', is_content=true, "
         "metadata={}, positions=[], parent_chunk_ids=[], layer=0, "
-        "is_raptor_node=false;",
-        {"sid": sid, "txt": "Ada Lovelace worked with Charles Babbage."},
+        "is_raptor_node=false, source_version=$source_version, run=$run;",
+        {"sid": sid, "txt": "Ada Lovelace worked with Charles Babbage.",
+         **await herkomst(sid, cfg)},
         config=cfg,
     )
     await repo.add_to_notebook(sid, notebook_id)

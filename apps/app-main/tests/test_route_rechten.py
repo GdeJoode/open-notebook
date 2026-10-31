@@ -38,6 +38,10 @@ LAGER_DAN_BEHEERDER = {
     ("GET", "/api/notes"): Right.LEZEN_EXTERN,
     ("GET", "/api/notes/{note_id}"): Right.LEZEN_EXTERN,
     ("POST", "/api/search"): Right.LEZEN_EXTERN,
+    # F2-04: run-eindpunten voor Langflow (plan §5.4).
+    ("POST", "/api/v1/runs"): Right.PIJPLIJN,
+    ("PATCH", "/api/v1/runs/{run_id}"): Right.PIJPLIJN,
+    ("GET", "/api/v1/runs/{run_id}"): Right.PIJPLIJN,
 }
 
 

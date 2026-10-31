@@ -154,3 +154,25 @@ def _run_id(run_id: str):
     except Exception:
         return None
     return rid if rid.table_name == "processing_run" else None
+
+
+async def source_map_rule_snapshot(
+    rule_id: str, config: Optional[SurrealDBConfig] = None
+) -> Optional[Dict[str, Any]]:
+    """Classificatie, bevestiging, status en ``rev`` van een bronkaartregel.
+
+    De tabel ``source_map_rule`` komt met F2-13 (ADR 0020, plan §5.2); tot dan
+    vindt deze functie niets en is de invoer van een run onbekend.
+    """
+    try:
+        rid = ensure_record_id(rule_id if ":" in rule_id else f"source_map_rule:{rule_id}")
+    except Exception:
+        return None
+    if rid.table_name != "source_map_rule":
+        return None
+    rows = await execute_query(
+        "SELECT classification, classification_confirmed_by, active, rev FROM $id",
+        {"id": rid},
+        config,
+    )
+    return _rij(rows)

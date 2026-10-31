@@ -49,6 +49,7 @@ from app_main.services.chat_service import ChatService
 from app_main.services.audit.chunk_audit import ChunkAuditService
 from app_main.services.chunking.chunk_mutator import ChunkMutator
 from app_main.services.classification_service import ClassificationService
+from app_main.services.processing_run_service import ProcessingRunService
 from app_main.services.cites_materialization_service import (
     CitesMaterializationService,
 )
@@ -929,3 +930,7 @@ async def get_embedding_service():
 
 def get_classification_service() -> ClassificationService:
     return ClassificationService(source_repo=get_source_repo())
+
+
+def get_processing_run_service() -> ProcessingRunService:
+    return ProcessingRunService()

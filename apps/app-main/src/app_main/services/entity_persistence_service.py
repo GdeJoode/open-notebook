@@ -517,11 +517,17 @@ class EntityPersistenceService:
         extraction_method: str = "llm",
         extraction_model: str | None = None,
         applicable_schemas: Optional[List["Ontology"]] = None,
+        run_id: str | None = None,
     ) -> Dict[str, Any]:
         """Upsert entities and create relations in the knowledge graph.
 
         Args:
             source_id: Source record ID (for provenance tracking).
+            run_id: De verwerkingsrun (F2-04, ADR 0003); komt in de vermelding
+                (``properties.grounding[source_id].run``). De database slaat
+                daar ook de classificatie van de vermelding op en weigert een
+                vermelding waarvan het fragment niet bij ``source_id`` hoort
+                (migratie 90); zo'n entiteit telt als mislukt.
             entities: Filtered entity dicts (text, label, confidence, properties).
             relations: Filtered relation dicts (source_entity, target_entity, relation_type, confidence).
             merge_groups: Optional dedup merge groups for provenance.
@@ -659,6 +665,7 @@ class EntityPersistenceService:
                     ("chunk_id", entity.get("source_chunk_id")),
                     ("grounding", entity.get("source_grounding")),
                     ("context", entity.get("extraction_context")),
+                    ("run", run_id),
                 )
                 if v
             }

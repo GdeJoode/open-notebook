@@ -12,13 +12,13 @@ from __future__ import annotations
 import importlib.util
 import uuid
 from pathlib import Path
-
 from unittest.mock import patch
 
 import pytest
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import ensure_record_id, execute_query
 from surrealdb_service.repositories.source import SourceRepository
+from surrealdb_service.testing.herkomst import herkomst
 
 _SCRIPT = (
     Path(__file__).resolve().parents[3] / "scripts" / "backfill_chunk_embeddings.py"
@@ -47,11 +47,12 @@ async def _make_source_with_chunks(
         await execute_query(
             "CREATE chunk SET source = $src, text = $text, order = $order, "
             "physical_page = 0, element_type = 'paragraph', positions = [], "
-            "metadata = {};",
+            "metadata = {}, source_version = $source_version, run = $run;",
             {
                 "src": ensure_record_id(sid),
                 "text": f"chunk {order} of {title}",
                 "order": order,
+                **await herkomst(sid, cfg),
             },
             config=cfg,
         )
@@ -69,19 +70,23 @@ async def _add_chunk(
     if text is None:
         await execute_query(
             "CREATE chunk SET source = $src, text = NONE, order = $order, "
-            "physical_page = 0, element_type = $et, positions = [], metadata = {};",
-            {"src": ensure_record_id(source_id), "order": order, "et": element_type},
+            "physical_page = 0, element_type = $et, positions = [], metadata = {}, "
+            "source_version = $source_version, run = $run;",
+            {"src": ensure_record_id(source_id), "order": order, "et": element_type,
+             **await herkomst(source_id, cfg)},
             config=cfg,
         )
     else:
         await execute_query(
             "CREATE chunk SET source = $src, text = $text, order = $order, "
-            "physical_page = 0, element_type = $et, positions = [], metadata = {};",
+            "physical_page = 0, element_type = $et, positions = [], metadata = {}, "
+            "source_version = $source_version, run = $run;",
             {
                 "src": ensure_record_id(source_id),
                 "text": text,
                 "order": order,
                 "et": element_type,
+                **await herkomst(source_id, cfg),
             },
             config=cfg,
         )

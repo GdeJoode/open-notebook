@@ -68,8 +68,25 @@ def source_repo():
 @pytest.fixture
 def chunk_repo():
     repo = AsyncMock()
-    repo.delete_by_source = AsyncMock(return_value=0)
     repo.bulk_create = AsyncMock(return_value=[])
+    return repo
+
+
+@pytest.fixture
+def version_repo():
+    """Bronversie (F2-04): elke verwerking registreert een versie."""
+    repo = AsyncMock()
+    repo.register = AsyncMock(
+        return_value=(SimpleNamespace(id="source_version:v1"), True)
+    )
+    return repo
+
+
+@pytest.fixture
+def run_repo():
+    """Verwerkingsrun (F2-04): elke verwerking is een run."""
+    repo = AsyncMock()
+    repo.create = AsyncMock(return_value=SimpleNamespace(id="processing_run:r1"))
     return repo
 
 
@@ -102,13 +119,16 @@ def graph_builder():
 
 
 @pytest.fixture
-def processor(source_repo, chunk_repo, settings_repo, extractor, graph_builder):
+def processor(source_repo, chunk_repo, settings_repo, extractor, graph_builder,
+              version_repo, run_repo):
     return SourceProcessor(
         source_repo=source_repo,
         chunk_repo=chunk_repo,
         settings_repo=settings_repo,
         extractor=extractor,
         graph_builder=graph_builder,
+        version_repo=version_repo,
+        run_repo=run_repo,
     )
 
 
@@ -1093,16 +1113,41 @@ class TestBuildIngestionConfig:
 
 class TestProcessSource:
     @pytest.mark.asyncio
-    async def test_full_text_processing(self, processor, source_repo, chunk_repo):
+    async def test_full_text_processing(
+        self, processor, source_repo, chunk_repo, version_repo, run_repo
+    ):
         result = await processor.process_source(
             source_id="source:test1",
             content_state={"content": "Hello world"},
         )
 
         assert result["source_id"] is not None
-        chunk_repo.delete_by_source.assert_awaited_once_with("source:test1")
         chunk_repo.bulk_create.assert_awaited_once()
         source_repo.update.assert_awaited_once()
+        # F2-04: geen verwijderpad; elk fragment krijgt bronversie, run en extractor.
+        chunk_repo.delete_by_source.assert_not_awaited()
+        [prepared] = chunk_repo.bulk_create.await_args.args
+        assert prepared and all(
+            c["source_version"] == "source_version:v1" and c["run"] == "processing_run:r1"
+            and c["extractor"] for c in prepared
+        )
+        version_repo.register.assert_awaited_once()
+        version_repo.set_current_run.assert_awaited_once_with(
+            "source_version:v1", "processing_run:r1"
+        )
+        run_repo.close.assert_awaited_once()
+        assert run_repo.close.await_args.kwargs["status"] == "geslaagd"
+
+    @pytest.mark.asyncio
+    async def test_failed_chunk_write_closes_the_run_as_failed(
+        self, processor, chunk_repo, run_repo
+    ):
+        chunk_repo.bulk_create = AsyncMock(side_effect=RuntimeError("database"))
+        with pytest.raises(RuntimeError):
+            await processor.process_source(
+                source_id="source:test1", content_state={"content": "Hello world"}
+            )
+        assert run_repo.close.await_args.kwargs["status"] == "mislukt"
 
     @pytest.mark.asyncio
     async def test_builds_structure_graph_when_chunks_created(

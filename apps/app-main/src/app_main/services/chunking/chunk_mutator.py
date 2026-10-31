@@ -326,6 +326,13 @@ class ChunkMutator:
             "source_element_count": 1,
             "is_content": chunk.is_content,
         }
+        # Herkomst (migratie 90): de tweede helft hoort bij dezelfde bronversie
+        # en run. Tot F2-06 de handmatige run bouwt (ADR 0005).
+        for veld in ("source_version", "run"):
+            if getattr(chunk, veld, None):
+                new_chunk_content[veld] = ensure_record_id(str(getattr(chunk, veld)))
+        if chunk.extractor:
+            new_chunk_content["extractor"] = chunk.extractor
 
         # Atomic block: open a slot at order+1 (shift later chunks up),
         # shrink the original to its first half, create the second half.

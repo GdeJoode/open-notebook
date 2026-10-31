@@ -17,11 +17,11 @@ import uuid
 import pytest
 import surrealdb_service.config as surreal_config
 import surrealdb_service.connection as conn
+from app_main.services.classification_service import ClassificationService
 from shared.models.agents import Right
 from shared.models.entity import Entity
 from surrealdb_service.repositories.entity import EntityRepository
-
-from app_main.services.classification_service import ClassificationService
+from surrealdb_service.testing.herkomst import herkomst
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.requires_docker]
 
@@ -55,7 +55,7 @@ async def _fragment(bron: str) -> str:
         "CREATE chunk CONTENT $c RETURN id",
         {"c": {"source": conn.ensure_record_id(bron), "text": "t", "order": 0,
                "physical_page": 0, "element_type": "paragraph", "positions": [],
-               "metadata": {}}},
+               "metadata": {}, **await herkomst(bron)}},
     )
     return str(row["id"])
 
@@ -135,24 +135,29 @@ async def test_een_vermelding_neemt_de_waarde_van_haar_fragment_over(env) -> Non
     # Een fragment strenger dan zijn bron: de vermelding is intern.
     await _q("UPDATE type::thing($id) SET classification = 'intern'", {"id": fragment})
     assert await _c(await _entiteit([extern], {extern: {"chunk_id": fragment}})) == "intern"
-    # Een onbekend fragment: intern.
-    assert await _c(await _entiteit([extern], {extern: {"chunk_id": "chunk:onbekend"}})) == "intern"
+    # Een onbekend fragment: sinds F2-04 (migratie 90) geweigerd.
+    with pytest.raises(RuntimeError, match="grounding"):
+        await _entiteit([extern], {extern: {"chunk_id": "chunk:onbekend"}})
 
 
 async def test_een_fragment_van_een_andere_bron_maakt_een_interne_vermelding_niet_extern(
     env,
 ) -> None:
     # Reviewbevinding F2-03: het fragment in `grounding` wijst naar een fragment
-    # van een externe bron B, de vermelding staat in interne bron A.
+    # van een externe bron B, de vermelding staat in interne bron A. Sinds F2-04
+    # (migratie 90) weigert de database zo'n vermelding, in beide richtingen.
     intern, extern = await _bron("intern"), await _bron("extern")
     vreemd = await _fragment(extern)
-    entiteit = await _entiteit([intern], {intern: {"chunk_id": vreemd}})
+    with pytest.raises(RuntimeError, match="grounding"):
+        await _entiteit([intern], {intern: {"chunk_id": vreemd}})
+    eigen = await _fragment(intern)
+    with pytest.raises(RuntimeError, match="grounding"):
+        await _entiteit([extern], {extern: {"chunk_id": eigen}})
+    # Met het eigen fragment: de vermelding volgt haar bron.
+    entiteit = await _entiteit([intern], {intern: {"chunk_id": eigen}})
     assert await _c(entiteit) == "intern"
     assert await _c(await _alias(entiteit)) == "intern"
     assert await _c(await _triage(entiteit)) == "intern"
-    # Andersom: een intern fragment in een externe bron maakt de vermelding intern.
-    eigen = await _fragment(intern)
-    assert await _c(await _entiteit([extern], {extern: {"chunk_id": eigen}})) == "intern"
 
 
 async def test_zonder_vermelding_intern(env) -> None:

@@ -4,6 +4,7 @@ API request/response schemas for app-main.
 Pure Pydantic models for API serialization (DTOs).
 """
 
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -634,6 +635,64 @@ class ClassificationResponse(BaseModel):
     to_classification: Literal["intern", "extern"]
     changed: bool
     log_id: Optional[str] = None
+
+
+class PipelineVersionModel(BaseModel):
+    """Git-commit en SHA-256 van de flow-JSON (F2-04, ADR 0022 E)."""
+
+    git_commit: Optional[str] = None
+    flow_hash: Optional[str] = None
+
+
+class RunCreateRequest(BaseModel):
+    """``POST /api/v1/runs`` (F2-04, plan §5.4)."""
+
+    trigger: Literal["schema", "mapcontrole", "feed", "handmatig", "herverwerking"]
+    pipeline_id: str = Field(..., min_length=1)
+    pipeline_version: PipelineVersionModel = Field(default_factory=PipelineVersionModel)
+    source_map_rule_id: Optional[str] = None
+    label_schema: Optional[Dict[str, Any]] = None
+
+
+class RunLogEntryModel(BaseModel):
+    at: Optional[datetime] = None
+    step: str
+    status: str
+    message: str = ""
+
+
+class RunPatchRequest(BaseModel):
+    """``PATCH /api/v1/runs/{id}`` (F2-04, plan §5.4)."""
+
+    status: Optional[Literal["bezig", "geslaagd", "mislukt", "niets_nieuws"]] = None
+    ended_at: Optional[datetime] = None
+    log: List[RunLogEntryModel] = Field(default_factory=list)
+    models: Optional[List[Dict[str, Any]]] = None
+    error: Optional[str] = None
+
+
+class RunCreateResponse(BaseModel):
+    run_id: str
+    status: str
+
+
+class RunResponse(BaseModel):
+    """Een verwerkingsrun (F2-04, ADR 0003)."""
+
+    id: str
+    status: str
+    trigger: str
+    pipeline_id: str
+    pipeline_version: Optional[PipelineVersionModel] = None
+    input_classification: str
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    models: List[Dict[str, Any]] = Field(default_factory=list)
+    log: List[Dict[str, Any]] = Field(default_factory=list)
+    error: Optional[str] = None
+    attempts: int = 0
+    source_map_rule_id: Optional[str] = None
+    source_map_rule_rev: Optional[int] = None
 
 
 class SourceResponse(BaseModel):

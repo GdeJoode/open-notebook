@@ -35,9 +35,9 @@ production caller takes the chunk path.
 Idempotency
 -----------
 ``self_ref`` is deterministic for a given chunk set (section index by first
-appearance, leaf index by chunk ``order``), and ``build`` deletes the source's
-existing graph before re-inserting. Re-ingesting the same document therefore
-produces an identical graph (AC6).
+appearance, leaf index by chunk ``order``). Re-ingesting the same document
+therefore produces an identical graph (AC6), in a new run next to the old one
+(F2-04, ADR 0003: unique per source, run and ``self_ref``; nothing is deleted).
 """
 
 from __future__ import annotations
@@ -283,8 +283,11 @@ class DocGraphBuilder:
 
     Owns the DB seam. The pure graph computation lives in :func:`compute_graph`
     so it can be tested without a server; this class only handles the
-    delete-rebuild persistence (idempotent per source) and batched RELATE
-    inserts.
+    persistence and batched RELATE inserts.
+
+    F2-04 (ADR 0003): de structuur hoort bij één bronversie en één run. Een
+    nieuwe run maakt een nieuwe structuur naast de oude; er wordt niets
+    verwijderd.
     """
 
     def __init__(self, config: Any = None) -> None:
@@ -294,24 +297,28 @@ class DocGraphBuilder:
         self,
         source_id: str,
         chunks: Optional[Sequence[Dict[str, Any]]] = None,
+        *,
+        source_version: str,
+        run: str,
     ) -> ComputedGraph:
-        """Delete and rebuild the structure graph for ``source_id``.
+        """Build the structure graph for one version and run of ``source_id``.
 
         Args:
             source_id: Source record id (e.g. ``"source:abc"``).
-            chunks: The source's persisted chunk dicts. When ``None`` the
-                builder loads them from the DB itself.
+            chunks: The run's persisted chunk dicts. When ``None`` the
+                builder loads the chunks of ``run`` from the DB itself.
+            source_version: De bronversie (F2-04).
+            run: De verwerkingsrun (F2-04).
 
         Returns:
             The :class:`ComputedGraph` that was persisted (empty when the
             source has no chunks).
         """
         if chunks is None:
-            chunks = await self._load_chunks(source_id)
+            chunks = await self._load_chunks(source_id, run)
 
         graph = compute_graph(chunks)
 
-        await self._delete_existing(source_id)
         if not graph.nodes:
             logger.info(
                 "doc_graph_builder: source {sid} produced no structure nodes",
@@ -319,7 +326,7 @@ class DocGraphBuilder:
             )
             return graph
 
-        ref_to_id = await self._insert_nodes(source_id, graph.nodes)
+        ref_to_id = await self._insert_nodes(source_id, graph.nodes, source_version, run)
         await self._insert_parent_of(graph.parent_of, ref_to_id)
         await self._insert_next_node(graph.next_node, ref_to_id)
         await self._insert_derived_from(graph.derived_from, ref_to_id)
@@ -339,47 +346,22 @@ class DocGraphBuilder:
     # DB seam
     # ------------------------------------------------------------------
 
-    async def _load_chunks(self, source_id: str) -> List[Dict[str, Any]]:
+    async def _load_chunks(self, source_id: str, run: str) -> List[Dict[str, Any]]:
         rows = await execute_query(
             "SELECT id, order, element_type, text, physical_page, positions, "
-            "metadata FROM chunk WHERE source = $source_id ORDER BY order ASC",
-            {"source_id": ensure_record_id(source_id)},
+            "metadata FROM chunk WHERE source = $source_id AND run = $run "
+            "ORDER BY order ASC",
+            {"source_id": ensure_record_id(source_id), "run": ensure_record_id(run)},
             self.config,
         )
         return rows or []
 
-    async def _delete_existing(self, source_id: str) -> None:
-        """Delete the source's doc_nodes and all their incident edges.
-
-        Deleting a doc_node does not automatically delete its RELATE rows, so we
-        clear the edge tables first (matched via the node set), then the nodes.
-        """
-        sid = ensure_record_id(source_id)
-        await execute_query(
-            "DELETE parent_of WHERE in.source = $source_id "
-            "OR out.source = $source_id;",
-            {"source_id": sid},
-            self.config,
-        )
-        await execute_query(
-            "DELETE next_node WHERE in.source = $source_id "
-            "OR out.source = $source_id;",
-            {"source_id": sid},
-            self.config,
-        )
-        await execute_query(
-            "DELETE derived_from WHERE out.source = $source_id;",
-            {"source_id": sid},
-            self.config,
-        )
-        await execute_query(
-            "DELETE doc_node WHERE source = $source_id;",
-            {"source_id": sid},
-            self.config,
-        )
-
     async def _insert_nodes(
-        self, source_id: str, nodes: Sequence[GraphNode]
+        self,
+        source_id: str,
+        nodes: Sequence[GraphNode],
+        source_version: str,
+        run: str,
     ) -> Dict[str, str]:
         """Bulk-insert doc_nodes; return a ``self_ref -> record id`` map.
 
@@ -387,12 +369,16 @@ class DocGraphBuilder:
         oversized INSERT statement.
         """
         sid = ensure_record_id(source_id)
+        versie = ensure_record_id(source_version)
+        run_id = ensure_record_id(run)
         ref_to_id: Dict[str, str] = {}
         for start in range(0, len(nodes), RELATE_BATCH_SIZE):
             batch = nodes[start : start + RELATE_BATCH_SIZE]
             payload = [
                 {
                     "source": sid,
+                    "source_version": versie,
+                    "run": run_id,
                     "self_ref": n.self_ref,
                     "element_type": n.element_type,
                     "text": n.text,

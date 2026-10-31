@@ -3,14 +3,21 @@ SourceProcessor — orchestrates extraction → persistence for one source.
 
 Owns just the orchestration: loading the source row, merging settings,
 delegating extraction to SourceExtractor, updating the source record,
-and replacing chunks. Embedding and summarization are separate services
+and writing chunks. Embedding and summarization are separate services
 (SourceEmbeddingOrchestrator / SourceSummarizationOrchestrator).
+
+F2-04 (ADR 0003): elke verwerking is een run (``processing_run``) op een
+bronversie (``source_version``, uniek op de inhoudshash). Fragmenten en de
+documentstructuur krijgen die versie en run; de fragmenten van eerdere runs
+blijven staan. De bronversie wijst daarna met ``current_run`` naar deze run.
 
 Replaces SourceProcessingService after the Phase 3 god-split.
 """
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -20,13 +27,37 @@ from shared.utils.text import strip_null_bytes
 from surrealdb_service.repositories import (
     ChunkRepository,
     ContentSettingsRepository,
+    ProcessingRunRepository,
     SourceRepository,
+    SourceVersionRepository,
 )
 
 from app_main.services.chunking import chunk_builder
 from app_main.services.graph.doc_graph_builder import DocGraphBuilder
 from app_main.services.log_stream import get_log_stream
 from app_main.services.source_extractor import ExtractionResult, SourceExtractor
+
+#: De pipeline van een run die de fork zelf start (F2-04). Geen flow uit Git,
+#: dus geen controle van de flow; die geldt voor runs van Langflow.
+PIPELINE_ID = "source_processor"
+
+
+def _inhoudshash(content_state: Dict[str, Any], extracted: ExtractionResult) -> str:
+    """SHA-256 van de ruwe inhoud: het bestand, anders de tekst.
+
+    Bij een URL is de ruwe inhoud hier niet beschikbaar; dan telt de
+    geëxtraheerde tekst.
+    """
+    pad = content_state.get("file_path") or extracted.file_path
+    h = hashlib.sha256()
+    if pad and Path(pad).is_file():
+        with open(pad, "rb") as f:
+            for blok in iter(lambda: f.read(1 << 20), b""):
+                h.update(blok)
+        return h.hexdigest()
+    tekst = extracted.full_text or content_state.get("content") or ""
+    h.update(tekst.encode("utf-8"))
+    return h.hexdigest()
 
 
 class SourceProcessor:
@@ -39,11 +70,15 @@ class SourceProcessor:
         settings_repo: ContentSettingsRepository,
         extractor: SourceExtractor,
         graph_builder: Optional[DocGraphBuilder] = None,
+        version_repo: Optional[SourceVersionRepository] = None,
+        run_repo: Optional[ProcessingRunRepository] = None,
     ) -> None:
         self.source_repo = source_repo
         self.chunk_repo = chunk_repo
         self.settings_repo = settings_repo
         self.extractor = extractor
+        self.version_repo = version_repo or SourceVersionRepository()
+        self.run_repo = run_repo or ProcessingRunRepository()
         # Structure-graph builder (Phase I.F). Optional + best-effort: a build
         # failure must never fail the ingestion (see process_source).
         self.graph_builder = graph_builder or DocGraphBuilder()
@@ -111,23 +146,54 @@ class SourceProcessor:
         log_stream.emit(source_id, "Updating source record...")
         source = await self._update_source(source, extracted)
 
-        # 5. Replace chunks
-        chunk_count = 0
-        created_chunks: List[Any] = []
-        await self.chunk_repo.delete_by_source(source_id)
-        if extracted.chunks:
-            prepared = chunk_builder.prepare_for_db(extracted.chunks, source_id)
-            log_stream.emit(source_id, f"Saving {len(prepared)} chunks...")
-            created_chunks = await self.chunk_repo.bulk_create(prepared)
-            chunk_count = len(prepared)
-            logger.info(f"Saved {chunk_count} chunks for source {source_id}")
+        # 5. Run en bronversie (F2-04, ADR 0003). Een nieuwe run met nieuwe
+        # fragmenten; de fragmenten van eerdere runs blijven staan.
+        run = await self.run_repo.create(
+            trigger="herverwerking" if source.current_version else "handmatig",
+            pipeline_id=PIPELINE_ID,
+            input_classification=source.classification or "onbekend",
+        )
+        run_id = str(run.id)
+        try:
+            versie, nieuwe_versie = await self.version_repo.register(
+                source_id,
+                _inhoudshash(content_state, extracted),
+                run_id,
+                original=extracted.file_path or extracted.url,
+            )
+            versie_id = str(versie.id)
 
-        # 6. Build the document structure graph (Phase I.F). Best-effort: a
+            # 6. Write chunks for this version and run.
+            chunk_count = 0
+            created_chunks: List[Any] = []
+            if extracted.chunks:
+                extractor = (extracted.metadata or {}).get("parser_engine_used") or method
+                prepared = [
+                    {**c, "source_version": versie_id, "run": run_id,
+                     "extractor": str(extractor)}
+                    for c in chunk_builder.prepare_for_db(extracted.chunks, source_id)
+                ]
+                log_stream.emit(source_id, f"Saving {len(prepared)} chunks...")
+                created_chunks = await self.chunk_repo.bulk_create(prepared)
+                chunk_count = len(prepared)
+                logger.info(f"Saved {chunk_count} chunks for source {source_id}")
+            await self.version_repo.set_current_run(versie_id, run_id)
+        except Exception as e:
+            await self.run_repo.close(run_id, status="mislukt", error=type(e).__name__)
+            raise
+
+        # 7. Build the document structure graph (Phase I.F). Best-effort: a
         # graph-build failure must NOT fail the whole ingestion — the chunks are
         # already persisted and every other downstream feature works without the
         # structure graph. Log and continue.
         if created_chunks:
-            await self._build_structure_graph(source_id, created_chunks)
+            await self._build_structure_graph(
+                source_id, created_chunks, source_version=versie_id, run=run_id
+            )
+        await self.run_repo.close(
+            run_id,
+            status="geslaagd" if (chunk_count or nieuwe_versie) else "niets_nieuws",
+        )
 
         log_stream.emit(
             source_id,
@@ -144,6 +210,9 @@ class SourceProcessor:
         self,
         source_id: str,
         created_chunks: List[Any],
+        *,
+        source_version: str,
+        run: str,
     ) -> None:
         """Build the document structure graph for a source (Phase I.F).
 
@@ -165,7 +234,9 @@ class SourceProcessor:
                 }
                 for c in created_chunks
             ]
-            graph = await self.graph_builder.build(source_id, chunks=chunk_dicts)
+            graph = await self.graph_builder.build(
+                source_id, chunks=chunk_dicts, source_version=source_version, run=run
+            )
             logger.info(
                 f"Structure graph built for {source_id}: "
                 f"{len(graph.nodes)} nodes"
