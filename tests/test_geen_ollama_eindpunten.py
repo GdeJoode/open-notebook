@@ -18,8 +18,8 @@ Stopconditie F2-08. De test faalt:
 4. bij ``import shared.model_routing`` of een aanroep daaruit (``call_llm``,
    ``embed_text``, ``_call_*``); die module is in F2-09 verwijderd.
 
-Er is geen tijdelijke uitzondering meer: ``shared/model_routing.py`` en de
-Track J-foutvertaling (``error_mapping.py``) zijn in F2-09 verwijderd.
+Er is geen uitzondering meer: ``shared/model_routing.py``, de Track
+J-foutvertaling (``error_mapping.py``) en LangExtract zijn in F2-09 verwijderd.
 
 Wat geen modelaanroep is en dus mag:
 
@@ -27,9 +27,7 @@ Wat geen modelaanroep is en dus mag:
   zoals ``/api/chat/context``: Ollama kent geen subpaden;
 - ``host.docker.internal`` in de blokkadelijst van de URL-controle van de
   bronkaart (``source_map_service.py``) en in de test daarvan: die lijst
-  weigert zo'n adres juist;
-- de import van ``langextract`` in de uitgeschakelde LangExtract-extractor: de
-  constructor weigert altijd.
+  weigert zo'n adres juist.
 """
 
 from __future__ import annotations
@@ -75,13 +73,6 @@ MODELBIBLIOTHEKEN = (
     "langchain_openai", "langchain_ollama", "langchain_anthropic",
     "langchain_google_genai", "langchain_groq", "langchain_mistralai",
 )
-
-#: LangExtract is uitgeschakeld: de constructor weigert altijd
-#: (``LangExtractUitgeschakeld``). Voorstel: verwijderen met F2-09.
-LANGEXTRACT_UITGESCHAKELD = {
-    "pipelines/ontology-extraction/src/ontology_extraction/extractors/langextract_extractor.py",
-    "pipelines/ontology-extraction/src/ontology_extraction/extractors/example_builder.py",
-}
 
 #: De llama-swap-client mag alleen de dunne aanroeper van de poort gebruiken.
 CLIENT_MODULE = "llm_manager.providers.factory"
@@ -196,10 +187,7 @@ def _bevindingen_imports(rel: str, inhoud: str) -> list[str]:
     for nr, module, naam in _imports(boom, rel):
         wortel = module.split(".")[0]
         if wortel in MODELBIBLIOTHEKEN and not test:
-            if rel in LANGEXTRACT_UITGESCHAKELD and wortel == "langextract":
-                pass
-            else:
-                gevonden.append(f"{rel}:{nr}: import {module}")
+            gevonden.append(f"{rel}:{nr}: import {module}")
         raakt_client = (
             module == CLIENT_MODULE
             or (module == "llm_manager.providers" and naam in CLIENT_NAMEN | {"factory"})

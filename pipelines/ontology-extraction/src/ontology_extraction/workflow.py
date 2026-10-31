@@ -53,42 +53,10 @@ class ExtractionWorkflow:
 
     def _get_extractor(self) -> ExtractorBase:
         if self._extractor is None:
-            if self._config.extractor_type == "langextract":
-                from pathlib import Path
-
-                from .extractors.langextract_extractor import LangExtractExtractor
-
-                self._extractor = LangExtractExtractor(
-                    model_id=self._config.langextract_model_id,
-                    model_url=self._config.langextract_model_url,
-                    confidence_threshold=self._config.confidence_threshold,
-                    extraction_passes=self._config.langextract_extraction_passes,
-                    max_workers=self._config.langextract_max_workers,
-                    max_char_buffer=self._config.langextract_max_char_buffer,
-                    examples_dir=Path(self._config.langextract_examples_dir)
-                    if self._config.langextract_examples_dir
-                    else None,
-                    batch_length=self._config.langextract_batch_length,
-                    temperature=self._config.langextract_temperature,
-                    max_output_tokens=self._config.langextract_max_output_tokens,
-                    top_p=self._config.langextract_top_p,
-                    top_k=self._config.langextract_top_k,
-                    use_schema_constraints=self._config.langextract_use_schema_constraints,
-                    fence_output=self._config.langextract_fence_output,
-                    api_key=self._config.langextract_api_key,
-                    provider=self._config.langextract_provider,
-                    provider_kwargs=self._config.langextract_provider_kwargs,
-                    language_model_params=self._config.langextract_language_model_params,
-                    save_jsonl=self._config.langextract_save_jsonl,
-                    jsonl_output_dir=self._config.langextract_jsonl_output_dir,
-                    visualize=self._config.langextract_visualize,
-                    visualize_output_dir=self._config.langextract_visualize_output_dir,
-                )
-            else:
-                self._extractor = LLMExtractor(
-                    llm_model=self._config.llm_model,
-                    confidence_threshold=self._config.confidence_threshold,
-                )
+            self._extractor = LLMExtractor(
+                llm_model=self._config.llm_model,
+                confidence_threshold=self._config.confidence_threshold,
+            )
         return self._extractor
 
     async def extract(

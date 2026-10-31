@@ -104,15 +104,8 @@ class ReprocessRequest(BaseModel):
 
 class RunEntitiesRequest(BaseModel):
     ontology_name: str = "general"
-    # F2-08: alleen "llm". LangExtract gaat om de modelpoort heen en is
-    # uitgeschakeld; "langextract" geeft 422 bij de aanvraag.
+    # Alleen "llm": LangExtract ging om de modelpoort heen en is weg (F2-09).
     extractor_type: Literal["llm"] = "llm"
-    # LangExtract-specific options (forwarded when extractor_type == "langextract")
-    langextract_model_id: Optional[str] = None
-    langextract_model_url: Optional[str] = None
-    langextract_temperature: Optional[float] = None
-    langextract_use_schema_constraints: Optional[bool] = None
-    langextract_fence_output: Optional[bool] = None
     # B.1f back-compat kill-switch — defaults true so multi-schema is the
     # new normal; ops sends ``false`` to roll back to the legacy path.
     multi_schema_enabled: bool = True
@@ -234,18 +227,6 @@ async def run_entities(
             "extractor_type": body.extractor_type,
             "multi_schema_enabled": body.multi_schema_enabled,
         }
-        # Forward langextract options if provided
-        for field_name in (
-            "langextract_model_id",
-            "langextract_model_url",
-            "langextract_temperature",
-            "langextract_use_schema_constraints",
-            "langextract_fence_output",
-        ):
-            val = getattr(body, field_name, None)
-            if val is not None:
-                command_payload[field_name] = val
-
         command_id = await CommandService.submit_command_job(
             "open_notebook",
             "run_entities",

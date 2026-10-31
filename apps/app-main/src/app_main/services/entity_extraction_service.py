@@ -1495,8 +1495,7 @@ class EntityExtractionService:
             )
         else:
             # Legacy single-schema path — hit when ``notebook_id`` is omitted
-            # (CLI / tests), when ops disables multi-schema via the flag, or
-            # when the caller selects ``extractor_type="langextract"``. The
+            # (CLI / tests) or when ops disables multi-schema via the flag. The
             # extractor is wired with the extraction-model caller via the shared
             # builder (B.1f/B.8c) so production callers actually hit the LLM.
             workflow = await self._build_single_schema_workflow(config)

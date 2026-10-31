@@ -56,11 +56,6 @@ class EntityExtractPayload(BaseModel):
     source_id: str
     ontology_name: str = "general"
     extractor_type: str = "llm"
-    langextract_model_id: Optional[str] = None
-    langextract_model_url: Optional[str] = None
-    langextract_temperature: Optional[float] = None
-    langextract_use_schema_constraints: Optional[bool] = None
-    langextract_fence_output: Optional[bool] = None
     # B.1f back-compat kill-switch. Ops can submit a job with
     # ``multi_schema_enabled=False`` to force the legacy single-schema
     # path if the orchestrator misbehaves in production. Defaults
@@ -306,19 +301,6 @@ async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         logger.info(f"Starting entity extraction for source: {validated.source_id}")
         service = get_entity_extraction_service()
-        # Collect langextract config overrides from validated payload
-        config_overrides = {}
-        for key in (
-            "langextract_model_id",
-            "langextract_model_url",
-            "langextract_temperature",
-            "langextract_use_schema_constraints",
-            "langextract_fence_output",
-        ):
-            value = getattr(validated, key, None)
-            if value is not None:
-                config_overrides[key] = value
-
         # Resolve the owning notebook so the multi-schema orchestrator
         # can load NotebookSchema. ``None`` is fine (legacy path).
         notebook_id: Optional[str] = None
@@ -339,7 +321,6 @@ async def handle_entity_extract(payload: Dict[str, Any]) -> Dict[str, Any]:
             source_id=validated.source_id,
             ontology_name=validated.ontology_name,
             extractor_type=validated.extractor_type,
-            config_overrides=config_overrides if config_overrides else None,
             notebook_id=notebook_id,
             multi_schema_enabled=validated.multi_schema_enabled,
         )
