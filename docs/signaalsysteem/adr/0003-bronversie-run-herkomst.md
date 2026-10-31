@@ -1,7 +1,7 @@
 # ADR 0003: Bronversie, verwerkingsrun en herkomst; herverwerking zonder overschrijven
 
 - **Status:** besloten
-- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 na de review (`doc_node`, `source.full_text`, `models` uit `model_call`); 2026-10-31 uitwerking in F2-04 (B26 voorgesteld) en in F2-06 (B28 voorgesteld)
+- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 na de review (`doc_node`, `source.full_text`, `models` uit `model_call`); 2026-10-31 uitwerking in F2-04 (B26 besloten 31-10) en in F2-06 (B28 besloten 31-10)
 - **Raakt FO-paragraaf:** 2 (principe 5 en 6), 4 (stap 2 en 9), 5 (planning), 8
 - **Lost op:** verschilanalyse conflict 7, open vraag 5 (de vraag of de run een nieuwe tabel wordt) en open vraag 15
 
@@ -138,7 +138,7 @@ De bouw (`migrations/90.surrealql`) wijkt op de volgende punten af van het voors
 
 - **Runs van `SourceProcessor`** (review F2-04): die krijgen `flow_vastgelegd = true`, omdat het code van de fork is en geen flow van Langflow; `pipeline_version` is de commit van de fork. Alle routes naar `process_source` vragen `beheerder`. Restrisico: een run die door een afgebroken proces `bezig` blijft, kan schrijven voor elke interne bron; F2-14 bindt een run aan bron en aanmaker en sluit runs die te lang `bezig` staan.
 
-**Voorgesteld, Geert beslist** (plan van aanpak §8.1, B26):
+**Besloten door Geert, 31-10, volgens voorstel** (plan van aanpak §8.1, B26):
 
 - **Bekende inhoudshash die niet de huidige versie is**, bijvoorbeeld inhoud A → B → A.
   - Nu: `register` vindt v1, maar `current_version` blijft v2, en zoeken toont B als actueel.
@@ -161,7 +161,7 @@ De bouw (`migrations/92.surrealql`) werkt de paragraaf "Handmatige correcties en
 - **`actor`.** De database eist bij `handmatig` alleen een niet-lege `actor`, niet dat het een beheerder is. Dat is aanvaard zolang alleen de fork schrijft, net als bij `classification_log`.
 - **`/api/entity-resolution/apply`** hoogt `rev` eerst op. Een mislukte samenvoeging laat die ophoging staan.
 
-**Voorgesteld, Geert beslist** (plan van aanpak §8.1, B28): de grens bij `manual_override`.
+**Besloten door Geert, 31-10, volgens voorstel** (plan van aanpak §8.1, B28): de grens bij `manual_override`.
 
 - Voorstel: een run of een automatisch proces mag op een vastgezette entiteit alleen vermeldingen en herkomst toevoegen: `source_documents`, `grounding` en `mentions`. Al het andere wordt overgeslagen, met een conflictregel in het runlogboek of in `beheer_melding`: naam, type, beschrijving, status, `external_ids`, aliassen, en samenvoegen als winnaar of als verliezer. Reden: vermeldingen zijn herkomst, geen correctie van het besluit van de beheerder.
 - Alternatief: de letterlijke tekst hierboven, waarin een run een vastgezette entiteit helemaal niet wijzigt. Dan gaat de herkomst van nieuwe bronnen verloren.
