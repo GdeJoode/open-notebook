@@ -1,7 +1,7 @@
 # ADR 0001: Classificatie intern/extern, standaard intern, met overerving
 
 - **Status:** besloten
-- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 na de review (rechten `pijplijn` en `beheerder`, afgeleide classificatie)
+- **Datum:** 2026-10-29; bijgewerkt 2026-10-30 na de review (rechten `pijplijn` en `beheerder`, afgeleide classificatie); 2026-10-31 uitwerking in F2-03 (twee punten voorgesteld)
 - **Raakt FO-paragraaf:** 5 (bronkaartregel), 6, 9 (beleidsregels), 14 (herclassificatie)
 - **Lost op:** verschilanalyse conflict 3 en 4, open vraag 6
 - **Gewijzigd door:** ADR 0019 (classificatie en pipelinestart per innameroute)
@@ -72,3 +72,26 @@ Optie 1.
 - **Tests:** een schemacontrole dat elke genoemde tabel `classification` heeft met standaard `intern`. Zolang de migratie het veld niet definieert, laat een SCHEMAFULL-tabel een geschreven `classification` stil weg (P4, 30-10); de test leest de waarde daarom terug na het schrijven; een test dat een record zonder waarde `intern` wordt; een test dat import of poortwachter intern niet naar extern kan zetten; een test dat een sleutel `pijplijn` geen regel of batch op `extern` kan zetten en niet kan herclassificeren (HTTP 403); een test dat herclassificatie alle versies, fragmenten, embeddings en `doc_node`-records in één transactie bijwerkt, de afgeleide records opnieuw berekent en precies één logregel met persoon schrijft; een test dat een entiteit met één interne vermelding `intern` is.
 - **Interface:** schermen die `private` of `privacy_mode` tonen of zetten, werken niet meer (zie ADR 0016).
 - **Afhankelijkheden:** het filter dat deze waarde gebruikt, staat in ADR 0002; bronversie en run in ADR 0003.
+
+## Uitwerking in F2-03 (31-10)
+
+De bouw (`migrations/89.surrealql`) wijkt op de volgende punten af van het voorstel hierboven, of vult het aan.
+
+**Besloten** (akkoord reviewer, 31-10):
+
+- **Regels in het databaseschema.** De regels staan in het schema: `ASSERT`, `DEFAULT ALWAYS` en events, niet alleen in de repositorylaag. Zo gelden ze voor alle schrijfpaden, ook die buiten de repositories. De vlag `$herclassificatie`, die intern naar extern toelaat, mag alleen `SourceRepository.reclassify` zetten; de verbindingslaag weigert hem elders.
+- **Vermelding berekend.** De classificatie van een vermelding wordt berekend, als het strengste van fragment en vermelde bron (`fn::vermelding_classificatie`), en nog niet opgeslagen. F2-04 slaat haar op.
+- **Inzichten.** Bij herclassificatie naar extern wordt een inzicht (`source_insight`) niet losser; het blijft intern. Wordt de bron intern, dan gaat het inzicht mee (FO 9, harde eis 3).
+- **`DEFAULT ALWAYS`.** Nodig onder SurrealDB v2.7.0: een gewone `DEFAULT` geldt alleen bij aanmaken, een expliciete `None` telt niet als waarde, en `VALUE` draait niet op een ontbrekend veld.
+- **Logboek.** `classification_log` kan alleen aangevuld worden; een event weigert wijzigen en verwijderen. `89_down` wist het logboek niet.
+- **Persoon.** Het logboek controleert de persoon niet tegen de sleutel. Aanvaard, zolang alleen de fork in de database schrijft.
+
+**Voorgesteld, Geert beslist** (plan van aanpak §8.1, B25):
+
+- **Relatie telt haar entiteiten mee.** Een relatie telt naast haar vermeldingen ook de classificatie van haar twee entiteiten mee. Dat is strenger dan het voorstel hierboven.
+  - Voor: geen extern zichtbare relatie tussen entiteiten waarvan er één intern is.
+  - Tegen: de externe graaf wordt kleiner.
+  - Voorstel: zo houden.
+- **Notitie en notebook.** `note` en `notebook` kunnen nu niet van intern naar extern: het schema eist daarvoor `$herclassificatie`, en er is geen herclassificatiepad dat die vlag voor hen zet. Voorstel: het herclassificatie-eindpunt uitbreiden naar notebook en notitie in F2-30 (B22).
+
+**Open:** de graafrelatie `mentions` (bron naar entiteit, `migrations/66.surrealql:58`) heeft nog geen classificatie; zie plan van aanpak F2-04 en F2-05.
