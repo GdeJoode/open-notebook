@@ -12,7 +12,7 @@ from surrealdb import RecordID
 from shared.models.base import ObjectModel, RecordModel
 from surrealdb_service.config import SurrealDBConfig
 from surrealdb_service.connection import (
-    as_classification_conflict,
+    as_classification_error,
     db_connection,
     ensure_record_id,
     execute_query,
@@ -36,6 +36,18 @@ def _validate_table_name(value: str) -> str:
     if not _TABLE_NAME_RE.match(value):
         raise ValueError(f"Invalid table/relationship name: {value!r}")
     return value
+
+def _zonder_lege_classificatie(data: Dict[str, Any]) -> None:
+    """Haal ``classification: None`` uit schrijfdata (F2-03).
+
+    Onder v2.7.0 zet ``DEFAULT ALWAYS`` (migratie 89) een expliciete ``None``
+    om in de standaard: een externe bron zou stil intern worden, en een intern
+    inzicht onder een externe bron zou een onterechte 409 geven. Zonder de
+    sleutel blijft de opgeslagen waarde staan.
+    """
+    if "classification" in data and data["classification"] is None:
+        del data["classification"]
+
 
 T = TypeVar("T", bound=ObjectModel)
 R = TypeVar("R", bound=RecordModel)
@@ -76,6 +88,7 @@ class BaseRepository(Generic[T]):
         """
         # Remove id if present
         data.pop("id", None)
+        _zonder_lege_classificatie(data)
         data["created"] = datetime.now(timezone.utc)
         data["updated"] = datetime.now(timezone.utc)
 
@@ -87,8 +100,8 @@ class BaseRepository(Generic[T]):
                 return self.model_class(**result)
         except Exception as e:
             logger.exception(f"Failed to create {self.table_name}: {e}")
-            if (conflict := as_classification_conflict(e)) is not None:
-                raise conflict from e
+            if (fout := as_classification_error(e)) is not None:
+                raise fout from e
             raise RuntimeError(f"Failed to create {self.table_name}")
 
     async def get(self, id: str) -> Optional[T]:
@@ -186,6 +199,7 @@ class BaseRepository(Generic[T]):
 
         # Remove id from data
         data.pop("id", None)
+        _zonder_lege_classificatie(data)
 
         # Handle datetime fields
         if "created" in data and isinstance(data["created"], str):
@@ -203,8 +217,8 @@ class BaseRepository(Generic[T]):
             raise RuntimeError(f"Update returned no results for {record_id}")
         except Exception as e:
             logger.exception(f"Failed to update {self.table_name}: {e}")
-            if (conflict := as_classification_conflict(e)) is not None:
-                raise conflict from e
+            if (fout := as_classification_error(e)) is not None:
+                raise fout from e
             raise RuntimeError(f"Failed to update {self.table_name}")
 
     async def delete(self, id: str) -> bool:
@@ -237,6 +251,7 @@ class BaseRepository(Generic[T]):
             Model instance.
         """
         data.pop("id", None)
+        _zonder_lege_classificatie(data)
         data["updated"] = datetime.now(timezone.utc)
 
         record_id = id if id else self.table_name
@@ -252,8 +267,8 @@ class BaseRepository(Generic[T]):
             raise RuntimeError(f"Upsert returned no results")
         except Exception as e:
             logger.exception(f"Failed to upsert {self.table_name}: {e}")
-            if (conflict := as_classification_conflict(e)) is not None:
-                raise conflict from e
+            if (fout := as_classification_error(e)) is not None:
+                raise fout from e
             raise RuntimeError(f"Failed to upsert {self.table_name}")
 
     async def query(

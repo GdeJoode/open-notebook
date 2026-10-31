@@ -3,6 +3,7 @@ SurrealDB connection management.
 """
 
 import asyncio
+import re
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Awaitable, Dict, List, Optional, TypeVar, Union
 
@@ -78,11 +79,52 @@ class ClassificationConflictError(RuntimeError):
     """
 
 
-def as_classification_conflict(error: BaseException) -> Optional[ClassificationConflictError]:
-    """Een ``ClassificationConflictError`` als de ASSERT op ``classification`` faalde."""
-    if "for field `classification`" in str(error):
+class ClassificationValueError(RuntimeError):
+    """Een ongeldige waarde voor ``classification``, zoals 'openbaar' (de API geeft 422)."""
+
+
+_CLASSIFICATIE_GEWEIGERD = re.compile(
+    r"Found '([^']*)' for field `classification`.*must conform to"
+)
+
+
+def as_classification_error(error: BaseException) -> Optional[RuntimeError]:
+    """De fout als de ASSERT op ``classification`` faalde, anders ``None``.
+
+    Een geldige waarde die de regel schendt (losser dan de bron, of 'intern'
+    naar 'extern' buiten de herclassificatie) is een
+    :class:`ClassificationConflictError`; elke andere waarde een
+    :class:`ClassificationValueError`.
+    """
+    gevonden = _CLASSIFICATIE_GEWEIGERD.search(str(error))
+    if gevonden is None:
+        return None
+    if gevonden.group(1) in ("intern", "extern"):
         return ClassificationConflictError(str(error))
-    return None
+    return ClassificationValueError(str(error))
+
+
+#: De vlag waarmee alleen ``SourceRepository.reclassify`` intern naar extern
+#: mag zetten (migratie 89). Elke andere query die haar zet (als parameter, met
+#: ``LET`` of met ``DEFINE PARAM``), wordt geweigerd. Lezen mag: de ASSERTs in
+#: migratie 89 lezen haar.
+_HERCLASSIFICATIEVLAG = "herclassificatie"
+_VLAG_ZETTEN = re.compile(
+    rf"\b(?:LET|DEFINE\s+PARAM(?:\s+OVERWRITE|\s+IF\s+NOT\s+EXISTS)?)\s+\${_HERCLASSIFICATIEVLAG}\b",
+    re.IGNORECASE,
+)
+
+
+def _weiger_herclassificatievlag(
+    query: str, params: Optional[Dict[str, Any]], toegestaan: bool
+) -> None:
+    if toegestaan:
+        return
+    sleutels = {str(k).lstrip("$").lower() for k in (params or {})}
+    if _HERCLASSIFICATIEVLAG in sleutels or _VLAG_ZETTEN.search(query):
+        raise ValueError(
+            "De herclassificatievlag mag alleen SourceRepository.reclassify zetten (F2-03)"
+        )
 
 
 # Errors after which a connection's socket state is unknown. A statement the
@@ -404,7 +446,9 @@ async def execute_query(
 
     Raises:
         RuntimeError: If query execution fails.
+        ValueError: If the query sets the reclassification flag (F2-03).
     """
+    _weiger_herclassificatievlag(query, params, toegestaan=False)
     pool = get_pool(config)
     async with pool.acquire() as connection:
         try:
@@ -417,8 +461,8 @@ async def execute_query(
         except Exception as e:
             logger.error(f"Query failed: {query[:200]} params: {params}")
             logger.exception(e)
-            if (conflict := as_classification_conflict(e)) is not None:
-                raise conflict from e
+            if (fout := as_classification_error(e)) is not None:
+                raise fout from e
             raise
 
 
@@ -448,7 +492,7 @@ def _check_transaction_response(response: Any) -> List[Any]:
     ]
     if errors:
         fout = RuntimeError(f"SurrealQL transaction failed: {errors}")
-        raise as_classification_conflict(fout) or fout
+        raise as_classification_error(fout) or fout
     return [
         s.get("result") for s in statements if isinstance(s, dict)
     ]
@@ -458,6 +502,8 @@ async def execute_transaction(
     query: str,
     params: Optional[Dict[str, Any]] = None,
     config: Optional[SurrealDBConfig] = None,
+    *,
+    _herclassificatie: bool = False,
 ) -> List[Any]:
     """Execute a multi-statement SurrealQL transaction, raising on any error.
 
@@ -466,7 +512,12 @@ async def execute_transaction(
     status (see :func:`_check_transaction_response`), so a statement that
     fails mid-transaction propagates as an exception rather than being
     silently swallowed.
+
+    ``_herclassificatie`` is alleen voor ``SourceRepository.reclassify``
+    (F2-03); zonder die vlag weigert deze functie een query die de
+    herclassificatievlag zet.
     """
+    _weiger_herclassificatievlag(query, params, toegestaan=_herclassificatie)
     pool = get_pool(config)
     async with pool.acquire() as connection:
         try:

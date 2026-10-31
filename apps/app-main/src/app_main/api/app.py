@@ -17,6 +17,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from surrealdb_service.connection import (
     ClassificationConflictError,
+    ClassificationValueError,
     DatabaseUnavailableError,
 )
 from surrealdb_service.migrations import AsyncMigrationManager
@@ -454,6 +455,16 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=409,
             content={"detail": "Classificatie niet toegestaan"},
+        )
+
+    @application.exception_handler(ClassificationValueError)
+    async def classification_value_handler(
+        request: Request, exc: ClassificationValueError
+    ):
+        # F2-03: een waarde buiten 'intern' en 'extern'.
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "Classificatie moet 'intern' of 'extern' zijn"},
         )
 
     @application.exception_handler(DatabaseUnavailableError)

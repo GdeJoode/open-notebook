@@ -24,8 +24,15 @@ import surrealdb_service.config as surreal_config
 import surrealdb_service.connection as conn
 from fastapi.routing import APIRoute
 from shared.models.agents import Right
-from surrealdb_service.connection import ClassificationConflictError
-from surrealdb_service.repositories.source import ChunkRepository, SourceRepository
+from surrealdb_service.connection import (
+    ClassificationConflictError,
+    ClassificationValueError,
+)
+from surrealdb_service.repositories.source import (
+    ChunkRepository,
+    SourceInsightRepository,
+    SourceRepository,
+)
 
 from app_main.api import agent_auth
 from app_main.api.app import create_app
@@ -157,6 +164,36 @@ async def test_een_geweigerde_classificatie_geeft_409(env, app, monkeypatch) -> 
         )
     assert resp.status_code == 409
     assert await _log(bron) == []
+
+
+async def test_een_lege_classificatie_verandert_niets(env) -> None:
+    # Onder v2.7.0 zou `DEFAULT ALWAYS` een expliciete None omzetten in de
+    # standaard; de repository laat de sleutel daarom weg.
+    bron = await _bron("extern")
+    kinderen = await _kinderen(bron)
+    inzicht = kinderen["source_insight"]
+    await _q("UPDATE type::thing($id) SET classification = 'intern'", {"id": inzicht})
+
+    await SourceRepository().update(bron, {"classification": None, "title": "Nieuwe titel"})
+    assert await _classificatie(bron) == "extern"
+    await SourceRepository().upsert(bron, {"classification": None})
+    assert await _classificatie(bron) == "extern"
+    await SourceInsightRepository().update(inzicht, {"classification": None, "content": "nieuw"})
+    assert await _classificatie(inzicht) == "intern"
+
+
+async def test_ongeldige_waarde_is_422_en_regelschending_409(env, app) -> None:
+    bron = await _bron()
+    with pytest.raises(ClassificationValueError):
+        await SourceRepository().update(bron, {"classification": "openbaar"})
+    with pytest.raises(ClassificationConflictError):
+        await SourceRepository().update(bron, {"classification": "extern"})
+    assert await _classificatie(bron) == "intern"
+    waarde = await app.exception_handlers[ClassificationValueError](None, ClassificationValueError("x"))
+    conflict = await app.exception_handlers[ClassificationConflictError](
+        None, ClassificationConflictError("x")
+    )
+    assert (waarde.status_code, conflict.status_code) == (422, 409)
 
 
 # --------------------------------------------------------------------------

@@ -24,7 +24,9 @@ STAGE_IN = "processing_stage IN $stages"
 
 # Herclassificatie van een bron in één transactie (F2-03, ADR 0001). Alleen
 # hier staat ``$herclassificatie = true``: de ASSERT op ``classification``
-# (migratie 89) weigert 'intern' naar 'extern' op elk ander pad. De bron,
+# (migratie 89) weigert 'intern' naar 'extern' zonder die vlag, en
+# ``execute_query``/``execute_transaction`` weigeren de vlag in elke andere
+# query (``tests/test_herclassificatievlag.py`` bewaakt dat in de code). De bron,
 # fragmenten, embeddings en ``doc_node`` krijgen de nieuwe waarde; inzichten
 # alleen naar 'intern' (een afgeleide tekst wordt niet losser). De afgeleide
 # records worden opnieuw berekend (VALUE in migratie 89; een entiteit werkt
@@ -42,8 +44,8 @@ UPDATE doc_node SET classification = $naar WHERE source = $bron RETURN NONE;
 IF $naar = 'intern' {
     UPDATE source_insight SET classification = 'intern' WHERE source = $bron RETURN NONE;
 };
-UPDATE entity WHERE source_documents CONTAINS <string> $bron RETURN NONE;
-UPDATE relation WHERE source_documents CONTAINS <string> $bron RETURN NONE;
+UPDATE entity WHERE source_documents CONTAINSANY [<string> $bron] RETURN NONE;
+UPDATE relation WHERE source_documents CONTAINSANY [<string> $bron] RETURN NONE;
 UPDATE entity_alias WHERE source_document = <string> $bron RETURN NONE;
 CREATE classification_log CONTENT {
     source: $bron,
@@ -100,6 +102,7 @@ class SourceRepository(BaseRepository[Source]):
                     "persoon": person,
                 },
                 self.config,
+                _herclassificatie=True,
             )
         except ClassificationConflictError:
             raise
