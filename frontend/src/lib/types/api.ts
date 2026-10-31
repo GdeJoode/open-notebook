@@ -9,8 +9,6 @@ export interface NotebookResponse {
   updated: string
   source_count: number
   note_count: number
-  // Track J.3/J.5: null = inherit the global default; 'cloud' | 'private' override.
-  privacy_mode?: 'cloud' | 'private' | null
   // Track F.5: per-notebook librarian opt-in (periodic quality audit).
   librarian_enabled?: boolean
 }
@@ -101,8 +99,6 @@ export interface SourceDetailResponse extends SourceListResponse {
   full_text: string | null  // Can be null for async processing sources
   notebooks?: string[]  // List of notebook IDs this source is linked to
   metadata?: SourceMetadata
-  // Track J.3/J.5: true when this document was/will be processed privately.
-  private?: boolean
 }
 
 /**
@@ -225,9 +221,6 @@ export interface SettingsResponse {
   vault_entities_folder?: string
   vault_sync_on_startup?: boolean
 
-  // Model routing (Track J): global default privacy mode for LLM routing.
-  // 'cloud' = cloud-first with local fallback; 'private' = local-only.
-  default_privacy_mode?: 'cloud' | 'private'
 }
 
 export interface CreateNotebookRequest {
@@ -239,8 +232,6 @@ export interface UpdateNotebookRequest {
   name?: string
   description?: string
   archived?: boolean
-  // Track J.3/J.5: null clears the override (inherit global); 'cloud' | 'private' set it.
-  privacy_mode?: 'cloud' | 'private' | null
   // Track F.5: toggle the per-notebook librarian opt-in.
   librarian_enabled?: boolean
 }
@@ -270,8 +261,6 @@ export interface CreateSourceRequest {
   async_processing?: boolean
   // Per-submission processing config overrides
   processing_overrides?: Partial<SettingsResponse>
-  // Track J.3/J.5: process this document privately (LLM stages stay local).
-  private?: boolean
 }
 
 export interface UpdateNoteRequest {

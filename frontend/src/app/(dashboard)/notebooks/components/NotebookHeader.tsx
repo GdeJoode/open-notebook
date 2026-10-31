@@ -7,10 +7,6 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Archive, ArchiveRestore, ChevronDown, Download, Trash2, Upload } from 'lucide-react'
 import { useUpdateNotebook, useDeleteNotebook } from '@/lib/hooks/use-notebooks'
-import { useSettings } from '@/lib/hooks/use-settings'
-import { PrivacyModeToggle } from '@/components/routing/PrivacyModeToggle'
-import { fromWire, toWire } from '@/lib/utils/privacy-mode'
-import { PrivacyValue } from '@/lib/types/model-routing'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { formatDistanceToNow } from 'date-fns'
 import { InlineEdit } from '@/components/common/InlineEdit'
@@ -56,15 +52,6 @@ export function NotebookHeader({
 
   const updateNotebook = useUpdateNotebook()
   const deleteNotebook = useDeleteNotebook()
-  const { data: settings } = useSettings()
-
-  const handlePrivacyChange = (value: PrivacyValue) => {
-    updateNotebook.mutate({
-      id: notebook.id,
-      data: { privacy_mode: toWire(value) },
-    })
-  }
-
   const handleUpdateName = async (name: string) => {
     if (!name || name === notebook.name) return
     
@@ -189,18 +176,6 @@ export function NotebookHeader({
         <div className="text-sm text-muted-foreground">
           Created {formatDistanceToNow(new Date(notebook.created), { addSuffix: true })} •
           Updated {formatDistanceToNow(new Date(notebook.updated), { addSuffix: true })}
-        </div>
-
-        {/* Track J.3/J.5: per-notebook privacy override (inherits the global default). */}
-        <div className="pt-2 max-w-md">
-          <PrivacyModeToggle
-            scope="notebook"
-            scopeLabel="Privacy mode"
-            value={fromWire(notebook.privacy_mode)}
-            onChange={handlePrivacyChange}
-            globalDefault={settings?.default_privacy_mode ?? 'cloud'}
-            disabled={updateNotebook.isPending}
-          />
         </div>
 
         {/*

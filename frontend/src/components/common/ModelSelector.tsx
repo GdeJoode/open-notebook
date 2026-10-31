@@ -3,11 +3,13 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
 import { useModels } from '@/lib/hooks/use-models'
+import { modellenVanSoort } from '@/lib/utils/modelregister'
+import { ModelType } from '@/lib/types/models'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 
 interface ModelSelectorProps {
   label?: string
-  modelType: 'language' | 'embedding' | 'speech_to_text' | 'text_to_speech'
+  modelType: ModelType
   value: string
   onChange: (value: string) => void
   placeholder?: string
@@ -24,8 +26,8 @@ export function ModelSelector({
 }: ModelSelectorProps) {
   const { data: models, isLoading } = useModels()
   
-  // Filter models by type
-  const filteredModels = models?.filter(model => model.type === modelType) || []
+  // Modellen uit het register met een taak van deze soort (ADR 0007)
+  const filteredModels = modellenVanSoort(models, modelType)
   return (
     <div className="space-y-2">
       {label && <Label>{label}</Label>}
@@ -44,10 +46,10 @@ export function ModelSelector({
             </div>
           ) : (
             filteredModels.map((model) => (
-              <SelectItem key={model.id} value={model.id}>
+              <SelectItem key={model.naam} value={model.naam}>
                 <div className="flex items-center justify-between w-full">
-                  <span>{model.name}</span>
-                  <span className="text-xs text-muted-foreground ml-2">{model.provider}</span>
+                  <span>{model.naam}</span>
+                  <span className="text-xs text-muted-foreground ml-2">{model.locatie}</span>
                 </div>
               </SelectItem>
             ))

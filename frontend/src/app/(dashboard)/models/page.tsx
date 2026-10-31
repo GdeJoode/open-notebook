@@ -1,45 +1,34 @@
 'use client'
 
-import { ProviderStatus } from './components/ProviderStatus'
-import { ModelTypeSection } from './components/ModelTypeSection'
-import { DefaultModelsSection } from './components/DefaultModelsSection'
-import { useModels, useModelDefaults, useProviders, useModelStatus } from '@/lib/hooks/use-models'
+import { useModels } from '@/lib/hooks/use-models'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
-import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
-import { RefreshCw, AlertTriangle } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { useSearchParams } from 'next/navigation'
+import { RefreshCw } from 'lucide-react'
 import { PageBody } from '@/components/layout/PageBody'
 import { PageHeader } from '@/components/layout/PageHeader'
 
+/**
+ * Het modelregister, alleen lezen (ADR 0007). Modellen toevoegen of een
+ * standaard kiezen kan hier niet: het register staat in
+ * `config/modelregister.yaml` en verandert met een commit en een herstart.
+ */
 export default function ModelsPage() {
-  const searchParams = useSearchParams()
-  const setupRequired = searchParams.get('setup_required') === 'true'
-
-  const { data: models, isLoading: modelsLoading, refetch: refetchModels } = useModels()
-  const { data: defaults, isLoading: defaultsLoading, refetch: refetchDefaults } = useModelDefaults()
-  const { data: providers, isLoading: providersLoading, refetch: refetchProviders } = useProviders()
-  const { data: modelStatus } = useModelStatus(setupRequired)
-
-  const handleRefresh = () => {
-    refetchModels()
-    refetchDefaults()
-    refetchProviders()
-  }
+  const { data: models, isLoading, isError, refetch } = useModels()
 
   const header = (
     <PageHeader
-      title="Model Management"
-      subtitle="Configure AI models for different purposes across Noesis"
+      title="Modellen"
+      subtitle="Het modelregister (config/modelregister.yaml); alleen lezen"
       actions={
-        <Button variant="outline" size="sm" onClick={handleRefresh} aria-label="Refresh models">
+        <Button variant="outline" size="sm" onClick={() => refetch()} aria-label="Ververs modellen">
           <RefreshCw className="h-4 w-4" />
         </Button>
       }
     />
   )
 
-  if (modelsLoading || defaultsLoading || providersLoading) {
+  if (isLoading) {
     return (
       <PageBody>
         {header}
@@ -50,12 +39,12 @@ export default function ModelsPage() {
     )
   }
 
-  if (!models || !defaults || !providers) {
+  if (isError || !models) {
     return (
       <PageBody>
         {header}
         <div className="text-center py-12">
-          <p className="text-muted-foreground">Failed to load models data</p>
+          <p className="text-muted-foreground">Het modelregister kon niet worden gelezen</p>
         </div>
       </PageBody>
     )
@@ -64,58 +53,37 @@ export default function ModelsPage() {
   return (
     <PageBody>
       {header}
-
-      {setupRequired && modelStatus && !modelStatus.valid && (
-        <Alert variant="destructive">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Model configuration required</AlertTitle>
-          <AlertDescription>
-            <p className="mb-2">
-              Some configured models are not available. Please review and fix the issues below before continuing.
-            </p>
-            <ul className="list-disc pl-4 space-y-1">
-              {modelStatus.issues.map((issue, i) => (
-                <li key={i}>{issue.message}</li>
-              ))}
-            </ul>
-          </AlertDescription>
-        </Alert>
-      )}
-
-      <div className="grid gap-6">
-        {/* Provider Status */}
-        <ProviderStatus providers={providers} />
-
-        {/* Default Models */}
-        <DefaultModelsSection models={models} defaults={defaults} />
-
-        {/* Model Types */}
-        <div className="grid gap-6 lg:grid-cols-2">
-          <ModelTypeSection 
-            type="language" 
-            models={models} 
-            providers={providers}
-            isLoading={modelsLoading}
-          />
-          <ModelTypeSection 
-            type="embedding" 
-            models={models} 
-            providers={providers}
-            isLoading={modelsLoading}
-          />
-          <ModelTypeSection 
-            type="text_to_speech" 
-            models={models} 
-            providers={providers}
-            isLoading={modelsLoading}
-          />
-          <ModelTypeSection 
-            type="speech_to_text" 
-            models={models} 
-            providers={providers}
-            isLoading={modelsLoading}
-          />
-        </div>
+      <div className="overflow-x-auto rounded-md border">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/50 text-left">
+            <tr>
+              <th className="px-3 py-2 font-medium">Naam</th>
+              <th className="px-3 py-2 font-medium">Aanroepwijze</th>
+              <th className="px-3 py-2 font-medium">Locatie</th>
+              <th className="px-3 py-2 font-medium">Intern toegestaan</th>
+              <th className="px-3 py-2 font-medium">Taken</th>
+              <th className="px-3 py-2 font-medium">Versie</th>
+            </tr>
+          </thead>
+          <tbody>
+            {models.map((model) => (
+              <tr key={model.naam} className="border-t align-top">
+                <td className="px-3 py-2 font-medium">{model.naam}</td>
+                <td className="px-3 py-2">{model.aanroepwijze}</td>
+                <td className="px-3 py-2">{model.locatie}</td>
+                <td className="px-3 py-2">{model.toegestaan_intern}</td>
+                <td className="px-3 py-2">
+                  <div className="flex flex-wrap gap-1">
+                    {model.taken.map((taak) => (
+                      <Badge key={taak} variant="secondary">{taak}</Badge>
+                    ))}
+                  </div>
+                </td>
+                <td className="px-3 py-2 break-all text-xs text-muted-foreground">{model.versie}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </PageBody>
   )

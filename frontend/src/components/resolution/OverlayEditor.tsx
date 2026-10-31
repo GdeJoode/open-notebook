@@ -34,9 +34,8 @@ type Scope = 'global' | 'notebook'
  * again. Rules apply at global or per-notebook scope (most-specific wins
  * server-side).
  *
- * Reuses the J.5 `PrivacyModeToggle` Radix-RadioGroup scope-toggle pattern: Tab
- * to focus, arrow keys to move, Space/Enter to select, with an `aria-label` per
- * option. AC5.
+ * Radix-RadioGroup scope toggle: Tab to focus, arrow keys to move, Space/Enter
+ * to select, with an `aria-label` per option. AC5.
  */
 export function OverlayEditor({
   notebookId,

@@ -10,7 +10,6 @@ import {
   Mic,
   Network,
   Replace,
-  Route,
   Search,
   Settings,
   Share2,
@@ -88,7 +87,6 @@ export const NAV_SECTIONS: NavSection[] = [
     title: 'Settings',
     items: [
       { name: 'Models', href: '/models', icon: Bot },
-      { name: 'Model routing', href: '/settings/model-routing', icon: Route },
       { name: 'Settings', href: '/settings', icon: Settings },
     ],
   },

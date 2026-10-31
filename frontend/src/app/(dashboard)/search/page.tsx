@@ -17,7 +17,8 @@ import { PageBody } from '@/components/layout/PageBody'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { useSearch } from '@/lib/hooks/use-search'
 import { useAsk } from '@/lib/hooks/use-ask'
-import { useModelDefaults, useModels } from '@/lib/hooks/use-models'
+import { useModels } from '@/lib/hooks/use-models'
+import { modelVoorTaak } from '@/lib/utils/modelregister'
 import { useModalManager } from '@/lib/hooks/use-modal-manager'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { StreamingResponse } from '@/components/search/StreamingResponse'
@@ -51,23 +52,18 @@ export default function SearchPage() {
   // Hooks
   const searchMutation = useSearch()
   const ask = useAsk()
-  const { data: modelDefaults, isLoading: modelsLoading } = useModelDefaults()
-  const { data: availableModels } = useModels()
+  const { data: availableModels, isLoading: modelsLoading } = useModels()
   const { openModal } = useModalManager()
 
-  const modelNameById = useMemo(() => {
-    if (!availableModels) {
-      return new Map<string, string>()
-    }
-    return new Map(availableModels.map((model) => [model.id, model.name]))
-  }, [availableModels])
+  // Welk model een taak uitvoert, staat in het register (ADR 0007)
+  const modelDefaults = useMemo(() => ({
+    default_chat_model: modelVoorTaak(availableModels, 'chat')?.naam,
+    default_embedding_model: modelVoorTaak(availableModels, 'embedding')?.naam,
+  }), [availableModels])
 
-  const resolveModelName = (id?: string | null) => {
-    if (!id) return 'Not set'
-    return modelNameById.get(id) ?? id
-  }
+  const resolveModelName = (naam?: string | null) => naam || 'Not set'
 
-  const hasEmbeddingModel = !!modelDefaults?.default_embedding_model
+  const hasEmbeddingModel = !!modelDefaults.default_embedding_model
 
   const handleSearch = () => {
     if (!searchQuery.trim()) return

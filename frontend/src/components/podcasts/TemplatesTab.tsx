@@ -8,17 +8,18 @@ import { SpeakerProfilesPanel } from '@/components/podcasts/SpeakerProfilesPanel
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { useEpisodeProfiles, useSpeakerProfiles } from '@/lib/hooks/use-podcasts'
 import { useModels } from '@/lib/hooks/use-models'
-import { Model } from '@/lib/types/models'
+import { Model, ModelType } from '@/lib/types/models'
+import { modellenVanSoort } from '@/lib/utils/modelregister'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 
-function modelsByProvider(models: Model[], type: Model['type']) {
-  return models
-    .filter((model) => model.type === type)
+function modelsByProvider(models: Model[], type: ModelType) {
+  // Uit het register (ADR 0007), gegroepeerd op locatie
+  return modellenVanSoort(models, type)
     .reduce<Record<string, string[]>>((acc, model) => {
-      if (!acc[model.provider]) {
-        acc[model.provider] = []
+      if (!acc[model.locatie]) {
+        acc[model.locatie] = []
       }
-      acc[model.provider].push(model.name)
+      acc[model.locatie].push(model.naam)
       return acc
     }, {})
 }

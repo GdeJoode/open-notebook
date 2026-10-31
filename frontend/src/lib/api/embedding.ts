@@ -59,7 +59,7 @@ export interface RebuildStatusResponse {
 
 export const embeddingApi = {
   embedContent: async (itemId: string, itemType: 'source' | 'note', asyncProcessing = false): Promise<EmbedContentResponse> => {
-    const response = await apiClient.post<EmbedContentResponse>('/embed', {
+    const response = await apiClient.post<EmbedContentResponse>('/embeddings/item', {
       item_id: itemId,
       item_type: itemType,
       async_processing: asyncProcessing

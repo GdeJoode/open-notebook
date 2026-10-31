@@ -63,7 +63,6 @@ describe('sidebar navigation', () => {
       ['Search', '/search'],
       ['Notebooks', '/notebooks'],
       ['Models', '/models'],
-      ['Model routing', '/settings/model-routing'],
       ['Settings', '/settings'],
     ])
     const headings = screen.getAllByRole('heading').map((h) => h.textContent)
@@ -114,7 +113,6 @@ describe('sidebar navigation', () => {
       ['/ontologies', '/ontologies'],
       ['/notebooks/notebook%3Aa/schema', '/notebooks'],
       ['/settings', '/settings'],
-      ['/settings/model-routing', '/settings/model-routing'],
       ['/podcasts', '/podcasts'],
       ['/sourcesx', undefined],
       ['/login', undefined],

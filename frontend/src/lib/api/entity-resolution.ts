@@ -3,7 +3,7 @@
  *
  * Surfaces the K.3 retroactive-merge plan/apply, the K.5 candidate review
  * queue, and the force-merge/force-split overlay CRUD. Mirrors
- * `model-routing.ts`: thin wrappers around `apiClient` returning the response
+ * the other API modules: thin wrappers around `apiClient` returning the response
  * body; error handling is left to the calling TanStack Query hook.
  */
 

@@ -20,7 +20,8 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Settings2, Sparkles } from 'lucide-react'
-import { useModelDefaults, useModels } from '@/lib/hooks/use-models'
+import { useModels } from '@/lib/hooks/use-models'
+import { modellenVanSoort, modelVoorTaak } from '@/lib/utils/modelregister'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 
 interface ModelSelectorProps {
@@ -37,33 +38,26 @@ export function ModelSelector({
   const [open, setOpen] = useState(false)
   const [selectedModel, setSelectedModel] = useState(currentModel || 'default')
   const { data: models, isLoading } = useModels()
-  const { data: defaults } = useModelDefaults()
 
   useEffect(() => {
     setSelectedModel(currentModel || 'default')
   }, [currentModel])
 
-  // Filter for language models only and sort by name
-  const languageModels = useMemo(() => {
-    if (!models) {
-      return []
-    }
-    return [...models]
-      .filter((model) => model.type === 'language')
-      .sort((a, b) => a.name.localeCompare(b.name))
-  }, [models])
+  // Taalmodellen uit het register, op naam gesorteerd (ADR 0007)
+  const languageModels = useMemo(
+    () => [...modellenVanSoort(models, 'language')].sort((a, b) => a.naam.localeCompare(b.naam)),
+    [models]
+  )
 
-  const defaultModel = useMemo(() => {
-    if (!defaults?.default_chat_model) return undefined
-    return languageModels.find(model => model.id === defaults.default_chat_model)
-  }, [defaults?.default_chat_model, languageModels])
+  // De standaard is het registermodel voor chat
+  const defaultModel = useMemo(() => modelVoorTaak(models, 'chat'), [models])
 
   const currentModelName = useMemo(() => {
     if (currentModel) {
-      return languageModels.find(model => model.id === currentModel)?.name || currentModel
+      return languageModels.find(model => model.naam === currentModel)?.naam || currentModel
     }
     if (defaultModel) {
-      return defaultModel.name
+      return defaultModel.naam
     }
     return 'Default Model'
   }, [currentModel, languageModels, defaultModel])
@@ -115,11 +109,11 @@ export function ModelSelector({
                 <SelectItem value="default">
                   <div className="flex items-center justify-between w-full">
                     <span>
-                      {defaultModel ? `Default (${defaultModel.name})` : 'System Default'}
+                      {defaultModel ? `Default (${defaultModel.naam})` : 'System Default'}
                     </span>
-                    {defaultModel?.provider && (
+                    {defaultModel?.locatie && (
                       <span className="text-xs text-muted-foreground ml-2">
-                        {defaultModel.provider}
+                        {defaultModel.locatie}
                       </span>
                     )}
                   </div>
@@ -130,11 +124,11 @@ export function ModelSelector({
                   </div>
                 ) : (
                   languageModels.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
+                    <SelectItem key={model.naam} value={model.naam}>
                       <div className="flex items-center justify-between w-full">
-                        <span>{model.name}</span>
+                        <span>{model.naam}</span>
                         <span className="text-xs text-muted-foreground ml-2">
-                          {model.provider}
+                          {model.locatie}
                         </span>
                       </div>
                     </SelectItem>
@@ -146,7 +140,7 @@ export function ModelSelector({
           {selectedModel && selectedModel !== 'default' && (
             <div className="rounded-lg bg-muted p-3">
               <p className="text-sm text-muted-foreground">
-                This session will use <strong>{languageModels.find(m => m.id === selectedModel)?.name}</strong> instead of the default model.
+                This session will use <strong>{languageModels.find(m => m.naam === selectedModel)?.naam}</strong> instead of the default model.
               </p>
             </div>
           )}

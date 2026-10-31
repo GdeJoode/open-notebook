@@ -31,7 +31,6 @@ const createSourceSchema = z.object({
   notebooks: z.array(z.string()).optional(),
   embed: z.boolean(),
   async_processing: z.boolean(),
-  private: z.boolean().optional(),
 }).refine((data) => {
   if (data.type === 'link') {
     return !!data.url && data.url.trim() !== ''
@@ -107,7 +106,6 @@ export function AddSourceDialog({
     handleSubmit,
     control,
     watch,
-    setValue: setFormValue,
     formState: { errors },
     reset,
   } = useForm<CreateSourceFormData>({
@@ -116,7 +114,6 @@ export function AddSourceDialog({
       notebooks: defaultNotebookId ? [defaultNotebookId] : [],
       embed: settings?.default_embedding_option === 'always' || settings?.default_embedding_option === 'ask',
       async_processing: true,
-      private: false,
     },
   })
 
@@ -130,7 +127,6 @@ export function AddSourceDialog({
         notebooks: defaultNotebookId ? [defaultNotebookId] : [],
         embed: embedValue,
         async_processing: true,
-        private: false,
       })
     }
   }, [settings, defaultNotebookId, reset])
@@ -224,7 +220,6 @@ export function AddSourceDialog({
         embed: data.embed,
         delete_source: false,
         async_processing: true,
-        private: data.private ?? false,
         processing_overrides: Object.keys(processingOverrides).length > 0
           ? processingOverrides as Partial<SettingsResponse>
           : undefined,
@@ -348,8 +343,6 @@ export function AddSourceDialog({
                 settings={settings}
                 overrides={processingOverrides}
                 onOverridesChange={setProcessingOverrides}
-                isPrivate={watch('private') ?? false}
-                onPrivateChange={(v) => setFormValue('private', v)}
               />
             )}
           </WizardContainer>

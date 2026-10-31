@@ -22,9 +22,6 @@ vi.mock('@/components/layout/AppSidebar', () => ({
 vi.mock('@/lib/hooks/use-auth', () => ({
   useAuth: () => ({ isAuthenticated: true, isLoading: false }),
 }))
-vi.mock('@/lib/hooks/use-models', () => ({
-  useModelStatus: () => ({ data: { valid: true }, isLoading: false }),
-}))
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
   usePathname: () => '/',

@@ -1,7 +1,7 @@
 /**
  * TanStack Query hooks for the entity-resolution review hub (Track K.6).
  *
- * Mirrors `use-model-routing.ts`: query hooks for the K.3 plan + K.5 candidate
+ * Query hooks for the K.3 plan + K.5 candidate
  * queue, mutations for apply / overlay add+remove that invalidate the queues and
  * surface toast errors.
  */
