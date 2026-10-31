@@ -30,6 +30,7 @@ from app_main.services.entity_resolution import (
     merge_audit,
 )
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(prefix="/entity-resolution", tags=["entity-resolution"], dependencies=[RECHT_BEHEERDER])
 
@@ -192,7 +193,7 @@ async def _validate_clusters(clusters: List[ApplyClusterIn]) -> Dict[str, Dict[s
     try:
         ids = [ensure_record_id(i) for i in seen]
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"malformed entity id: {exc}")
+        raise fout_zonder_inhoud(exc, "malformed entity id", status_code=422)
     rows = await execute_query(
         "SELECT id, canonical_name, entity_type, status FROM $ids;", {"ids": ids}
     )
@@ -393,7 +394,7 @@ async def add_overlay(
             notebook_id=body.notebook_id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise fout_zonder_inhoud(exc, "Ongeldige invoer", status_code=422)
     return OverlayCreateResponse(id=rid)
 
 

@@ -6,6 +6,7 @@ endpoints and by the Werkbak (WB.1), so all three see the same jobs.
 
 from typing import Any, List
 
+from shared.models.classification import ClassificationScope
 from shared.types.enums import JobStatus, JobType
 from surrealdb_service.repositories.source import SourceRepository
 
@@ -27,7 +28,9 @@ async def list_paused_jobs_for_notebook(
 
     job_repo = JobRepository()
 
-    rows = await source_repo.list_with_metadata(notebook_id=notebook_id, limit=500)
+    rows = await source_repo.list_with_metadata(
+        notebook_id=notebook_id, limit=500, scope=ClassificationScope.ALLES
+    )
     source_ids = {str(row["id"]) for row in rows if row.get("id")}
     if not source_ids:
         return []

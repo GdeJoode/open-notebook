@@ -27,6 +27,7 @@ from app_main.services.audit.audit_service import AuditService
 from app_main.services.audit.deep_audit_service import DeepAuditService
 from app_main.services.notebook_service import NotebookService
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["audit"], dependencies=[RECHT_BEHEERDER])
 
@@ -45,7 +46,7 @@ async def run_audit(
         return await audit_service.run_all(str(notebook.id))
     except Exception as e:  # noqa: BLE001 — surface as 500, never a half-run
         logger.error(f"Audit run failed for {notebook_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Audit run failed: {str(e)}")
+        raise fout_zonder_inhoud(e, "Audit run failed")
 
 
 @router.post("/audit/deep", response_model=AuditRunResponse)
@@ -67,7 +68,7 @@ async def run_deep_audit(
         return await deep_service.run_deep(str(notebook.id))
     except Exception as e:  # noqa: BLE001
         logger.error(f"Deep audit failed for {notebook_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Deep audit failed: {str(e)}")
+        raise fout_zonder_inhoud(e, "Deep audit failed")
 
 
 @router.get("/audit", response_model=AuditRunResponse)
@@ -84,6 +85,4 @@ async def get_latest_audit(
         return await audit_service.latest(str(notebook.id))
     except Exception as e:  # noqa: BLE001
         logger.error(f"Reading audit for {notebook_id} failed: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Reading audit failed: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Reading audit failed")

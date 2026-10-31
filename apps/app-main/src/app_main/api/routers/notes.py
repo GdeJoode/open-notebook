@@ -23,7 +23,9 @@ from app_main.services.note_auto_link_service import (
 from app_main.services.note_service import NoteService
 from app_main.services.notebook_service import NotebookService
 from surrealdb_service.repositories.base import _validate_record_id
-from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN
+from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN, current_scope
+from app_main.api.fouten import fout_zonder_inhoud
+from shared.models.classification import ClassificationScope
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 
@@ -40,7 +42,7 @@ def _validate_note_id(note_id: str) -> str:
     try:
         validated = _validate_record_id(str(note_id))
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid note id: {exc}")
+        raise fout_zonder_inhoud(exc, "Invalid note id", status_code=422)
     if not validated.startswith("note:"):
         raise HTTPException(
             status_code=422, detail="id must be a note record (note:...)"
@@ -57,6 +59,7 @@ def _note_to_response(note) -> NoteResponse:
         note_type=note.note_type,
         created=str(note.created),
         updated=str(note.updated),
+        classification=getattr(note, "classification", None),
     )
 
 
@@ -67,18 +70,20 @@ async def list_notes(
     offset: int = Query(0, ge=0, description="Number of notes to skip"),
     note_service: NoteService = Depends(get_note_service),
     notebook_service: NotebookService = Depends(get_notebook_service),
+    scope: ClassificationScope = Depends(current_scope),
 ):
-    """List all notes, optionally filtered by notebook."""
-    if notebook_id:
-        notebook = await notebook_service.get(notebook_id)
-        if not notebook:
-            raise HTTPException(status_code=404, detail="Notebook not found")
-        raw_notes = await notebook_service.get_notes(notebook_id)
-        # Apply pagination to notebook-filtered notes
-        paginated = raw_notes[offset : offset + limit]
-        results = []
-        for raw in paginated:
-            results.append(
+    """List the notes within the key's classification scope (F2-05).
+
+    With ``notebook_id`` the notebook itself must be within the scope (404
+    otherwise), and only its notes within the scope are listed.
+    """
+    try:
+        if notebook_id:
+            notebook = await notebook_service.get_scoped(notebook_id, scope=scope)
+            if not notebook:
+                raise HTTPException(status_code=404, detail="Notebook not found")
+            raw_notes = await notebook_service.get_notes_scoped(notebook_id, scope=scope)
+            return [
                 NoteResponse(
                     id=raw.get("id", ""),
                     title=raw.get("title"),
@@ -86,12 +91,15 @@ async def list_notes(
                     note_type=raw.get("note_type"),
                     created=str(raw.get("created", "")),
                     updated=str(raw.get("updated", "")),
+                    classification=raw.get("classification"),
                 )
-            )
-        return results
+                for raw in raw_notes[offset : offset + limit]
+            ]
 
-    notes = await note_service.get_all(limit=limit, offset=offset)
-    return [_note_to_response(n) for n in notes]
+        notes = await note_service.list_scoped(scope=scope, limit=limit, offset=offset)
+        return [_note_to_response(n) for n in notes]
+    except Exception as e:
+        raise fout_zonder_inhoud(e, "Notities ophalen mislukt")
 
 
 @router.post("", response_model=NoteResponse, status_code=201, dependencies=[RECHT_BEHEERDER])
@@ -125,9 +133,13 @@ async def create_note(
 async def get_note(
     note_id: str,
     note_service: NoteService = Depends(get_note_service),
+    scope: ClassificationScope = Depends(current_scope),
 ):
-    """Get a note by ID."""
-    note = await note_service.get(note_id)
+    """Get a note within the key's classification scope; 404 otherwise."""
+    try:
+        note = await note_service.get_scoped(note_id, scope=scope)
+    except Exception as e:
+        raise fout_zonder_inhoud(e, "Notitie ophalen mislukt")
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     return _note_to_response(note)

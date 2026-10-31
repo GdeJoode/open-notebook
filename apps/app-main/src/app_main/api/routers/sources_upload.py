@@ -39,6 +39,8 @@ from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
 from app_main.services.transformation_service import TransformationService
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from shared.models.classification import ClassificationScope
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(dependencies=[RECHT_BEHEERDER])
 
@@ -324,10 +326,7 @@ async def _create_source_impl(
                 file_path = await save_uploaded_file(upload_file)
             except Exception as e:
                 logger.error(f"File upload failed: {e}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"File upload failed: {str(e)}",
-                )
+                raise fout_zonder_inhoud(e, "File upload failed", status_code=400)
 
         # Prepare content_state
         content_state: Dict[str, Any] = {}
@@ -457,10 +456,7 @@ async def _create_source_impl(
                         os.unlink(file_path)
                     except Exception:
                         pass
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to queue processing: {str(e)}",
-                )
+                raise fout_zonder_inhoud(e, "Failed to queue processing")
 
         else:
             # SYNC PATH
@@ -527,10 +523,7 @@ async def _create_source_impl(
                             os.unlink(file_path)
                         except Exception:
                             pass
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"Processing failed: {proc_err}",
-                    )
+                    raise fout_zonder_inhoud(proc_err, "Processing failed")
 
                 # Re-fetch the processed source
                 processed_source = await source_svc.get(source.id)
@@ -562,7 +555,9 @@ async def _create_source_impl(
                     )
                     if processed_source.asset
                     else None,
-                    full_text=processed_source.full_text,
+                    full_text=await source_svc.get_text(
+                        str(processed_source.id), scope=ClassificationScope.ALLES
+                    ),
                     embedded=embedded_chunks > 0,
                     embedded_chunks=embedded_chunks,
                     created=str(processed_source.created),
@@ -594,7 +589,7 @@ async def _create_source_impl(
                 os.unlink(file_path)
             except Exception:
                 pass
-        raise HTTPException(status_code=400, detail=str(e))
+        raise fout_zonder_inhoud(e, "Ongeldig verzoek", status_code=400)
     except Exception as e:
         logger.error(f"Error creating source: {e}")
         if file_path and upload_file:
@@ -602,9 +597,7 @@ async def _create_source_impl(
                 os.unlink(file_path)
             except Exception:
                 pass
-        raise HTTPException(
-            status_code=500, detail=f"Error creating source: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Error creating source")
 
 
 @router.post("/json", response_model=SourceResponse)
@@ -691,8 +684,12 @@ async def retry_source_processing(
                     detail="Source asset has no file_path or url",
                 )
         else:
-            if source.full_text:
-                content_state = {"content": source.full_text}
+            # F2-05: `source.full_text` vervalt; de tekst komt uit de fragmenten.
+            tekst = await source_svc.get_text(
+                str(source.id), scope=ClassificationScope.ALLES
+            )
+            if tekst:
+                content_state = {"content": tekst}
             else:
                 raise HTTPException(
                     status_code=400,
@@ -746,7 +743,9 @@ async def retry_source_processing(
                 )
                 if source.asset
                 else None,
-                full_text=source.full_text,
+                full_text=await source_svc.get_text(
+                    str(source.id), scope=ClassificationScope.ALLES
+                ),
                 embedded=embedded_chunks > 0,
                 embedded_chunks=embedded_chunks,
                 created=str(source.created),
@@ -764,10 +763,7 @@ async def retry_source_processing(
                 f"Failed to submit retry processing command "
                 f"for source {source_id}: {e}"
             )
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to queue retry processing: {str(e)}",
-            )
+            raise fout_zonder_inhoud(e, "Failed to queue retry processing")
 
     except HTTPException:
         raise
@@ -775,7 +771,4 @@ async def retry_source_processing(
         logger.error(
             f"Error retrying source processing for {source_id}: {e}"
         )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error retrying source processing: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error retrying source processing")

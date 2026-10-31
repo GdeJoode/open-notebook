@@ -11,6 +11,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
+from shared.models.classification import ClassificationScope
 from surrealdb_service.repositories import SearchRepository
 from app_main.graphs.citations import (
     citations_from_hits,
@@ -21,6 +22,10 @@ from app_main.graphs.citations import (
 )
 from app_main.graphs.utils import provision_langchain_model
 from shared.utils.text import clean_thinking_content
+
+#: Ask is alleen voor de beheerder (``/api/search/ask*``, ADR 0002 B) en ziet
+#: dus alles. Zoeken leest alleen fragmenten, geen notities of inzichten (ADR 0004).
+_ASK_SCOPE = ClassificationScope.ALLES
 
 MODEL_INVOKE_TIMEOUT = 300  # seconds
 
@@ -133,9 +138,13 @@ async def provide_answer(state: SubGraphState, config: RunnableConfig) -> dict:
         retrieval_svc = RetrievalService(
             SearchRepository(), embedding_model=embed_svc.embedding_model
         )
-        results = await retrieval_svc.vector_search(state["term"], 10, hydrate=True)
+        results = await retrieval_svc.vector_search(
+            state["term"], 10, scope=_ASK_SCOPE, hydrate=True
+        )
     except Exception:
-        results = await retrieval_svc.text_search(state["term"], 10, hydrate=True)
+        results = await retrieval_svc.text_search(
+            state["term"], 10, scope=_ASK_SCOPE, hydrate=True
+        )
     if len(results) == 0:
         return {"answers": [], "citation_groups": [], "retrieval_hits": []}
     payload["results"] = _format_results_with_provenance(results)

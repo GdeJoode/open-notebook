@@ -69,8 +69,11 @@ class TestSearchRequest:
         schema = SearchRequest(query="hello")
         assert schema.type == "text"
         assert schema.limit == 100
-        assert schema.search_sources is True
-        assert schema.search_notes is True
+        assert schema.history is False
+        # F2-05 (ADR 0004): `search_notes` vervalt; een client die het stuurt,
+        # krijgt geen fout.
+        assert "search_notes" not in SearchRequest.model_fields
+        assert SearchRequest(query="x", search_notes=True).query == "x"
 
 
 class TestModelCreate:

@@ -81,6 +81,7 @@ def _source_svc() -> AsyncMock:
     svc.create.return_value = created
     svc.get.return_value = _processed_stub()
     svc.get_embedding_count.return_value = 3
+    svc.get_text.return_value = None
     return svc
 
 
@@ -162,6 +163,7 @@ def test_sync_path_handler_failure_returns_500_and_cleans_up():
         )
 
     assert resp.status_code == 500, resp.text
-    assert "parse boom" in resp.text
+    # F2-05: geen uitzonderingstekst in het antwoord, wel een fout-id.
+    assert "parse boom" not in resp.text and "fout-id" in resp.text
     # The half-created source was cleaned up.
     source_svc.delete.assert_awaited_with("source:abc")

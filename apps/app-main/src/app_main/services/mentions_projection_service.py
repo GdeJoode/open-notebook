@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from shared.models.classification import ClassificationScope
 from shared.retrieval.kg_source_scorer import EntityRecord
 from shared.retrieval.mentions_projection import (
     MentionEdge,
@@ -369,6 +370,7 @@ class MentionsProjectionService:
     async def get_document_entity_edges(
         self,
         *,
+        scope: ClassificationScope,
         min_weight: float = 0.0,
         source_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -380,6 +382,6 @@ class MentionsProjectionService:
         skeleton; ``source_id`` scopes to one document's neighbourhood.
         """
         edges: List[Dict[str, Any]] = await self.entity_repo.load_mentions_edges(
-            min_weight=min_weight, source_id=source_id
+            scope=scope, min_weight=min_weight, source_id=source_id
         )
         return edges

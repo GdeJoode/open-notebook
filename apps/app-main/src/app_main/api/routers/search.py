@@ -6,13 +6,15 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from loguru import logger
+from shared.models.classification import ClassificationScope
 
 from app_main.api.schemas import AskRequest, AskResponse, SearchRequest, SearchResponse
 from app_main.dependencies import get_model_service, get_search_service
-from app_main.exceptions import DatabaseOperationError, InvalidInputError
+from app_main.exceptions import InvalidInputError
 from app_main.services.model_service import ModelService
 from app_main.services.search_service import SearchService
-from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN
+from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN, current_scope
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(tags=["search"])
 
@@ -22,8 +24,14 @@ async def search_knowledge_base(
     search_request: SearchRequest,
     search_svc: SearchService = Depends(get_search_service),
     model_svc: ModelService = Depends(get_model_service),
+    scope: ClassificationScope = Depends(current_scope),
 ):
-    """Search the knowledge base using text, vector, or hybrid search."""
+    """Search the source chunks using text, vector, or hybrid search.
+
+    Zoekt alleen in fragmenten, nooit in notities of inzichten (ADR 0004), met
+    het classificatiebereik van de sleutel in de query (ADR 0002 C) en
+    standaard alleen de huidige bronversie (``history`` voor oudere).
+    """
     try:
         if search_request.type == "vector":
             # Verify embedding model is available
@@ -39,9 +47,9 @@ async def search_knowledge_base(
             results = await search_svc.vector_search(
                 keyword=search_request.query,
                 results=search_request.limit,
-                include_sources=search_request.search_sources,
-                include_notes=search_request.search_notes,
                 minimum_score=search_request.minimum_score,
+                scope=scope,
+                history=search_request.history,
             )
         elif search_request.type == "hybrid":
             # Hybrid (BM25 + vector) fusion. Unlike pure vector search this
@@ -51,10 +59,10 @@ async def search_knowledge_base(
             results = await search_svc.hybrid_search(
                 keyword=search_request.query,
                 results=search_request.limit,
-                include_sources=search_request.search_sources,
-                include_notes=search_request.search_notes,
                 minimum_score=search_request.minimum_score,
                 text_weight=search_request.text_weight,
+                scope=scope,
+                history=search_request.history,
             )
 
             # Optional cross-encoder rerank of the top-N fused results. Default
@@ -75,8 +83,8 @@ async def search_knowledge_base(
             results = await search_svc.text_search(
                 keyword=search_request.query,
                 results=search_request.limit,
-                include_sources=search_request.search_sources,
-                include_notes=search_request.search_notes,
+                scope=scope,
+                history=search_request.history,
             )
 
         return SearchResponse(
@@ -86,15 +94,9 @@ async def search_knowledge_base(
         )
 
     except InvalidInputError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except DatabaseOperationError as e:
-        logger.error(f"Database error during search: {e}")
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
-    except HTTPException:
-        raise
+        raise fout_zonder_inhoud(e, "Ongeldige zoekvraag", status_code=400)
     except Exception as e:
-        logger.error(f"Unexpected error during search: {e}")
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        raise fout_zonder_inhoud(e, "Zoeken mislukt")
 
 
 async def stream_ask_response(
@@ -206,9 +208,7 @@ async def ask_knowledge_base(
         raise
     except Exception as e:
         logger.error(f"Error in ask endpoint: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Ask operation failed: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Ask operation failed")
 
 
 @router.post("/search/ask/simple", response_model=AskResponse, dependencies=[RECHT_BEHEERDER])
@@ -277,6 +277,4 @@ async def ask_knowledge_base_simple(
         raise
     except Exception as e:
         logger.error(f"Error in ask simple endpoint: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Ask operation failed: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Ask operation failed")

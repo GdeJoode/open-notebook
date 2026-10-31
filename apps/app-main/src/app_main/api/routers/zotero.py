@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from surrealdb_service.connection import execute_query
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(prefix="/zotero", tags=["zotero"], dependencies=[RECHT_BEHEERDER])
 
@@ -337,4 +338,4 @@ async def sync_with_zotero():
             "UPDATE zotero_sync_state SET status = 'error'", {}
         )
         logger.error(f"Zotero sync failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
+        raise fout_zonder_inhoud(e, "Sync failed")

@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from loguru import logger
 
+from shared.models.classification import ClassificationScope
 from shared.utils import token_count
 
 from surrealdb_service.repositories import (
@@ -46,8 +47,6 @@ class ContextItem:
 class ContextConfig:
     """Configuration knobs for context building."""
 
-    include_insights: bool = True
-    include_notes: bool = True
     max_tokens: Optional[int] = None
     priority_weights: Dict[str, int] = field(
         default_factory=lambda: {"source": 100, "note": 50, "insight": 75}
@@ -89,14 +88,19 @@ class ContextService:
     async def build_source_context(
         self,
         source_id: str,
-        include_insights: bool = True,
-        include_notes: bool = False,
         max_tokens: Optional[int] = None,
+        *,
+        scope: ClassificationScope,
     ) -> Dict[str, Any]:
         """Build context for a single source.
 
+        Alleen de bron met de tekst van de fragmenten van haar huidige versie,
+        binnen ``scope``. Notities en inzichten zijn afgeleid en gaan niet mee
+        (ADR 0004, F2-05).
+
         Returns a dict with keys ``sources``, ``insights``, ``notes``,
-        ``total_tokens``, ``total_items``, and ``metadata``.
+        ``total_tokens``, ``total_items``, and ``metadata``; ``insights`` and
+        ``notes`` stay empty.
         """
         items: List[ContextItem] = []
 
@@ -106,7 +110,7 @@ class ContextService:
             else f"source:{source_id}"
         )
 
-        source = await self._source_repo.get(full_source_id)
+        source = await self._source_repo.get_scoped(full_source_id, scope=scope)
         if source is None:
             logger.warning(f"Source {source_id} not found")
             return self._empty_response()
@@ -115,7 +119,7 @@ class ContextService:
         source_dict: Dict[str, Any] = {
             "id": source.id,
             "title": getattr(source, "title", None),
-            "full_text": getattr(source, "full_text", None),
+            "full_text": await self._source_repo.get_text(full_source_id, scope=scope),
         }
         items.append(
             ContextItem(
@@ -125,25 +129,6 @@ class ContextService:
                 priority=100,
             )
         )
-
-        # Insights
-        if include_insights:
-            insights = await self._insight_repo.get_by_source(full_source_id)
-            for insight in insights:
-                insight_dict: Dict[str, Any] = {
-                    "id": insight.id,
-                    "source_id": full_source_id,
-                    "insight_type": getattr(insight, "insight_type", None),
-                    "content": getattr(insight, "content", None),
-                }
-                items.append(
-                    ContextItem(
-                        id=insight.id or "",
-                        type="insight",
-                        content=insight_dict,
-                        priority=75,
-                    )
-                )
 
         # De-duplicate, prioritize, truncate
         items = self._deduplicate(items)

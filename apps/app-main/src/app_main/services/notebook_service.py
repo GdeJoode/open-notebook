@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from shared.models import Notebook
+from shared.models.classification import ClassificationScope
 from surrealdb_service.repositories import (
     NoteRepository,
     NotebookRepository,
@@ -27,6 +28,32 @@ class NotebookService:
         self.notebook_repo = notebook_repo
         self.source_repo = source_repo
         self.note_repo = note_repo
+
+    async def list_scoped(
+        self,
+        *,
+        scope: ClassificationScope,
+        order_by: str = "updated desc",
+        archived: Optional[bool] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Notebooks binnen het classificatiebereik, met zichtbare aantallen (F2-05)."""
+        return await self.notebook_repo.list_scoped(
+            scope=scope, order_by=order_by, archived=archived, limit=limit, offset=offset
+        )
+
+    async def get_scoped(
+        self, notebook_id: str, *, scope: ClassificationScope
+    ) -> Optional[Dict[str, Any]]:
+        """Een notebook binnen het bereik, met zichtbare aantallen; anders ``None``."""
+        return await self.notebook_repo.get_scoped(notebook_id, scope=scope)
+
+    async def get_notes_scoped(
+        self, notebook_id: str, *, scope: ClassificationScope
+    ) -> List[Dict[str, Any]]:
+        """De zichtbare notities van een zichtbaar notebook."""
+        return await self.notebook_repo.get_notes_scoped(notebook_id, scope=scope)
 
     async def get_all_with_counts(
         self,

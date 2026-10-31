@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from shared.models.classification import ClassificationScope
 
 
 @dataclass
@@ -174,7 +175,8 @@ async def _fetch_mentions(
     survived the entity filter (so the edge never dangles).
     """
     try:
-        raw = await entity_repo.load_mentions_edges()
+        # Export is alleen voor de beheerder (ADR 0002 B): alles zichtbaar.
+        raw = await entity_repo.load_mentions_edges(scope=ClassificationScope.ALLES)
     except Exception as e:
         logger.error(f"document layer: load_mentions_edges failed: {e}")
         return []

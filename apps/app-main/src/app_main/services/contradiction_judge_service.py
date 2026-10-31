@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
+from shared.models.classification import ClassificationScope
 
 # --- Precision-first defaults (Z.2 decision) -------------------------------
 #
@@ -522,7 +523,10 @@ class ContradictionJudgeService:
             return JudgeVerdict("neutral", 0.0, ""), False
 
         user_prompt = build_judge_user_prompt(
-            a.title, a.full_text, b.title, b.full_text
+            a.title,
+            await self.source_service.get_text(str(a.id), scope=ClassificationScope.ALLES),
+            b.title,
+            await self.source_service.get_text(str(b.id), scope=ClassificationScope.ALLES),
         )
 
         try:

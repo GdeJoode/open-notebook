@@ -20,6 +20,7 @@ def _insight_to_response(insight) -> SourceInsightResponse:
         content=insight.content,
         created=str(insight.created),
         updated=str(insight.updated),
+        classification=getattr(insight, "classification", None),
     )
 
 
@@ -70,4 +71,5 @@ async def save_insight_as_note(
         note_type=note.note_type,
         created=str(note.created),
         updated=str(note.updated),
+        classification=getattr(note, "classification", None),
     )

@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from app_main.dependencies import get_summarization_service
 from app_main.services.summarization_service import SummarizationService
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(prefix="/summaries", tags=["summaries"], dependencies=[RECHT_BEHEERDER])
 
@@ -61,7 +62,7 @@ async def generate_summary(
         )
         return result
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise fout_zonder_inhoud(e, "Ongeldig verzoek", status_code=400)
 
 
 @router.delete("/{summary_id:path}", status_code=204)

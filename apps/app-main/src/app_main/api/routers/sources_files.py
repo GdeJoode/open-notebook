@@ -13,6 +13,7 @@ from app_main.config import UPLOADS_FOLDER
 from app_main.dependencies import get_source_service
 from app_main.services.source_service import SourceService
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(dependencies=[RECHT_BEHEERDER])
 
@@ -180,10 +181,7 @@ async def get_source_pdf(
         raise
     except Exception as e:
         logger.error(f"Error serving PDF for source {source_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error serving PDF: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error serving PDF")
 
 
 @router.get("/{source_id}/page-preview")
@@ -249,7 +247,7 @@ async def get_page_preview(
         raise
     except Exception as e:
         logger.error(f"Error rendering page preview for source {source_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error rendering page: {str(e)}")
+        raise fout_zonder_inhoud(e, "Error rendering page")
 
 
 @router.get("/{source_id}/page-count")
@@ -293,7 +291,7 @@ async def get_page_count(
         raise
     except Exception as e:
         logger.error(f"Error getting page count for source {source_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise fout_zonder_inhoud(e, "Interne fout")
 
 
 # Image file extensions the gallery is allowed to enumerate / serve. Mirrors
@@ -356,7 +354,7 @@ async def list_source_images(
         raise
     except Exception as e:
         logger.error(f"Error listing images for source {source_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise fout_zonder_inhoud(e, "Interne fout")
 
 
 @router.get("/{source_id}/images/{filename}")
@@ -431,7 +429,4 @@ async def get_source_image(
         logger.error(
             f"Error serving image {filename} for source {source_id}: {e}"
         )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error serving image: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error serving image")

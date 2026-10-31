@@ -54,12 +54,17 @@ async def _saved_then_read(live: SurrealDBConfig, monkeypatch, metadata) -> int:
     await svc._save_result(source_id, result)
 
     src = AsyncMock()
-    src.get.return_value = SimpleNamespace(
-        id=source_id, title="t", topics=[], asset=None, full_text="x",
+    src.get_scoped.return_value = SimpleNamespace(
+        id=source_id, title="t", topics=[], asset=None,
         created="2026-01-01T00:00:00Z", updated="2026-01-01T00:00:00Z",
         command=None, private=False, processing_stage="complete",
     )
-    src.get_embedding_count.return_value = 0
+    src.get_text.return_value = "x"
+    src.source_repo = SimpleNamespace(
+        count_related=AsyncMock(return_value={
+            "insights_count": 0, "embedding_count": 0, "entity_count": 0}),
+        get_notebook_ids_scoped=AsyncMock(return_value=[]),
+    )
     app = FastAPI()
     app.include_router(router, prefix="/api/sources")
     app.dependency_overrides[get_source_service] = lambda: src

@@ -19,6 +19,7 @@ from app_main.services.contradiction_judge_service import (
 from app_main.services.source_service import SourceService
 from surrealdb_service.repositories.base import _validate_record_id
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(dependencies=[RECHT_BEHEERDER])
 
@@ -35,7 +36,7 @@ def _validate_source_id(source_id: str) -> str:
     try:
         validated = _validate_record_id(str(source_id))
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid source id: {exc}")
+        raise fout_zonder_inhoud(exc, "Invalid source id", status_code=422)
     if not validated.startswith("source:"):
         raise HTTPException(
             status_code=422, detail="id must be a source record (source:...)"
@@ -153,10 +154,7 @@ async def run_summaries(
         raise
     except Exception as e:
         logger.error(f"Error triggering summaries for source {source_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error triggering summaries: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error triggering summaries")
 
 
 @router.post("/{source_id}/run-entities")
@@ -256,10 +254,7 @@ async def run_entities(
         raise
     except Exception as e:
         logger.error(f"Error triggering entities for source {source_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error triggering entities: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error triggering entities")
 
 
 @router.get("/{source_id}/extraction-result")
@@ -307,10 +302,7 @@ async def get_extraction_result(
         logger.error(
             f"Error fetching extraction result for source {source_id}: {e}"
         )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching extraction result: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error fetching extraction result")
 
 
 @router.post("/{source_id}/run-filtering")
@@ -377,15 +369,12 @@ async def run_filtering(
 
         return result
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise fout_zonder_inhoud(e, "Niet gevonden", status_code=404)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error running filtering for source {source_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error running filtering: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error running filtering")
 
 
 @router.post("/{source_id}/run-embed")
@@ -411,10 +400,7 @@ async def run_embed(
         raise
     except Exception as e:
         logger.error(f"Error triggering embedding for source {source_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error triggering embedding: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error triggering embedding")
 
 
 @router.post("/{source_id}/reprocess")
@@ -505,10 +491,7 @@ async def reprocess_source(
         raise
     except Exception as e:
         logger.error(f"Error reprocessing source {source_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error reprocessing: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error reprocessing")
 
 
 @router.get("/{source_id}/processing-logs")

@@ -15,6 +15,7 @@ from app_main.dependencies import get_chat_service, get_source_service
 from app_main.services.chat_service import ChatService
 from app_main.services.source_service import SourceService
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(tags=["source-chat"], dependencies=[RECHT_BEHEERDER])
 
@@ -178,10 +179,7 @@ async def create_source_chat_session(
         raise
     except Exception as e:
         logger.error(f"Error creating source chat session: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error creating source chat session: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error creating source chat session")
 
 
 @router.get(
@@ -233,10 +231,7 @@ async def get_source_chat_sessions(
         raise
     except Exception as e:
         logger.error(f"Error fetching source chat sessions: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching source chat sessions: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error fetching source chat sessions")
 
 
 @router.get(
@@ -328,10 +323,7 @@ async def get_source_chat_session(
         raise
     except Exception as e:
         logger.error(f"Error fetching source chat session: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching source chat session: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error fetching source chat session")
 
 
 @router.put(
@@ -399,10 +391,7 @@ async def update_source_chat_session(
         raise
     except Exception as e:
         logger.error(f"Error updating source chat session: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error updating source chat session: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error updating source chat session")
 
 
 @router.delete(
@@ -450,10 +439,7 @@ async def delete_source_chat_session(
         raise
     except Exception as e:
         logger.error(f"Error deleting source chat session: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error deleting source chat session: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error deleting source chat session")
 
 
 async def stream_source_chat_response(
@@ -604,7 +590,4 @@ async def send_message_to_source_chat(
         raise
     except Exception as e:
         logger.error(f"Error sending message to source chat: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error sending message: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error sending message")

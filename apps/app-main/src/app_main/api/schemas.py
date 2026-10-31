@@ -9,6 +9,10 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+#: Classificatie in een antwoord (F2-05, ADR 0001). Elk response-schema van een
+#: record met een classificatie geeft haar terug.
+ClassificationField = Optional[Literal["intern", "extern"]]
+
 
 # Chunk schemas
 class ChunkUpdate(BaseModel):
@@ -97,6 +101,7 @@ class NotebookResponse(BaseModel):
     auto_insights: bool = True
     # Track F.5: per-notebook librarian opt-in (default False).
     librarian_enabled: bool = False
+    classification: ClassificationField = None
 
 
 # Search schemas
@@ -106,8 +111,16 @@ class SearchRequest(BaseModel):
         "text", description="Search type"
     )
     limit: int = Field(100, description="Maximum number of results", le=1000)
-    search_sources: bool = Field(True, description="Include sources in search")
-    search_notes: bool = Field(True, description="Include notes in search")
+    # F2-05 (ADR 0004): zoeken leest alleen fragmenten. `search_sources` en
+    # `search_notes` vervallen; een client die ze stuurt, krijgt geen fout
+    # (Pydantic negeert onbekende velden), maar ze hebben geen effect meer.
+    history: bool = Field(
+        False,
+        description=(
+            "Ook fragmenten van oudere bronversies en runs; standaard alleen "
+            "de huidige versie (ADR 0003)"
+        ),
+    )
     minimum_score: float = Field(
         0.2, description="Minimum score for vector/hybrid search", ge=0, le=1
     )
@@ -318,6 +331,8 @@ class NoteResponse(BaseModel):
     note_type: Optional[str]
     created: str
     updated: str
+    classification: ClassificationField = None
+    is_derived: bool = True
 
 
 class NoteAutoLinkResponse(BaseModel):
@@ -721,6 +736,7 @@ class SourceResponse(BaseModel):
     # | awaiting_schema_review | graphed | complete | failed) so the UI can show
     # per-document progress. Defaults "ingested" (migration 71 backfill).
     processing_stage: str = "ingested"
+    classification: ClassificationField = None
 
 
 class SourceListResponse(BaseModel):
@@ -747,6 +763,7 @@ class SourceListResponse(BaseModel):
     # WB.3: failed, awaiting schema review or stopped (NEEDS_YOU_STAGES plus
     # ``stalled``): the rows ``?sort_by=attention`` lists first.
     needs_you: bool = False
+    classification: ClassificationField = None
 
 
 class SourceCountsResponse(BaseModel):
@@ -873,6 +890,8 @@ class SourceInsightResponse(BaseModel):
     content: str
     created: str
     updated: str
+    classification: ClassificationField = None
+    is_derived: bool = True
 
 
 class SaveAsNoteRequest(BaseModel):

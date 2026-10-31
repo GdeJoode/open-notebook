@@ -405,8 +405,9 @@ class TestExportObsidianRouter:
 
         assert resp.status_code == 400
         body = resp.json()
-        assert "vault_path" in body["detail"].lower()
-        assert "configure" in body["detail"].lower()
+        # F2-05: een vaste melding met fout-id, geen uitzonderingstekst.
+        assert "fout-id" in body["detail"]
+        assert "vault_path" in body["detail"]
 
     def test_obsidian_vault_path_filesystem_failure_500_with_partial(self):
         """Filesystem failure mid-write -> 500 with partial entities_written.

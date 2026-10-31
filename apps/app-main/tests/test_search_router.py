@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from shared.models.classification import ClassificationScope
 
 from app_main.api.routers.search import router
 from app_main.dependencies import get_model_service, get_search_service
@@ -63,7 +64,7 @@ class TestSearchHybrid:
         search_svc.vector_search.assert_not_called()
 
     def test_hybrid_forwards_params(self):
-        """text_weight, minimum_score, limit, include flags reach the service."""
+        """text_weight, minimum_score, limit, the key's scope and history reach the service."""
         search_svc = _search_svc(hybrid=[])
         client = _make_client(search_svc, _model_svc())
 
@@ -73,8 +74,6 @@ class TestSearchHybrid:
                 "query": "q",
                 "type": "hybrid",
                 "limit": 25,
-                "search_sources": False,
-                "search_notes": True,
                 "minimum_score": 0.3,
                 "text_weight": 0.7,
             },
@@ -84,8 +83,8 @@ class TestSearchHybrid:
         search_svc.hybrid_search.assert_awaited_once_with(
             keyword="q",
             results=25,
-            include_sources=False,
-            include_notes=True,
+            scope=ClassificationScope.ALLES,
+            history=False,
             minimum_score=0.3,
             text_weight=0.7,
         )
@@ -156,8 +155,8 @@ class TestSearchBackwardCompatible:
         search_svc.text_search.assert_awaited_once_with(
             keyword="q",
             results=100,
-            include_sources=True,
-            include_notes=True,
+            scope=ClassificationScope.ALLES,
+            history=False,
         )
         search_svc.hybrid_search.assert_not_called()
         search_svc.vector_search.assert_not_called()
@@ -186,8 +185,8 @@ class TestSearchBackwardCompatible:
         search_svc.vector_search.assert_awaited_once_with(
             keyword="q",
             results=100,
-            include_sources=True,
-            include_notes=True,
+            scope=ClassificationScope.ALLES,
+            history=False,
             minimum_score=0.4,
         )
         search_svc.hybrid_search.assert_not_called()

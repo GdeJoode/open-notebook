@@ -5,7 +5,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app_main.services.search_service import SearchService
+from shared.models.classification import ClassificationScope
 from tests.conftest import make_default_models
+
+S = ClassificationScope.EXTERN
 
 
 class TestSearchServiceTextSearch:
@@ -17,10 +20,10 @@ class TestSearchServiceTextSearch:
         ])
         service = SearchService(search_repo, model_manager)
 
-        result = await service.text_search("python", results=5)
+        result = await service.text_search("python", results=5, scope=S)
 
         search_repo.text_search.assert_called_once_with(
-            "python", 5, True, True, hydrate=False
+            "python", 5, scope=S, history=False, hydrate=False
         )
         assert len(result) == 1
 
@@ -30,11 +33,11 @@ class TestSearchServiceTextSearch:
         service = SearchService(search_repo, model_manager)
 
         await service.text_search(
-            "test", include_sources=False, include_notes=True,
+            "test", history=True, scope=S,
         )
 
         search_repo.text_search.assert_called_once_with(
-            "test", 10, False, True, hydrate=False
+            "test", 10, scope=S, history=True, hydrate=False
         )
 
 
@@ -48,7 +51,7 @@ class TestSearchServiceVectorSearch:
 
         service = SearchService(search_repo, model_manager)
         # Should fall back to text search, not raise
-        result = await service.vector_search("test")
+        result = await service.vector_search("test", scope=S)
         assert len(result) == 1
 
     @pytest.mark.asyncio
@@ -65,11 +68,11 @@ class TestSearchServiceVectorSearch:
             search_repo, model_manager, embedding_model=mock_embedding_model,
         )
 
-        result = await service.vector_search("test query", results=5)
+        result = await service.vector_search("test query", results=5, scope=S)
 
         mock_embedding_model.aembed.assert_called_once_with(["test query"])
         search_repo.vector_search.assert_called_once_with(
-            [0.1, 0.2, 0.3], 5, True, True, 0.2, hydrate=False,
+            [0.1, 0.2, 0.3], 5, 0.2, scope=S, history=False, hydrate=False,
         )
         assert len(result) == 1
 
@@ -88,11 +91,11 @@ class TestSearchServiceHybridSearch:
             search_repo, model_manager, embedding_model=mock_embedding_model,
         )
 
-        result = await service.hybrid_search("test", results=5)
+        result = await service.hybrid_search("test", results=5, scope=S)
 
         mock_embedding_model.aembed.assert_called_once_with(["test"])
         search_repo.hybrid_search.assert_called_once_with(
-            "test", [0.1, 0.2, 0.3], 5, True, True, 0.2, 0.5, hydrate=False,
+            "test", [0.1, 0.2, 0.3], 5, 0.2, 0.5, scope=S, history=False, hydrate=False,
         )
         assert len(result) == 1
 
@@ -110,10 +113,10 @@ class TestSearchServiceHybridSearch:
             search_repo, model_manager, embedding_model=mock_embedding_model,
         )
 
-        await service.hybrid_search("test", results=5, text_weight=0.7)
+        await service.hybrid_search("test", results=5, text_weight=0.7, scope=S)
 
         search_repo.hybrid_search.assert_called_once_with(
-            "test", [0.1, 0.2, 0.3], 5, True, True, 0.2, 0.7, hydrate=False,
+            "test", [0.1, 0.2, 0.3], 5, 0.2, 0.7, scope=S, history=False, hydrate=False,
         )
 
     @pytest.mark.asyncio
@@ -148,7 +151,7 @@ class TestSearchServiceHybridSearch:
             repo, model_manager, embedding_model=mock_embedding_model,
         )
 
-        results = await service.hybrid_search("test", results=10)
+        results = await service.hybrid_search("test", results=10, scope=S)
 
         by_id = {r["id"]: r for r in results}
         # the item found by both signals is fused and tagged hybrid
@@ -172,5 +175,5 @@ class TestSearchServiceHybridSearch:
         search_repo.text_search = AsyncMock(return_value=[])
 
         service = SearchService(search_repo, model_manager)
-        result = await service.hybrid_search("test")
+        result = await service.hybrid_search("test", scope=S)
         assert result == []

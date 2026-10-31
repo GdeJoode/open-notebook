@@ -12,7 +12,8 @@ from app_main.services.knowledge_graph_service import KnowledgeGraphService
 from app_main.services.mentions_projection_service import (
     MentionsProjectionService,
 )
-from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.agent_auth import RECHT_BEHEERDER, current_scope
+from shared.models.classification import ClassificationScope
 
 router = APIRouter(prefix="/knowledge-graph", tags=["knowledge-graph"], dependencies=[RECHT_BEHEERDER])
 
@@ -128,6 +129,7 @@ async def get_document_graph(
         ),
     ),
     svc: MentionsProjectionService = Depends(get_mentions_projection_service),
+    scope: ClassificationScope = Depends(current_scope),
 ):
     """Fetch the materialized document↔entity (`mentions`) edges (feeds U.4 viz).
 
@@ -137,7 +139,7 @@ async def get_document_graph(
     run ``POST /document-graph/regenerate`` first to (re)build them.
     """
     edges = await svc.get_document_entity_edges(
-        min_weight=min_weight, source_id=source_id
+        scope=scope, min_weight=min_weight, source_id=source_id
     )
     return {"edges": edges, "count": len(edges)}
 

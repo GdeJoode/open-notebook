@@ -6,13 +6,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app_main.services.context_service import ContextItem, ContextService
+from shared.models.classification import ClassificationScope
+
+ALLES = ClassificationScope.ALLES
 
 
 def _make_source(**overrides):
     defaults = {
         "id": "source:abc",
         "title": "Test Source",
-        "full_text": "Some full text content.",
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -47,9 +49,11 @@ def _make_service(
     source=None,
     insights=None,
     chunks=None,
+    text="Some full text content.",
 ):
     source_repo = MagicMock()
-    source_repo.get = AsyncMock(return_value=source)
+    source_repo.get_scoped = AsyncMock(return_value=source)
+    source_repo.get_text = AsyncMock(return_value=text)
 
     insight_repo = MagicMock()
     insight_repo.get_by_source = AsyncMock(return_value=insights or [])
@@ -91,10 +95,13 @@ class TestContextItem:
 
 
 class TestBuildSourceContext:
+    """F2-05 (ADR 0004): alleen de bron, met de tekst uit haar fragmenten,
+    binnen het classificatiebereik; geen notities of inzichten."""
+
     @pytest.mark.asyncio
     async def test_source_not_found(self):
         svc = _make_service(source=None)
-        result = await svc.build_source_context("source:missing")
+        result = await svc.build_source_context("source:missing", scope=ALLES)
 
         assert result["sources"] == []
         assert result["insights"] == []
@@ -103,59 +110,52 @@ class TestBuildSourceContext:
     @pytest.mark.asyncio
     async def test_source_only(self):
         svc = _make_service(source=_make_source())
-        result = await svc.build_source_context(
-            "source:abc", include_insights=False
-        )
+        result = await svc.build_source_context("source:abc", scope=ALLES)
 
         assert len(result["sources"]) == 1
         assert result["sources"][0]["id"] == "source:abc"
+        assert result["sources"][0]["full_text"] == "Some full text content."
         assert result["insights"] == []
         assert result["total_items"] == 1
         assert result["total_tokens"] > 0
 
     @pytest.mark.asyncio
-    async def test_with_insights(self):
+    async def test_no_insights_even_when_present(self):
         svc = _make_service(
             source=_make_source(),
             insights=[_make_insight(), _make_insight(id="source_insight:yyy")],
         )
-        result = await svc.build_source_context("source:abc")
+        result = await svc.build_source_context("source:abc", scope=ALLES)
 
-        assert len(result["sources"]) == 1
-        assert len(result["insights"]) == 2
-        assert result["total_items"] == 3
+        assert result["insights"] == []
+        assert result["notes"] == []
+        assert result["total_items"] == 1
+        svc._insight_repo.get_by_source.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_deduplication(self):
-        dup_insight = _make_insight()
-        svc = _make_service(
-            source=_make_source(),
-            insights=[dup_insight, dup_insight],
+    async def test_scope_is_passed_and_required(self):
+        svc = _make_service(source=_make_source())
+        await svc.build_source_context("source:abc", scope=ClassificationScope.EXTERN)
+        svc._source_repo.get_scoped.assert_awaited_once_with(
+            "source:abc", scope=ClassificationScope.EXTERN
         )
-        result = await svc.build_source_context("source:abc")
-
-        # Duplicate insight should be removed
-        assert len(result["insights"]) == 1
-        assert result["total_items"] == 2
+        svc._source_repo.get_text.assert_awaited_once_with(
+            "source:abc", scope=ClassificationScope.EXTERN
+        )
+        with pytest.raises(TypeError):
+            await svc.build_source_context("source:abc")
 
     @pytest.mark.asyncio
     async def test_max_tokens_truncation(self):
-        svc = _make_service(
-            source=_make_source(),
-            insights=[
-                _make_insight(id=f"source_insight:{i}", content="word " * 500)
-                for i in range(10)
-            ],
-        )
-        result = await svc.build_source_context("source:abc", max_tokens=50)
+        svc = _make_service(source=_make_source(), text="word " * 2000)
+        result = await svc.build_source_context("source:abc", max_tokens=50, scope=ALLES)
 
-        # Should have fewer items than the 11 we provided
-        assert result["total_items"] < 11
+        assert result["total_items"] == 0
 
     @pytest.mark.asyncio
     async def test_output_shape(self):
         svc = _make_service(source=_make_source(), insights=[_make_insight()])
-        result = await svc.build_source_context("source:abc")
+        result = await svc.build_source_context("source:abc", scope=ALLES)
 
         # Verify required keys
         assert "sources" in result
@@ -172,28 +172,10 @@ class TestBuildSourceContext:
     async def test_source_id_prefix_added(self):
         """Passing an ID without prefix should still work."""
         svc = _make_service(source=_make_source(id="source:abc"))
-        result = await svc.build_source_context("abc")
+        await svc.build_source_context("abc", scope=ALLES)
 
         # The repo should have been called with the prefixed ID
-        svc._source_repo.get.assert_awaited_once_with("source:abc")
-
-    @pytest.mark.asyncio
-    async def test_priority_ordering(self):
-        """Sources (priority 100) should appear before insights (75)."""
-        svc = _make_service(
-            source=_make_source(),
-            insights=[_make_insight()],
-        )
-        result = await svc.build_source_context("source:abc")
-
-        # Sources listed first
-        assert result["sources"][0]["id"] == "source:abc"
-
-    @pytest.mark.asyncio
-    async def test_notes_empty_for_source_context(self):
-        svc = _make_service(source=_make_source(), insights=[_make_insight()])
-        result = await svc.build_source_context("source:abc")
-        assert result["notes"] == []
+        svc._source_repo.get_scoped.assert_awaited_once_with("source:abc", scope=ALLES)
 
 
 class TestBuildSourceChunks:

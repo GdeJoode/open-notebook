@@ -9,6 +9,7 @@ from loguru import logger
 
 from llm_manager import ModelManager
 from retrieval.service import RetrievalService
+from shared.models.classification import ClassificationScope
 from surrealdb_service.repositories import SearchRepository
 
 
@@ -69,45 +70,46 @@ class SearchService:
         self,
         keyword: str,
         results: int = 10,
-        include_sources: bool = True,
-        include_notes: bool = True,
+        *,
+        scope: ClassificationScope,
+        history: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Perform a text search."""
+        """Perform a text search over the source chunks."""
         svc = await self._get_retrieval()
-        return await svc.text_search(
-            keyword, results, include_sources, include_notes
-        )
+        return await svc.text_search(keyword, results, scope=scope, history=history)
 
     async def vector_search(
         self,
         keyword: str,
         results: int = 10,
-        include_sources: bool = True,
-        include_notes: bool = True,
         minimum_score: float = 0.2,
+        *,
+        scope: ClassificationScope,
+        history: bool = False,
     ) -> List[Dict[str, Any]]:
         """Perform a vector search (embeds the query first)."""
         svc = await self._get_retrieval()
         return await svc.vector_search(
-            keyword, results, include_sources, include_notes, minimum_score
+            keyword, results, minimum_score, scope=scope, history=history
         )
 
     async def hybrid_search(
         self,
         keyword: str,
         results: int = 10,
-        include_sources: bool = True,
-        include_notes: bool = True,
         minimum_score: float = 0.2,
         text_weight: float = 0.5,
+        *,
+        scope: ClassificationScope,
+        history: bool = False,
     ) -> List[Dict[str, Any]]:
         """Perform a hybrid text + vector search."""
         svc = await self._get_retrieval()
         return await svc.hybrid_search(
             keyword,
             results,
-            include_sources,
-            include_notes,
             minimum_score,
             text_weight,
+            scope=scope,
+            history=history,
         )

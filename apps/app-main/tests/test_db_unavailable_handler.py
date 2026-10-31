@@ -18,7 +18,9 @@ def test_database_unavailable_is_503_with_retry_after():
 
     assert resp.status_code == 503
     assert resp.headers["Retry-After"] == "5"
-    assert "No SurrealDB connection free" in resp.json()["detail"]
+    # F2-05: geen uitzonderingstekst in het antwoord.
+    assert resp.json()["detail"].startswith("Database niet beschikbaar (fout-id ")
+    assert "No SurrealDB connection free" not in resp.text
 
 
 @pytest.mark.parametrize(

@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel, Field
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(prefix="/services", tags=["services"], dependencies=[RECHT_BEHEERDER])
 
@@ -39,11 +40,11 @@ async def _proxy_get(service_url: str, path: str, params: Optional[Dict] = None)
             resp.raise_for_status()
             return resp.json()
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=str(e))
+        raise fout_zonder_inhoud(e, "Dienst gaf een fout", status_code=e.response.status_code)
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail=f"Service unavailable at {service_url}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise fout_zonder_inhoud(e, "Interne fout")
 
 
 async def _proxy_post(service_url: str, path: str, body: Any = None, params: Optional[Dict] = None) -> Any:
@@ -58,11 +59,11 @@ async def _proxy_post(service_url: str, path: str, body: Any = None, params: Opt
             resp.raise_for_status()
             return resp.json()
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=str(e))
+        raise fout_zonder_inhoud(e, "Dienst gaf een fout", status_code=e.response.status_code)
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail=f"Service unavailable at {service_url}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise fout_zonder_inhoud(e, "Interne fout")
 
 
 # ---------------------------------------------------------------------------

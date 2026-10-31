@@ -5,6 +5,7 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 from shared.models import Source
+from shared.models.classification import ClassificationScope
 from shared.models.transformation import DefaultPrompts, Transformation
 from app_main.graphs.utils import provision_langchain_model
 from shared.utils.text import clean_thinking_content
@@ -24,7 +25,13 @@ async def run_transformation(state: dict, config: RunnableConfig) -> dict:
     assert source or content, "No content to transform"
     transformation: Transformation = state["transformation"]
     if not content:
-        content = source.full_text
+        # F2-05: de tekst uit de fragmenten van de huidige versie (transformaties
+        # zijn alleen voor de beheerder, ADR 0002 B).
+        from surrealdb_service.repositories import SourceRepository
+
+        content = await SourceRepository().get_text(
+            str(source.id), scope=ClassificationScope.ALLES
+        )
     transformation_template_text = transformation.prompt
     default_prompts: DefaultPrompts = DefaultPrompts(transformation_instructions=None)
     if default_prompts.transformation_instructions:

@@ -26,7 +26,7 @@ class TestListNotes:
 
     def test_list_all_notes(self):
         svc = AsyncMock(spec=NoteService)
-        svc.get_all.return_value = [make_note()]
+        svc.list_scoped.return_value = [make_note()]
         client = _make_app(svc)
 
         resp = client.get("/api/notes")
@@ -53,7 +53,7 @@ class TestGetNote:
 
     def test_get_note(self):
         svc = AsyncMock(spec=NoteService)
-        svc.get.return_value = make_note()
+        svc.get_scoped.return_value = make_note()
         client = _make_app(svc)
 
         resp = client.get("/api/notes/note:1")
@@ -62,7 +62,7 @@ class TestGetNote:
 
     def test_get_note_not_found(self):
         svc = AsyncMock(spec=NoteService)
-        svc.get.return_value = None
+        svc.get_scoped.return_value = None
         client = _make_app(svc)
 
         resp = client.get("/api/notes/note:missing")

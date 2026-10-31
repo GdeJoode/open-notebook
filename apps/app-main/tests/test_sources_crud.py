@@ -1,6 +1,8 @@
 """Tests for the sources CRUD router.
 
-Focus: the live entity-count fix in ``get_source``. The detail response must
+Focus: ``get_source``. Since F2-05 the counts come from
+``SourceRepository.count_related`` (only records within the key's scope); the
+original fix stands: the detail response must
 report a count of *active* entities whose ``source_documents`` links back to the
 source (the live ``entity`` table) rather than the previously-read, possibly
 stale ``extraction_result.entity_count``.
@@ -28,7 +30,6 @@ def _fake_source(processing_stage="complete"):
         title="Midden-Limburg",
         topics=[],
         asset=None,
-        full_text="body",
         created="2026-01-01T00:00:00Z",
         updated="2026-01-02T00:00:00Z",
         command=None,
@@ -44,26 +45,34 @@ def _make_app(source_svc):
     return TestClient(app)
 
 
-def _patch_execute_query(monkeypatch, *, entity_count, extraction_rows):
-    """Route the router's per-purpose ``execute_query`` calls to fixtures.
+def _svc(source, *, entity_count=0, embedding_count=0):
+    """A SourceService stand-in for ``get_source`` (F2-05: scoped reads).
 
-    ``get_source`` issues several queries against the same ``execute_query``
-    symbol; dispatch on a distinctive fragment of each query string so the live
-    entity-count query and the (stale) extraction_result query return
-    independent values.
+    The counts come from ``SourceRepository.count_related`` (only records
+    within the key's scope); the text from ``get_text`` (the chunks of the
+    current version).
     """
+    svc = AsyncMock()
+    svc.get_scoped.return_value = source
+    svc.get_text.return_value = "body"
+    svc.source_repo = SimpleNamespace(
+        count_related=AsyncMock(return_value={
+            "insights_count": 0,
+            "embedding_count": embedding_count,
+            "entity_count": entity_count or 0,
+        }),
+        get_notebook_ids_scoped=AsyncMock(return_value=[]),
+    )
+    return svc
+
+
+def _patch_execute_query(monkeypatch, *, extraction_rows):
+    """Route the router's ``extraction_result`` query to a fixture."""
 
     async def fake_execute_query(query, params=None, *args, **kwargs):
         q = " ".join(query.split())
-        if "FROM reference" in q:
-            return []  # no notebooks
-        if "FROM source_insight" in q:
-            return [0]
-        if "source_documents CONTAINS $source_id" in q and "FROM entity" in q:
-            # The live count query under test.
-            assert params["source_id"] == SOURCE_ID
-            return [entity_count] if entity_count is not None else []
         if "FROM extraction_result" in q:
+            assert params["source_id"] == SOURCE_ID
             return extraction_rows
         return []
 
@@ -79,12 +88,8 @@ class TestGetSourceEntityCount:
         Reproduces the Midden-Limburg bug: the denormalized count would have
         reported 0, but the live ``entity`` table has 110 active rows.
         """
-        svc = AsyncMock()
-        svc.get.return_value = _fake_source()
-        svc.get_embedding_count.return_value = 5
-        _patch_execute_query(
-            monkeypatch, entity_count=110, extraction_rows=[]
-        )
+        svc = _svc(_fake_source(), entity_count=110, embedding_count=5)
+        _patch_execute_query(monkeypatch, extraction_rows=[])
         client = _make_app(svc)
 
         resp = client.get(f"/api/sources/{SOURCE_ID}")
@@ -101,12 +106,9 @@ class TestGetSourceEntityCount:
         Even if an extraction_result row exists with entity_count 0, the live
         query wins, so the response reflects the entity table.
         """
-        svc = AsyncMock()
-        svc.get.return_value = _fake_source()
-        svc.get_embedding_count.return_value = 0
+        svc = _svc(_fake_source(), entity_count=42, embedding_count=0)
         _patch_execute_query(
             monkeypatch,
-            entity_count=42,
             extraction_rows=[{"persisted": {"relations_created": 5, "relations_merged": 2}}],
         )
         client = _make_app(svc)
@@ -125,21 +127,15 @@ class TestGetSourceEntityCount:
         `extraction_result.relation_count` is the pre-filter extraction; showing
         it as the source's relations reported relations that never reached the
         graph."""
-        svc = AsyncMock()
-        svc.get.return_value = _fake_source()
-        svc.get_embedding_count.return_value = 0
-        _patch_execute_query(monkeypatch, entity_count=3, extraction_rows=[{"persisted": None}])
+        svc = _svc(_fake_source(), entity_count=3, embedding_count=0)
+        _patch_execute_query(monkeypatch, extraction_rows=[{"persisted": None}])
         data = _make_app(svc).get(f"/api/sources/{SOURCE_ID}").json()
         assert data["relation_count"] == 0
 
     def test_no_entities_returns_zero(self, monkeypatch):
         """Empty live count (GROUP ALL returns []) → entity_count 0."""
-        svc = AsyncMock()
-        svc.get.return_value = _fake_source()
-        svc.get_embedding_count.return_value = 0
-        _patch_execute_query(
-            monkeypatch, entity_count=None, extraction_rows=[]
-        )
+        svc = _svc(_fake_source(), entity_count=None, embedding_count=0)
+        _patch_execute_query(monkeypatch, extraction_rows=[])
         client = _make_app(svc)
 
         resp = client.get(f"/api/sources/{SOURCE_ID}")
@@ -155,12 +151,8 @@ class TestGetSourceProcessingStage:
     def test_processing_stage_returned(self, monkeypatch):
         """The source's ``processing_stage`` is echoed in the detail response so
         the UI can show per-document progress."""
-        svc = AsyncMock()
-        svc.get.return_value = _fake_source(processing_stage="graphed")
-        svc.get_embedding_count.return_value = 5
-        _patch_execute_query(
-            monkeypatch, entity_count=3, extraction_rows=[]
-        )
+        svc = _svc(_fake_source(processing_stage="graphed"), entity_count=3, embedding_count=5)
+        _patch_execute_query(monkeypatch, extraction_rows=[])
         client = _make_app(svc)
 
         resp = client.get(f"/api/sources/{SOURCE_ID}")
@@ -171,15 +163,11 @@ class TestGetSourceProcessingStage:
     def test_processing_stage_defaults_ingested(self, monkeypatch):
         """A source object without the field (legacy/None) falls back to
         ``ingested`` rather than erroring."""
-        svc = AsyncMock()
         src = _fake_source()
         # Simulate a source row whose stage is unset (None).
         src.processing_stage = None
-        svc.get.return_value = src
-        svc.get_embedding_count.return_value = 0
-        _patch_execute_query(
-            monkeypatch, entity_count=None, extraction_rows=[]
-        )
+        svc = _svc(src, entity_count=None, embedding_count=0)
+        _patch_execute_query(monkeypatch, extraction_rows=[])
         client = _make_app(svc)
 
         resp = client.get(f"/api/sources/{SOURCE_ID}")

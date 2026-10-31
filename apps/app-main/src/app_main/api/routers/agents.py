@@ -55,6 +55,7 @@ from app_main.dependencies import (
     get_transformation_service,
 )
 from app_main.services.summarization_service import SummarizationService
+from app_main.api.fouten import fout_zonder_inhoud
 
 _BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal"}
 
@@ -207,7 +208,7 @@ async def generate_summary(
             body.text, strategy=body.strategy, config=body.config
         )
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise fout_zonder_inhoud(e, "Ongeldige invoer", status_code=422)
     return GenerateSummaryResponse(
         summary=result.get("summary", ""), strategy=result.get("strategy", "")
     )

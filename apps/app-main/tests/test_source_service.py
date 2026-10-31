@@ -77,7 +77,7 @@ class TestSourceServiceChunks:
 
         result = await service.get_chunks("source:1")
 
-        source_repo.get_chunks.assert_called_once_with("source:1")
+        source_repo.get_chunks.assert_called_once_with("source:1", huidig=True)
         assert len(result) == 1
 
 

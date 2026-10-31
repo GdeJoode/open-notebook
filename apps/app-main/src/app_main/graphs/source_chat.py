@@ -11,6 +11,7 @@ from loguru import logger
 from typing_extensions import TypedDict
 
 from shared.models import Source
+from shared.models.classification import ClassificationScope
 from shared.models.source import SourceInsight
 from app_main.config import LANGGRAPH_CHECKPOINT_FILE
 from app_main.dependencies import get_context_service
@@ -52,11 +53,12 @@ async def call_model_with_source_context(
         raise ValueError("source_id is required in state")
 
     svc = get_context_service()
+    # Source chat is alleen voor de beheerder (ADR 0002 B). Geen inzichten of
+    # notities in de context: die zijn afgeleid (ADR 0004, F2-05).
     context_data = await svc.build_source_context(
         source_id=source_id,
-        include_insights=True,
-        include_notes=False,
         max_tokens=50000,
+        scope=ClassificationScope.ALLES,
     )
     # Chunk-level context with page/section provenance (Track X.2). Empty when
     # the source has no chunks (audio/plain text) — the prompt then falls back

@@ -111,14 +111,16 @@ async def test_mislukt_schrijven_trekt_de_sleutel_in(live_surrealdb, tmp_path, m
     assert await svc.authenticate(gemaakt["sleutel"]) is None
 
 
-async def test_lezen_extern_wordt_geweigerd_tot_f2_05(tmp_path):
+async def test_lezen_extern_kan_sinds_f2_05(tmp_path):
+    """De API filtert sinds F2-05 op classificatie (contracttest lezen_extern)."""
     svc = _service()
-    with pytest.raises(ValueError, match="F2-05"):
-        await maak_sleutel.maak(
-            "dienst", recht="lezen_extern", agent="open-notebook-mcp", persoon=None,
-            bestand=tmp_path / "sleutel_mcp", service=svc, secrets_map=tmp_path,
-        )
-    svc.mint.assert_not_awaited()
+    pad = tmp_path / "sleutel_mcp"
+    await maak_sleutel.maak(
+        "dienst", recht="lezen_extern", agent="open-notebook-mcp", persoon=None,
+        bestand=pad, service=svc, secrets_map=tmp_path,
+    )
+    assert svc.mint.await_args.kwargs["permission"] == "lezen_extern"
+    assert pad.read_text(encoding="utf-8") == SLEUTEL
 
 
 async def test_pad_buiten_secrets_wordt_geweigerd(tmp_path):

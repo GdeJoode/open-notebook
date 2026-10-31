@@ -5,6 +5,7 @@ Note service - business logic for note operations.
 from typing import Any, Dict, List, Optional
 
 from shared.models import Note
+from shared.models.classification import ClassificationScope
 from surrealdb_service.repositories import NoteRepository, NotebookRepository
 
 
@@ -22,6 +23,16 @@ class NoteService:
     async def get(self, note_id: str) -> Optional[Note]:
         """Get a note by ID."""
         return await self.note_repo.get(note_id)
+
+    async def get_scoped(self, note_id: str, *, scope: ClassificationScope) -> Optional[Note]:
+        """Een notitie binnen het classificatiebereik (F2-05); anders ``None``."""
+        return await self.note_repo.get_scoped(note_id, scope=scope)
+
+    async def list_scoped(
+        self, *, scope: ClassificationScope, limit: int = 50, offset: int = 0
+    ) -> List[Note]:
+        """Notities binnen het classificatiebereik, nieuwste eerst."""
+        return await self.note_repo.list_scoped(scope=scope, limit=limit, offset=offset)
 
     async def get_all(
         self,

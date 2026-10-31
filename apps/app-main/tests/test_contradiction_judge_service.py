@@ -256,7 +256,6 @@ def _src(sid: str):
     s = MagicMock()
     s.id = sid
     s.title = f"Title {sid}"
-    s.full_text = f"Full text of {sid}"
     return s
 
 
@@ -264,6 +263,8 @@ def _service(llm_response: str, *, judge_model: str = "test-judge"):
     """Build a judge with AsyncMock collaborators + a fixed LLM response."""
     source_service = MagicMock()
     source_service.get = AsyncMock(side_effect=lambda sid: _src(sid))
+    # F2-05: de tekst komt uit de fragmenten (`get_text`), niet uit `full_text`.
+    source_service.get_text = AsyncMock(side_effect=lambda sid, scope: f"Full text of {sid}")
 
     related_service = MagicMock()
     source_repo = MagicMock()
@@ -407,6 +408,8 @@ def _source_level_service(related_rows, llm_responses):
     """Judge wired with a hybrid related service + per-pair LLM responses."""
     source_service = MagicMock()
     source_service.get = AsyncMock(side_effect=lambda sid: _src(sid))
+    # F2-05: de tekst komt uit de fragmenten (`get_text`), niet uit `full_text`.
+    source_service.get_text = AsyncMock(side_effect=lambda sid, scope: f"Full text of {sid}")
 
     related_service = MagicMock()
     related_service.find_related_hybrid = AsyncMock(return_value=related_rows)
@@ -513,6 +516,8 @@ async def test_judge_source_no_related_is_clean_empty_run():
 async def test_judge_source_falls_back_to_find_related_when_no_hybrid():
     source_service = MagicMock()
     source_service.get = AsyncMock(side_effect=lambda sid: _src(sid))
+    # F2-05: de tekst komt uit de fragmenten (`get_text`), niet uit `full_text`.
+    source_service.get_text = AsyncMock(side_effect=lambda sid, scope: f"Full text of {sid}")
 
     # A related service WITHOUT find_related_hybrid (dense-only substrate).
     related_service = MagicMock(spec=["find_related"])

@@ -32,6 +32,7 @@ import pytest
 
 import app_main.handlers as handlers
 from surrealdb_service.config import SurrealDBConfig
+from shared.models.classification import ClassificationScope
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.source import SourceRepository
 
@@ -122,14 +123,14 @@ async def test_auto_extract_materializes_source_graph_and_completes(
     svc = MentionsProjectionService(
         entity_repo=EntityRepository(config=cfg), source_repo=source_repo
     )
-    edges = await svc.get_document_entity_edges(source_id=sid)
+    edges = await svc.get_document_entity_edges(source_id=sid, scope=ClassificationScope.ALLES)
     assert len(edges) == 1
     assert str(edges[0]["target"]) == shared
     assert float(edges[0]["weight"]) > 0.0
 
     # The refresh is source-scoped: the OTHER source got no edges (only sid
     # refreshed) even though it shares the concept.
-    other_edges = await svc.get_document_entity_edges(source_id=other)
+    other_edges = await svc.get_document_entity_edges(source_id=other, scope=ClassificationScope.ALLES)
     assert other_edges == []
 
     # AC3: the stage advanced extracted -> graphed -> complete.

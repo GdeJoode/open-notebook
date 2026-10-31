@@ -2,12 +2,13 @@
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from app_main.services.command_service import CommandService
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(prefix="/commands", tags=["commands"], dependencies=[RECHT_BEHEERDER])
 
@@ -54,10 +55,7 @@ async def execute_command(request: CommandExecutionRequest):
         )
     except Exception as e:
         logger.error(f"Error submitting command: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to submit command: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Failed to submit command")
 
 
 @router.get("/jobs/{job_id}", response_model=CommandJobStatusResponse)
@@ -68,10 +66,7 @@ async def get_command_job_status(job_id: str):
         return CommandJobStatusResponse(**status_data)
     except Exception as e:
         logger.error(f"Error fetching job status: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch job status: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Failed to fetch job status")
 
 
 @router.get("/jobs", response_model=List[Dict[str, Any]])
@@ -100,10 +95,7 @@ async def list_command_jobs(
         return jobs
     except Exception as e:
         logger.error(f"Error listing command jobs: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to list command jobs: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Failed to list command jobs")
 
 
 @router.delete("/jobs/{job_id}")
@@ -114,7 +106,4 @@ async def cancel_command_job(job_id: str):
         return {"job_id": job_id, "cancelled": success}
     except Exception as e:
         logger.error(f"Error cancelling command job: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to cancel command job: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Failed to cancel command job")

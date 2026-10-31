@@ -37,7 +37,7 @@ class TestListNotebooks:
 
     def test_list_notebooks(self):
         svc = AsyncMock(spec=NotebookService)
-        svc.get_all_with_counts.return_value = [
+        svc.list_scoped.return_value = [
             {
                 "id": "notebook:1",
                 "name": "NB1",
@@ -88,7 +88,7 @@ class TestGetNotebook:
 
     def test_get_notebook(self):
         svc = AsyncMock(spec=NotebookService)
-        svc.get_with_counts.return_value = {
+        svc.get_scoped.return_value = {
             "id": "notebook:1",
             "name": "NB",
             "description": "",
@@ -106,7 +106,7 @@ class TestGetNotebook:
 
     def test_get_notebook_not_found(self):
         svc = AsyncMock(spec=NotebookService)
-        svc.get_with_counts.return_value = None
+        svc.get_scoped.return_value = None
         client = _make_app(svc)
 
         resp = client.get("/api/notebooks/notebook:missing")
@@ -147,7 +147,7 @@ class TestNotebookPrivacyMode:
 
     def test_response_privacy_mode_defaults_none(self):
         svc = AsyncMock(spec=NotebookService)
-        svc.get_with_counts.return_value = {
+        svc.get_scoped.return_value = {
             "id": "notebook:1",
             "name": "NB",
             "description": "",
@@ -197,7 +197,7 @@ class TestNotebookAutoInsights:
 
     def test_response_auto_insights_defaults_true(self):
         svc = AsyncMock(spec=NotebookService)
-        svc.get_with_counts.return_value = {
+        svc.get_scoped.return_value = {
             "id": "notebook:1",
             "name": "NB",
             "description": "",

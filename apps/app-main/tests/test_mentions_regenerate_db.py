@@ -28,6 +28,7 @@ import uuid
 import pytest
 from app_main.services.mentions_projection_service import MentionsProjectionService
 from surrealdb_service.config import SurrealDBConfig
+from shared.models.classification import ClassificationScope
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.entity import EntityRepository
 from surrealdb_service.repositories.source import SourceRepository
@@ -253,7 +254,7 @@ async def test_isolated_source_has_no_edges(
     svc = _service(live_surrealdb)
     await svc.regenerate()
 
-    edges = await svc.get_document_entity_edges(source_id=seed["paper"])
+    edges = await svc.get_document_entity_edges(source_id=seed["paper"], scope=ClassificationScope.ALLES)
     assert edges == []
 
 

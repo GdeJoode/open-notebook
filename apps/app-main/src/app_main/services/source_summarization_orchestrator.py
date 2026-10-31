@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from shared.models import Source
+from shared.models.classification import ClassificationScope
 from surrealdb_service.repositories import SourceRepository, TransformationRepository
 
 
@@ -79,7 +80,10 @@ class SourceSummarizationOrchestrator:
         if not transformations:
             return 0
 
-        content = source.full_text
+        # F2-05: de tekst uit de fragmenten van de huidige versie.
+        content = await self.source_repo.get_text(
+            str(source.id), scope=ClassificationScope.ALLES
+        )
         if not content:
             logger.warning(
                 f"Source {source.id} has no content for transformations"

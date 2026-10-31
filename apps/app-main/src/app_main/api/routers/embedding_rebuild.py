@@ -12,6 +12,7 @@ from app_main.api.schemas import (
 )
 from surrealdb_service.connection import execute_query
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(tags=["embedding"], dependencies=[RECHT_BEHEERDER])
 
@@ -55,9 +56,12 @@ async def start_rebuild(request: RebuildRequest):
                     ")) as count FROM {}"
                 )
             else:
+                # F2-05: `source.full_text` vervalt; een bron met tekst is een
+                # bron met fragmenten.
                 total_estimate += await _count_query(
-                    "SELECT VALUE count() as count "
-                    "FROM source WHERE full_text != none GROUP ALL"
+                    "SELECT VALUE count(array::distinct("
+                    "SELECT VALUE source FROM chunk"
+                    ")) as count FROM {}"
                 )
 
         if request.include_notes:
@@ -117,10 +121,7 @@ async def start_rebuild(request: RebuildRequest):
 
     except Exception as e:
         logger.error(f"Failed to start rebuild: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to start rebuild operation: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Failed to start rebuild operation")
 
 
 @router.get("/rebuild/{command_id}/status", response_model=RebuildStatusResponse)
@@ -179,7 +180,4 @@ async def get_rebuild_status(command_id: str):
         raise
     except Exception as e:
         logger.error(f"Failed to get rebuild status: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to get rebuild status: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Failed to get rebuild status")

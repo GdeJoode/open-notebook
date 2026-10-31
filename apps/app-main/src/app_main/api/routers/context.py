@@ -14,6 +14,8 @@ from app_main.services.note_service import NoteService
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from shared.models.classification import ClassificationScope
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(tags=["context"], dependencies=[RECHT_BEHEERDER])
 
@@ -76,7 +78,11 @@ async def get_notebook_context(
                         source_context = {
                             "id": source.id,
                             "title": source.title,
-                            "full_text": source.full_text,
+                            # F2-05: tekst uit de fragmenten van de huidige
+                            # versie; deze route is alleen voor de beheerder.
+                            "full_text": await source_svc.get_text(
+                                str(source.id), scope=ClassificationScope.ALLES
+                            ),
                         }
                     else:
                         continue
@@ -166,10 +172,7 @@ async def get_notebook_context(
     except HTTPException:
         raise
     except InvalidInputError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise fout_zonder_inhoud(e, "Ongeldig verzoek", status_code=400)
     except Exception as e:
         logger.error(f"Error getting context for notebook {notebook_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error getting context: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error getting context")

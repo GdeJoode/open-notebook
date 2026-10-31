@@ -1287,7 +1287,8 @@ class TestUpdateSource:
         call_args = source_repo.update.call_args
         data = call_args[0][1]
         assert data["title"] == "New Title"
-        assert data["full_text"] == "New content"
+        # F2-05: `source.full_text` vervalt; de verwerking schrijft het niet meer.
+        assert "full_text" not in data
         assert data["asset"]["file_path"] == "/tmp/test.pdf"
 
     @pytest.mark.asyncio
@@ -1499,7 +1500,9 @@ class TestRunSummaries:
 
         from shared.models.transformation import Transformation
 
-        source_repo.get = AsyncMock(return_value=_make_source(full_text=None))
+        source_repo.get = AsyncMock(return_value=_make_source())
+        # F2-05: geen fragmenten van de huidige versie, dus geen tekst.
+        source_repo.get_text = AsyncMock(return_value=None)
         t = Transformation(
             id="transformation:t1",
             name="summarize",

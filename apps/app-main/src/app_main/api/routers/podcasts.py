@@ -13,6 +13,7 @@ from app_main.dependencies import get_notebook_service, get_podcast_service
 from app_main.services.notebook_service import NotebookService
 from app_main.services.podcast_service import PodcastService
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(prefix="/podcasts", tags=["podcast"], dependencies=[RECHT_BEHEERDER])
 
@@ -216,10 +217,7 @@ async def generate_podcast(
         raise
     except Exception as e:
         logger.error(f"Error generating podcast: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to generate podcast: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Failed to generate podcast")
 
 
 @router.get("/jobs/{job_id}")
@@ -240,10 +238,7 @@ async def get_podcast_job_status(job_id: str):
         }
     except Exception as e:
         logger.error(f"Error fetching podcast job status: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch job status: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Failed to fetch job status")
 
 
 @router.get(
@@ -273,10 +268,7 @@ async def list_podcast_episodes(
 
     except Exception as e:
         logger.error(f"Error listing podcast episodes: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to list podcast episodes: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Failed to list podcast episodes")
 
 
 @router.get(
@@ -302,10 +294,7 @@ async def get_podcast_episode(
         raise
     except Exception as e:
         logger.error(f"Error fetching podcast episode: {e}")
-        raise HTTPException(
-            status_code=404,
-            detail=f"Episode not found: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Episode not found", status_code=404)
 
 
 @router.get("/episodes/{episode_id}/audio")
@@ -326,10 +315,7 @@ async def stream_podcast_episode_audio(
         logger.error(
             f"Error fetching podcast episode for audio: {e}"
         )
-        raise HTTPException(
-            status_code=404,
-            detail=f"Episode not found: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Episode not found", status_code=404)
 
     if not episode.audio_file:
         raise HTTPException(
@@ -387,7 +373,4 @@ async def delete_podcast_episode(
         raise
     except Exception as e:
         logger.error(f"Error deleting podcast episode: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to delete episode: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Failed to delete episode")

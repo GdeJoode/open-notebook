@@ -71,6 +71,7 @@ from app_main.services.obsidian_export_service import (
 from app_main.services.okf_export_service import OkfExportService
 from app_main.services.okf_import_service import OkfImportService
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["exports"], dependencies=[RECHT_BEHEERDER])
 
@@ -164,7 +165,7 @@ async def export_notebook_networkx(
         # but the service raises ValueError if the dispatch ever sees
         # something unexpected.
         logger.warning("export-networkx rejected: {}", exc)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise fout_zonder_inhoud(exc, "Ongeldige invoer", status_code=422)
 
     media_type, ext = _FORMAT_TABLE[request.format]
     filename = _safe_filename(notebook_id, ext)
@@ -247,13 +248,12 @@ async def export_notebook_obsidian(
         artifact = await export_service.export(notebook_id, request)
     except VaultPathNotConfigured as exc:
         # Friendly 400 -- the user/operator can fix this by setting
-        # vault_path in Settings. We surface the service-side message
-        # verbatim because it's already user-readable.
+        # vault_path in Settings. A fixed message (F2-05: no exception text in
+        # an answer).
         logger.warning("export-obsidian vault_path rejected: {}", exc)
-        raise HTTPException(
-            status_code=400,
-            detail=str(exc) or "Configure vault_path in Settings first",
-        ) from exc
+        raise fout_zonder_inhoud(
+            exc, "vault_path is niet ingesteld; stel het in bij Settings", status_code=400
+        )
     except ValueError as exc:
         # Defense-in-depth path-traversal / non-absolute / not-writable
         # rejections from _write_to_vault. Surface as 500 with the
@@ -618,7 +618,7 @@ async def import_notebook_okf(
         # Malformed bundle CONTAINER (not a zip, unreadable archive). A bad
         # concept never reaches here — it is skip-recorded inside the service.
         logger.warning("okf import rejected bundle for {nb}: {e}", nb=notebook_id, e=exc)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise fout_zonder_inhoud(exc, "Ongeldige invoer", status_code=422)
 
     logger.info(
         "okf import: notebook={nb} entities +{ec}/~{em} relations +{rc} "

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from shared.models import Chunk, Source, SourceEmbedding, SourceInsight
+from shared.models.classification import ClassificationScope
 from surrealdb_service.repositories import (
     ChunkRepository,
     SourceEmbeddingRepository,
@@ -34,6 +35,14 @@ class SourceService:
         """Get a source by ID."""
         return await self.source_repo.get(source_id)
 
+    async def get_scoped(self, source_id: str, *, scope: ClassificationScope) -> Optional[Source]:
+        """Een bron binnen het classificatiebereik (F2-05); anders ``None``."""
+        return await self.source_repo.get_scoped(source_id, scope=scope)
+
+    async def get_text(self, source_id: str, *, scope: ClassificationScope) -> Optional[str]:
+        """De tekst uit de fragmenten van de huidige versie, binnen het bereik."""
+        return await self.source_repo.get_text(source_id, scope=scope)
+
     async def get_all(self, order_by: str = "updated DESC") -> List[Source]:
         """Get all sources."""
         return await self.source_repo.get_all(order_by=order_by)
@@ -51,8 +60,8 @@ class SourceService:
         return await self.source_repo.delete(source_id)
 
     async def get_chunks(self, source_id: str) -> List[Chunk]:
-        """Get all chunks for a source."""
-        return await self.source_repo.get_chunks(source_id)
+        """De fragmenten van de huidige bronversie en run (F2-04, F2-05)."""
+        return await self.source_repo.get_chunks(source_id, huidig=True)
 
     async def get_insights(self, source_id: str) -> List[SourceInsight]:
         """Get all insights for a source."""

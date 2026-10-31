@@ -24,6 +24,7 @@ from surrealdb_service.migrations import AsyncMigrationManager
 
 from app_main.api.agent_auth import AgentAuditMiddleware, require_right
 from app_main.api.auth import ApiKeyMiddleware
+from app_main.api.fouten import log_fout, melding_met_id
 from app_main.api.rate_limit import limiter
 from app_main.exceptions import (
     AuthenticationError,
@@ -424,22 +425,32 @@ def create_app() -> FastAPI:
     application.include_router(attention.router, prefix="/api", tags=["attention"])
 
     # --- Exception Handlers ---
+    # F2-05 (ADR 0002 C): geen tekst van een uitzondering in een antwoord. De
+    # aanroeper krijgt een vaste melding met een fout-id; de volledige fout
+    # staat alleen in het lokale log (``api/fouten.py``).
+    def _zonder_inhoud(exc: Exception, status_code: int, melding: str, **kwargs):
+        fout_id = log_fout(exc, melding, status_code=status_code)
+        return JSONResponse(
+            status_code=status_code,
+            content={"detail": melding_met_id(melding, fout_id)},
+            **kwargs,
+        )
+
     @application.exception_handler(NotFoundError)
     async def not_found_handler(request: Request, exc: NotFoundError):
-        return JSONResponse(status_code=404, content={"detail": str(exc)})
+        return _zonder_inhoud(exc, 404, "Niet gevonden")
 
     @application.exception_handler(InvalidInputError)
     async def invalid_input_handler(request: Request, exc: InvalidInputError):
-        return JSONResponse(status_code=422, content={"detail": str(exc)})
+        return _zonder_inhoud(exc, 422, "Ongeldige invoer")
 
     @application.exception_handler(AuthenticationError)
     async def auth_error_handler(request: Request, exc: AuthenticationError):
-        return JSONResponse(status_code=401, content={"detail": str(exc)})
+        return _zonder_inhoud(exc, 401, "Niet geautoriseerd")
 
     @application.exception_handler(RateLimitError)
     async def rate_limit_handler(request: Request, exc: RateLimitError):
-        return JSONResponse(status_code=429, content={"detail": str(exc)})
-
+        return _zonder_inhoud(exc, 429, "Te veel verzoeken")
     @application.exception_handler(DatabaseOperationError)
     async def db_error_handler(request: Request, exc: DatabaseOperationError):
         logger.error(f"Database error: {exc}")
@@ -473,28 +484,25 @@ def create_app() -> FastAPI:
     async def db_unavailable_handler(
         request: Request, exc: DatabaseUnavailableError
     ):
-        logger.warning(f"Database unavailable: {exc}")
-        return JSONResponse(
-            status_code=503,
-            content={"detail": str(exc)},
-            headers={"Retry-After": "5"},
+        return _zonder_inhoud(
+            exc, 503, "Database niet beschikbaar", headers={"Retry-After": "5"}
         )
 
     @application.exception_handler(ExternalServiceError)
     async def external_error_handler(
         request: Request, exc: ExternalServiceError
     ):
-        return JSONResponse(status_code=502, content={"detail": str(exc)})
+        return _zonder_inhoud(exc, 502, "Externe dienst mislukt")
 
     @application.exception_handler(ConfigurationError)
     async def config_error_handler(
         request: Request, exc: ConfigurationError
     ):
-        return JSONResponse(status_code=500, content={"detail": str(exc)})
+        return _zonder_inhoud(exc, 500, "Configuratiefout")
 
     @application.exception_handler(FileOperationError)
     async def file_error_handler(request: Request, exc: FileOperationError):
-        return JSONResponse(status_code=500, content={"detail": str(exc)})
+        return _zonder_inhoud(exc, 500, "Bestandsfout")
 
     @application.exception_handler(OpenNotebookError)
     async def generic_app_error_handler(

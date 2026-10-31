@@ -25,6 +25,7 @@ import uuid
 import pytest
 from app_main.services.mentions_projection_service import MentionsProjectionService
 from surrealdb_service.config import SurrealDBConfig
+from shared.models.classification import ClassificationScope
 from surrealdb_service.connection import execute_query
 from surrealdb_service.repositories.entity import EntityRepository
 from surrealdb_service.repositories.source import SourceRepository
@@ -100,7 +101,7 @@ async def test_refresh_source_creates_only_this_sources_edges(
     assert result.created == 2
 
     # AC1: the document-graph read returns this source's edges.
-    edges = await svc.get_document_entity_edges(source_id=c0)
+    edges = await svc.get_document_entity_edges(source_id=c0, scope=ClassificationScope.ALLES)
     assert {e["target"] for e in edges} == {seed["rd"], seed["bw"]}
     assert all(float(e["weight"]) > 0.0 for e in edges)
 
@@ -127,7 +128,7 @@ async def test_refresh_source_is_scoped_and_idempotent(
     await svc.refresh_source(c0)
     await svc.refresh_source(c1)
 
-    c1_before = await svc.get_document_entity_edges(source_id=c1)
+    c1_before = await svc.get_document_entity_edges(source_id=c1, scope=ClassificationScope.ALLES)
     assert len(c1_before) == 2  # Regio Deal + brede welvaart
 
     # Re-refresh c0 only: c1's edges must be byte-identical (scoped write).
@@ -135,7 +136,7 @@ async def test_refresh_source_is_scoped_and_idempotent(
     assert second.cleared == 2  # cleared exactly c0's prior 2 edges
     assert second.created == 2  # rebuilt the same 2
 
-    c1_after = await svc.get_document_entity_edges(source_id=c1)
+    c1_after = await svc.get_document_entity_edges(source_id=c1, scope=ClassificationScope.ALLES)
 
     def _key(es):
         return sorted(
@@ -146,7 +147,7 @@ async def test_refresh_source_is_scoped_and_idempotent(
     assert _key(c1_before) == _key(c1_after), "another source's edges were disturbed"
 
     # Idempotent for c0: re-run -> same edge set, no duplicate pairs.
-    c0_edges = await svc.get_document_entity_edges(source_id=c0)
+    c0_edges = await svc.get_document_entity_edges(source_id=c0, scope=ClassificationScope.ALLES)
     pairs = [(str(e["source"]), str(e["target"])) for e in c0_edges]
     assert len(pairs) == len(set(pairs))
     assert {e["target"] for e in c0_edges} == {seed["rd"], seed["bw"]}
@@ -165,7 +166,7 @@ async def test_refresh_weights_match_global_regenerate(
 
     # Global regenerate, snapshot c0's weights.
     await svc.regenerate()
-    global_edges = await svc.get_document_entity_edges(source_id=c0)
+    global_edges = await svc.get_document_entity_edges(source_id=c0, scope=ClassificationScope.ALLES)
     global_w = {
         str(e["target"]): round(float(e["weight"]), 9) for e in global_edges
     }
@@ -173,7 +174,7 @@ async def test_refresh_weights_match_global_regenerate(
     # Re-seed clean, then source-scoped refresh c0.
     await execute_query("DELETE mentions;", config=live_surrealdb)
     await svc.refresh_source(c0)
-    scoped_edges = await svc.get_document_entity_edges(source_id=c0)
+    scoped_edges = await svc.get_document_entity_edges(source_id=c0, scope=ClassificationScope.ALLES)
     scoped_w = {
         str(e["target"]): round(float(e["weight"]), 9) for e in scoped_edges
     }

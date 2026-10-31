@@ -11,6 +11,7 @@ from app_main.dependencies import (
 )
 from app_main.services.preprocessing_service import PreprocessingService
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(prefix="/preprocessing", tags=["preprocessing"], dependencies=[RECHT_BEHEERDER])
 
@@ -36,7 +37,7 @@ async def run_preprocessing(
         result = await svc.run(source_id=body.source_id, privacy=body.privacy)
         return result.model_dump()
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise fout_zonder_inhoud(e, "Ongeldig verzoek", status_code=400)
 
 
 @router.get("/{source_id}", response_model=Optional[Dict[str, Any]])

@@ -9,6 +9,7 @@ from app_main.services.model_service import ModelService
 from app_main.services.note_service import NoteService
 from app_main.services.source_service import SourceService
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(tags=["embedding"], dependencies=[RECHT_BEHEERDER])
 
@@ -67,10 +68,7 @@ async def embed_content(
 
             except Exception as e:
                 logger.error(f"Failed to submit async embedding command: {e}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to queue embedding: {str(e)}",
-                )
+                raise fout_zonder_inhoud(e, "Failed to queue embedding")
 
         else:
             # Sync: embed directly
@@ -109,7 +107,4 @@ async def embed_content(
             f"Error embedding {embed_request.item_type} "
             f"{embed_request.item_id}: {e}"
         )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error embedding content: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error embedding content")

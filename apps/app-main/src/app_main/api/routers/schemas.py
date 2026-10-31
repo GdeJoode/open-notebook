@@ -64,6 +64,7 @@ from shared.models.notebook_schema import (
     DEFAULT_BASE_ONTOLOGY,
     NotebookSchema,
 )
+from shared.models.classification import ClassificationScope
 from shared.types.enums import JobStatus
 from surrealdb_service.repositories.notebook_schema import (
     NotebookSchemaRepository,
@@ -71,6 +72,7 @@ from surrealdb_service.repositories.notebook_schema import (
 )
 from surrealdb_service.repositories.source import SourceRepository
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 
 router = APIRouter(prefix="/notebooks/{notebook_id}", tags=["schemas"], dependencies=[RECHT_BEHEERDER])
@@ -786,7 +788,7 @@ async def get_accept_target(
             **await edit_service.accept_target(notebook_id, type_name)
         )
     except (NotebookSchemaNotFoundError, UnknownExtensionError) as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise fout_zonder_inhoud(e, "Niet gevonden", status_code=404)
 
 
 @router.post(
@@ -812,7 +814,7 @@ async def preview_accept_extension(
             notebook_id, type_name, body.ontology, body.parent_type
         )
     except (NotebookSchemaNotFoundError, UnknownExtensionError) as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise fout_zonder_inhoud(e, "Niet gevonden", status_code=404)
     except OntologyEditError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
 
@@ -847,7 +849,7 @@ async def accept_pending_extension(
             notebook_id, type_name, body.ontology, body.parent_type
         )
     except (NotebookSchemaNotFoundError, UnknownExtensionError) as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise fout_zonder_inhoud(e, "Niet gevonden", status_code=404)
     except OntologyEditError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
     return AcceptExtensionResponse(
@@ -877,7 +879,7 @@ async def mark_extension_covered(
     try:
         updated = await edit_service.mark_covered(notebook_id, type_name)
     except (NotebookSchemaNotFoundError, UnknownExtensionError) as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise fout_zonder_inhoud(e, "Niet gevonden", status_code=404)
     except OntologyEditError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
     return AcceptExtensionResponse(
@@ -911,7 +913,7 @@ async def reject_pending_extension(
     try:
         updated = await edit_service.reject_extension(notebook_id, type_name)
     except NotebookSchemaNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise fout_zonder_inhoud(e, "Niet gevonden", status_code=404)
     return await _schema_to_response(notebook_id, updated)
 
 
@@ -1161,7 +1163,9 @@ async def list_reextract_candidates(
     """
     await _ensure_notebook_exists(notebook_id, notebook_service)
     try:
-        rows = await source_repo.list_with_metadata(notebook_id=notebook_id)
+        rows = await source_repo.list_with_metadata(
+            notebook_id=notebook_id, scope=ClassificationScope.ALLES  # beheerder
+        )
     except Exception as e:
         # Defensive — list_with_metadata returning empty on transient
         # errors would still serve a useful (albeit zero-entry) banner.
@@ -1221,7 +1225,9 @@ async def enqueue_reextract(
     # service, but keeping it at the router avoids loading the source
     # repo from the service.
     try:
-        rows = await source_repo.list_with_metadata(notebook_id=notebook_id)
+        rows = await source_repo.list_with_metadata(
+            notebook_id=notebook_id, scope=ClassificationScope.ALLES  # beheerder
+        )
     except Exception as e:
         logger.warning(
             "Failed to list notebook sources during re-extract "

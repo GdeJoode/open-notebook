@@ -285,7 +285,6 @@ class SourceProcessor:
                 url=extracted.url,
                 file_path=extracted.file_path,
             ).model_dump(),
-            "full_text": strip_null_bytes(extracted.full_text),
         }
         if extracted.title:
             update_data["title"] = strip_null_bytes(extracted.title)

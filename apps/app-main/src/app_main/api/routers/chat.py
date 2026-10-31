@@ -13,6 +13,8 @@ from app_main.dependencies import get_chat_service, get_notebook_service
 from app_main.services.chat_service import ChatService
 from app_main.services.notebook_service import NotebookService
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from shared.models.classification import ClassificationScope
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(prefix="/chat", tags=["chat"], dependencies=[RECHT_BEHEERDER])
 
@@ -159,9 +161,7 @@ async def get_sessions(
         raise
     except Exception as e:
         logger.error(f"Error fetching chat sessions: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Error fetching chat sessions: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Error fetching chat sessions")
 
 
 @router.post("/sessions", response_model=ChatSessionResponse)
@@ -215,9 +215,7 @@ async def create_session(
         raise
     except Exception as e:
         logger.error(f"Error creating chat session: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Error creating chat session: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Error creating chat session")
 
 
 @router.get(
@@ -283,9 +281,7 @@ async def get_session(
         raise
     except Exception as e:
         logger.error(f"Error fetching session: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Error fetching session: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Error fetching session")
 
 
 @router.put("/sessions/{session_id}", response_model=ChatSessionResponse)
@@ -335,9 +331,7 @@ async def update_session(
         raise
     except Exception as e:
         logger.error(f"Error updating session: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Error updating session: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Error updating session")
 
 
 @router.delete("/sessions/{session_id}", response_model=SuccessResponse)
@@ -358,9 +352,7 @@ async def delete_session(
         raise
     except Exception as e:
         logger.error(f"Error deleting session: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Error deleting session: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Error deleting session")
 
 
 @router.post("/execute", response_model=ExecuteChatResponse)
@@ -430,9 +422,7 @@ async def execute_chat(
         raise
     except Exception as e:
         logger.error(f"Error executing chat: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Error executing chat: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Error executing chat")
 
 
 @router.post("/context", response_model=BuildContextResponse)
@@ -485,7 +475,11 @@ async def build_context(
                         source_context = {
                             "id": source.id,
                             "title": source.title,
-                            "full_text": source.full_text,
+                            # F2-05: tekst uit de fragmenten van de huidige
+                            # versie; deze route is alleen voor de beheerder.
+                            "full_text": await source_svc.get_text(
+                                str(source.id), scope=ClassificationScope.ALLES
+                            ),
                         }
                     else:
                         continue
@@ -581,6 +575,4 @@ async def build_context(
         raise
     except Exception as e:
         logger.error(f"Error building context: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Error building context: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Error building context")

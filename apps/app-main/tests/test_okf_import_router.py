@@ -201,7 +201,8 @@ def test_import_malformed_bundle_container_is_422():
         files={"file": ("notes.txt", b"not a zip", "text/plain")},
     )
     assert resp.status_code == 422
-    assert "zip" in resp.json()["detail"].lower()
+    # F2-05: een vaste melding met fout-id, geen uitzonderingstekst.
+    assert "fout-id" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

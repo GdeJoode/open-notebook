@@ -4,12 +4,14 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
+from shared.models.classification import ClassificationScope
 from shared.retrieval import FusionWeights, get_preset
 from shared.types.enums import ProcessingStage
 from surrealdb_service.connection import DatabaseUnavailableError
 from surrealdb_service.repositories.source import ChunkRepository
 
-from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN
+from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN, current_scope
+from app_main.api.fouten import fout_zonder_inhoud
 from app_main.api.routers.sources_files import _is_source_file_available
 from app_main.api.schemas import (
     AssetModel,
@@ -98,6 +100,7 @@ async def get_sources(
     ),
     source_svc: SourceService = Depends(get_source_service),
     notebook_svc: NotebookService = Depends(get_notebook_service),
+    scope: ClassificationScope = Depends(current_scope),
 ):
     """Get sources with pagination and sorting support."""
     try:
@@ -119,7 +122,7 @@ async def get_sources(
             )
 
         if notebook_id:
-            notebook = await notebook_svc.get(notebook_id)
+            notebook = await notebook_svc.get_scoped(notebook_id, scope=scope)
             if not notebook:
                 raise HTTPException(
                     status_code=404, detail="Notebook not found"
@@ -141,6 +144,7 @@ async def get_sources(
             ids=stopped if stalled else None,
             first_stages=NEEDS_YOU_STAGES if attention else None,
             first_ids=stopped if attention else None,
+            scope=scope,
         )
         stopped_set = set(stopped)
 
@@ -215,17 +219,13 @@ async def get_sources(
                     processing_stage=stage_value,
                     stalled=row_stalled,
                     needs_you=row_stalled or stage_value in NEEDS_YOU_STAGES,
+                    classification=row.get("classification"),
                 )
             )
 
         return response_list
-    except (HTTPException, DatabaseUnavailableError):
-        raise
     except Exception as e:
-        logger.error(f"Error fetching sources: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Error fetching sources: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Bronnen ophalen mislukt")
 
 
 @router.get("/counts", response_model=SourceCountsResponse, dependencies=[RECHT_BEHEERDER])
@@ -264,21 +264,26 @@ async def get_source_counts(
         raise
     except Exception as e:
         logger.error(f"Error counting sources: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Error counting sources: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Error counting sources")
 
 
 @router.get("/{source_id}", response_model=SourceResponse, dependencies=[RECHT_LEZEN_EXTERN])
 async def get_source(
     source_id: str,
     source_svc: SourceService = Depends(get_source_service),
+    scope: ClassificationScope = Depends(current_scope),
 ):
-    """Get a specific source by ID."""
+    """Get a source within the key's classification scope; 404 otherwise.
+
+    F2-05: the text is assembled from the chunks of the current version
+    (``source.full_text`` is gone), and every count, notebook id and
+    the text only include records within the scope.
+    """
     try:
-        source = await source_svc.get(source_id)
+        source = await source_svc.get_scoped(source_id, scope=scope)
         if not source:
             raise HTTPException(status_code=404, detail="Source not found")
+        sid = str(source.id)
 
         # Get status information if command exists
         status = None
@@ -308,61 +313,10 @@ async def get_source(
                 )
                 status = "unknown"
 
-        embedded_chunks = await source_svc.get_embedding_count(source_id)
-
-        # Get associated notebooks + counts
-        from surrealdb_service.connection import ensure_record_id, execute_query
-
-        notebooks_query = await execute_query(
-            "SELECT VALUE out FROM reference WHERE in = $source_id",
-            {"source_id": ensure_record_id(source.id or source_id)},
-        )
-        notebook_ids = (
-            [str(nb_id) for nb_id in notebooks_query]
-            if notebooks_query
-            else []
-        )
-
-        # Get insights count
-        insights_rows = await execute_query(
-            "SELECT VALUE count() FROM source_insight "
-            "WHERE source = $source_id GROUP ALL",
-            {"source_id": ensure_record_id(source.id or source_id)},
-        )
-        # Een kaal getal of een ``{"count": N}``-rij (dat laatste met de index
-        # op ``source_insight.source``, migratie 89): beide uitpakken.
-        insights_count = 0
-        if insights_rows:
-            _eerste = insights_rows[0]
-            insights_count = (
-                _eerste.get("count", 0) if isinstance(_eerste, dict) else (_eerste or 0)
-            )
-
-        # Live entity count: count active entities whose source_documents
-        # links back to this source. This replaces the previously-read
-        # denormalized extraction_result.entity_count, which can be stale
-        # (e.g. when the extraction_result row failed to persist).
-        # NOTE: ``source_documents`` stores STRINGIFIED record ids (see
-        # EntityRepository.upsert_entity / entity_persistence_service: the field
-        # is written as ``[source_id]`` with ``source_id`` a plain string). The
-        # CONTAINS comparison therefore matches in string space — coercing to a
-        # RecordID here would silently never match (the original bug).
-        # Current entities = active + reference (exclude the archived/merged
-        # history left by earlier re-extraction runs).
-        entity_count_rows = await execute_query(
-            "SELECT VALUE count() FROM entity "
-            "WHERE source_documents CONTAINS $source_id "
-            "AND (status = 'active' OR status = 'reference') GROUP ALL",
-            {"source_id": str(source.id or source_id)},
-        )
-        # ``SELECT VALUE count() ... GROUP ALL`` returns a bare int on some
-        # SurrealDB builds and a ``{"count": N}`` row on others — unwrap both.
-        entity_count = 0
-        if entity_count_rows:
-            _first = entity_count_rows[0]
-            entity_count = (
-                _first.get("count", 0) if isinstance(_first, dict) else (_first or 0)
-            )
+        source_repo = source_svc.source_repo
+        counts = await source_repo.count_related(sid, scope=scope)
+        notebook_ids = await source_repo.get_notebook_ids_scoped(sid, scope=scope)
+        full_text = await source_svc.get_text(sid, scope=scope)
 
         # relation_count is read from extraction_result: relations do not carry
         # the source on the edge, so a live source-scoped count is not
@@ -371,10 +325,12 @@ async def get_source(
         # `metadata.persisted` — the relations persistence wrote (created) or
         # reinforced (merged). A row without it (filtering skipped, or written
         # before PC.1b) has no measured graph count: 0, which the UI hides.
+        from surrealdb_service.connection import execute_query
+
         extraction_rows = await execute_query(
             "SELECT metadata.persisted AS persisted FROM extraction_result "
             "WHERE source_id = $source_id LIMIT 1",
-            {"source_id": str(source.id or source_id)},
+            {"source_id": sid},
         )
         relation_count = 0
         if extraction_rows:
@@ -383,8 +339,9 @@ async def get_source(
                 persisted.get("relations_merged") or 0
             )
 
+        embedded_chunks = counts["embedding_count"]
         return SourceResponse(
-            id=source.id or "",
+            id=sid,
             title=source.title,
             topics=source.topics or [],
             asset=AssetModel(
@@ -395,11 +352,11 @@ async def get_source(
             )
             if source.asset
             else None,
-            full_text=source.full_text,
+            full_text=full_text,
             embedded=embedded_chunks > 0,
             embedded_chunks=embedded_chunks,
-            insights_count=insights_count,
-            entity_count=entity_count,
+            insights_count=counts["insights_count"],
+            entity_count=counts["entity_count"],
             relation_count=relation_count,
             file_available=_is_source_file_available(source.asset),
             created=str(source.created),
@@ -417,15 +374,10 @@ async def get_source(
             processing_stage=str(
                 getattr(source, "processing_stage", "ingested") or "ingested"
             ),
+            classification=getattr(source, "classification", None),
         )
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error fetching source {source_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching source: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Bron ophalen mislukt")
 
 
 @router.put("/{source_id}", response_model=SourceResponse, dependencies=[RECHT_BEHEERDER])
@@ -433,6 +385,7 @@ async def update_source(
     source_id: str,
     source_update: SourceUpdate,
     source_svc: SourceService = Depends(get_source_service),
+    scope: ClassificationScope = Depends(current_scope),
 ):
     """Update a source."""
     try:
@@ -458,7 +411,7 @@ async def update_source(
             )
             if source.asset
             else None,
-            full_text=source.full_text,
+            full_text=await source_svc.get_text(str(source.id), scope=scope),
             embedded=embedded_chunks > 0,
             embedded_chunks=embedded_chunks,
             created=str(source.created),
@@ -467,17 +420,15 @@ async def update_source(
             processing_stage=str(
                 getattr(source, "processing_stage", "ingested") or "ingested"
             ),
+            classification=getattr(source, "classification", None),
         )
     except HTTPException:
         raise
     except InvalidInputError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise fout_zonder_inhoud(e, "Ongeldig verzoek", status_code=400)
     except Exception as e:
         logger.error(f"Error updating source {source_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error updating source: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error updating source")
 
 
 @router.delete("/{source_id}", dependencies=[RECHT_BEHEERDER])
@@ -497,10 +448,7 @@ async def delete_source(
         raise
     except Exception as e:
         logger.error(f"Error deleting source {source_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error deleting source: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error deleting source")
 
 
 @router.get("/{source_id}/status", response_model=SourceStatusResponse, dependencies=[RECHT_BEHEERDER])
@@ -570,10 +518,7 @@ async def get_source_status(
         raise
     except Exception as e:
         logger.error(f"Error fetching status for source {source_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching source status: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error fetching source status")
 
 
 @router.get(
@@ -623,10 +568,7 @@ async def get_related_sources(
         logger.error(
             f"Error fetching related sources for {source_id}: {e}"
         )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching related sources: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error fetching related sources")
 
 
 @router.get(
@@ -696,10 +638,7 @@ async def get_related_sources_kg(
         logger.error(
             f"Error fetching KG-related sources for {source_id}: {e}"
         )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching KG-related sources: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error fetching KG-related sources")
 
 
 @router.get(
@@ -810,10 +749,7 @@ async def get_related_sources_hybrid(
         logger.error(
             f"Error fetching hybrid-related sources for {source_id}: {e}"
         )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching hybrid-related sources: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error fetching hybrid-related sources")
 
 
 @router.get(
@@ -840,6 +776,7 @@ async def get_source_insights(
                 content=insight.content,
                 created=str(insight.created),
                 updated=str(insight.updated),
+                classification=getattr(insight, "classification", None),
             )
             for insight in insights
         ]
@@ -849,10 +786,7 @@ async def get_source_insights(
         logger.error(
             f"Error fetching insights for source {source_id}: {e}"
         )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching insights: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error fetching insights")
 
 
 @router.post(
@@ -900,6 +834,7 @@ async def create_source_insight(
                 content=newest.content,
                 created=str(newest.created),
                 updated=str(newest.updated),
+                classification=getattr(newest, "classification", None),
             )
         else:
             raise HTTPException(
@@ -912,10 +847,7 @@ async def create_source_insight(
         logger.error(
             f"Error creating insight for source {source_id}: {e}"
         )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error creating insight: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error creating insight")
 
 
 @router.get("/{source_id}/chunks", dependencies=[RECHT_BEHEERDER])
@@ -968,10 +900,7 @@ async def get_source_chunks(
         logger.error(
             f"Error fetching chunks for source {source_id}: {e}"
         )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching chunks: {str(e)}",
-        )
+        raise fout_zonder_inhoud(e, "Error fetching chunks")
 
 
 @router.patch("/{source_id}/chunks/{chunk_id:path}", dependencies=[RECHT_BEHEERDER])
@@ -1005,7 +934,7 @@ async def update_chunk(
         raise
     except Exception as e:
         logger.error(f"Error updating chunk {chunk_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error updating chunk: {str(e)}")
+        raise fout_zonder_inhoud(e, "Error updating chunk")
 
 
 @router.delete("/{source_id}/chunks/{chunk_id:path}", dependencies=[RECHT_BEHEERDER])
@@ -1034,7 +963,7 @@ async def delete_chunk(
         raise
     except Exception as e:
         logger.error(f"Error deleting chunk {chunk_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error deleting chunk: {str(e)}")
+        raise fout_zonder_inhoud(e, "Error deleting chunk")
 
 
 @router.post("/{source_id}/chunks", dependencies=[RECHT_BEHEERDER])
@@ -1083,12 +1012,12 @@ async def merge_chunk(
         return merged.model_dump()
 
     except ChunkMutationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise fout_zonder_inhoud(e, "Ongeldig verzoek", status_code=400)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error merging chunk {chunk_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error merging chunk: {str(e)}")
+        raise fout_zonder_inhoud(e, "Error merging chunk")
 
 
 @router.post("/{source_id}/chunks/{chunk_id:path}/split", dependencies=[RECHT_BEHEERDER])
@@ -1116,12 +1045,12 @@ async def split_chunk(
         return {"chunks": [c.model_dump() for c in result]}
 
     except ChunkMutationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise fout_zonder_inhoud(e, "Ongeldig verzoek", status_code=400)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error splitting chunk {chunk_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error splitting chunk: {str(e)}")
+        raise fout_zonder_inhoud(e, "Error splitting chunk")
 
 
 @router.get("/{source_id}/chunk-history", dependencies=[RECHT_BEHEERDER])
@@ -1163,6 +1092,4 @@ async def get_chunk_history(
         raise
     except Exception as e:
         logger.error(f"Error reading chunk history for {source_id}: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Error reading chunk history: {str(e)}"
-        )
+        raise fout_zonder_inhoud(e, "Error reading chunk history")

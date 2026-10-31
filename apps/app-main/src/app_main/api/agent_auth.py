@@ -112,6 +112,15 @@ async def current_key(request: Request) -> AgentKeyContext:
     return ctx
 
 
+async def current_scope(request: Request) -> ClassificationScope:
+    """Dependency: het classificatiebereik van de sleutel van dit verzoek (F2-05).
+
+    De router geeft het door aan de leesmethoden van de repositories, waar het
+    een verplicht argument zonder standaard is (ADR 0002 C).
+    """
+    return (await current_key(request)).scope
+
+
 def require_right(minimum: Right | str):
     """Dependency: de route vraagt minimaal recht ``minimum``; anders 403.
 
@@ -186,5 +195,6 @@ __all__ = [
     "authenticate_request",
     "bearer_token",
     "current_key",
+    "current_scope",
     "require_right",
 ]

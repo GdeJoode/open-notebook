@@ -19,6 +19,7 @@ from shared.models.agents import (
 from app_main.api.agent_auth import require_right
 from app_main.services.agents.audit_service import AgentAuditService
 from app_main.services.agents.key_service import AgentKeyService
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(
     prefix="/agent-keys",
@@ -47,7 +48,7 @@ async def mint_agent_key(
         )
     except Exception as e:  # noqa: BLE001
         logger.error(f"Minting agent key failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Could not mint key: {str(e)}")
+        raise fout_zonder_inhoud(e, "Could not mint key")
     return AgentKeyCreated(key=plaintext, **public)
 
 

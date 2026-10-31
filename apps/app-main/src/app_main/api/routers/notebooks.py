@@ -15,7 +15,9 @@ from app_main.dependencies import (
 from app_main.services.notebook_merge_service import NotebookMergeService
 from app_main.services.notebook_service import NotebookService
 from app_main.services.source_service import SourceService
-from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN
+from app_main.api.agent_auth import RECHT_BEHEERDER, RECHT_LEZEN_EXTERN, current_scope
+from app_main.api.fouten import fout_zonder_inhoud
+from shared.models.classification import ClassificationScope
 
 router = APIRouter(prefix="/notebooks", tags=["notebooks"])
 
@@ -34,6 +36,7 @@ def _notebook_dict_to_response(data: dict) -> NotebookResponse:
         privacy_mode=data.get("privacy_mode"),
         auto_insights=data.get("auto_insights", True),
         librarian_enabled=data.get("librarian_enabled", False),
+        classification=data.get("classification"),
     )
 
 
@@ -44,11 +47,20 @@ async def list_notebooks(
     limit: int = Query(50, ge=1, le=100, description="Max notebooks to return"),
     offset: int = Query(0, ge=0, description="Number of notebooks to skip"),
     notebook_service: NotebookService = Depends(get_notebook_service),
+    scope: ClassificationScope = Depends(current_scope),
 ):
-    """List all notebooks with source and note counts."""
-    notebooks = await notebook_service.get_all_with_counts(
-        order_by=order_by, archived=archived, limit=limit, offset=offset,
-    )
+    """List the notebooks within the key's classification scope (F2-05).
+
+    The counts only include sources and notes within the scope.
+    """
+    try:
+        notebooks = await notebook_service.list_scoped(
+            scope=scope, order_by=order_by, archived=archived, limit=limit, offset=offset,
+        )
+    except ValueError as e:
+        raise fout_zonder_inhoud(e, "Ongeldige volgorde", status_code=400)
+    except Exception as e:
+        raise fout_zonder_inhoud(e, "Notebooks ophalen mislukt")
     return [_notebook_dict_to_response(nb) for nb in notebooks]
 
 
@@ -73,9 +85,13 @@ async def create_notebook(
 async def get_notebook(
     notebook_id: str,
     notebook_service: NotebookService = Depends(get_notebook_service),
+    scope: ClassificationScope = Depends(current_scope),
 ):
-    """Get a notebook by ID with source and note counts."""
-    data = await notebook_service.get_with_counts(notebook_id)
+    """Get a notebook within the key's classification scope; 404 otherwise."""
+    try:
+        data = await notebook_service.get_scoped(notebook_id, scope=scope)
+    except Exception as e:
+        raise fout_zonder_inhoud(e, "Notebook ophalen mislukt")
     if not data:
         raise HTTPException(status_code=404, detail="Notebook not found")
     return _notebook_dict_to_response(data)
