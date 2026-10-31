@@ -8,13 +8,15 @@ Twee vormen:
 
       python scripts/signaalsysteem/maak_sleutel.py beheerder --persoon "Naam"
 
-  dienst     een dienstsleutel (``pijplijn``, ``lezen_intern`` of ``ophalen``)
+  dienst     een dienstsleutel (``pijplijn``, ``lezen_extern``, ``lezen_intern``
+             of ``ophalen``)
              als geheimbestand onder ``secrets/`` voor Docker secrets. Op het
              scherm staat alleen het pad en het niet-geheime voorvoegsel. Mislukt
              het schrijven, dan wordt de sleutel meteen ingetrokken.
 
-``lezen_extern`` weigert het script tot F2-05: tot dan filtert de API nog niet
-op classificatie, dus zo'n sleutel zou ook interne records zien.
+``lezen_extern`` (de sleutel van open-notebook-mcp) kan sinds F2-05: de API
+filtert op classificatie, en ``tests/test_contract_lezen_extern.py`` in
+``apps/app-main`` toetst dat zo'n sleutel niets interns ziet.
 
       python scripts/signaalsysteem/maak_sleutel.py dienst --recht pijplijn \\
           --agent langflow --bestand secrets/sleutel_langflow
@@ -33,14 +35,6 @@ from pathlib import Path
 from typing import Optional
 
 DIENSTRECHTEN = ("pijplijn", "lezen_extern", "lezen_intern", "ophalen")
-
-#: Tot F2-05 (classificatiefilter in de API) geweigerd.
-NOG_NIET = {
-    "lezen_extern": (
-        "het recht lezen_extern kan pas na F2-05: de API filtert nog niet op "
-        "classificatie, dus deze sleutel zou ook interne records zien"
-    ),
-}
 
 #: De map voor geheimbestanden: ``secrets/`` in de root van de repository.
 SECRETS_MAP = Path(__file__).resolve().parents[2] / "secrets"
@@ -93,8 +87,6 @@ async def maak(
     secrets_map: Path = SECRETS_MAP,
 ) -> str:
     """Maak de sleutel en geef terug wat op het scherm mag."""
-    if recht in NOG_NIET:
-        raise ValueError(NOG_NIET[recht])
     if vorm == "dienst":
         if bestand is None:
             raise ValueError("een dienstsleutel vraagt --bestand")
