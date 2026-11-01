@@ -1,0 +1,36 @@
+# Toegestane componenttypen in Langflow (ADR 0022 D, plan van aanpak F2-12).
+#
+# Het opstartscript van de container langflow (services/langflow/scripts/
+# flows_laden.py) toetst elke flow uit Git vóór het laden: elk knooppunttype
+# moet hieronder staan. Een flow met een ander type wordt niet geladen; het
+# script noemt de flow en het type en eindigt met een foutcode.
+#
+# Het type is `data.type` van een knooppunt in de flow-JSON:
+# - een kerncomponent van Langflow 1.13.0 heet naar zijn `name`, zoals `TextInput`;
+# - een eigen component uit services/langflow/components/signaalsysteem/ heet
+#   `ext:signaalsysteem:<Naam>@extra` (proeven.md §8 punt 10);
+# - een notitie in de editor heeft het type `note` (geen component, geen code).
+#
+# Niet op de lijst, en daar ook niet op te zetten zonder ADR: componenten van
+# modelaanbieders, API Request, webzoeken, MCP-tools, Python Interpreter en elke
+# andere component met een netwerk- of codefunctie.
+
+versie: 1
+
+kern:
+  # Planning (ADR 0017 C, P2): de schema-trigger; geen netwerk- of codefunctie.
+  - type: ScheduleTrigger
+    reden: planning met cron, tijdzone en inhaalbeleid
+  # Tekst in en uit voor een handmatige run via de API; geen netwerk of code.
+  - type: TextInput
+    reden: tekstinvoer van een handmatige run
+  - type: TextOutput
+    reden: tekstuitvoer van een run
+
+notities:
+  - type: note
+    reden: notitie in de editor, wordt niet uitgevoerd
+
+# Eigen componenten (services/langflow/components/signaalsysteem/). Volgen vanaf
+# F2-16; test_componentenlijst.py toetst dat elke eigen component hier staat.
+eigen: []
