@@ -88,3 +88,5 @@ Optie 2, in zes onderdelen.
   - `ophalen` weigert een adres dat niet bij een actieve, externe regel hoort (HTTP 403);
   - de gateway weigert een aanroep met één intern fragment, weigert vrije tekst, en krijgt geen verbinding met een host buiten het domein van Anthropic;
   - `docker inspect` van `langflow` toont geen Claude-sleutel en geen verboden variabele.
+
+**Uitwerking in F2-12 (01-11).** Langflow 1.13.0 hangt MCP- en agentinterfaces ook in als de instellingen ze uitzetten (`/api/v1/mcp`, `/api/v2/mcp`, `/api/v1/agentic/mcp`, A2A, OpenAI Responses). Het afgeleide image haalt die routes weg (de build faalt als dat niet lukt) en de editorproxy geeft er 404 op; L2 toetst dat aangemeld. Uitgaande aanvragen bij starten en gebruik (pypi-versiecontrole, models.dev, MCP Composer, Store) staan uit; L7 telt de DNS-vragen. De componentenlijst geldt voor de lader én als blokkeerlijst in Langflow zelf (catalog-policy); de laatste kan de superuser terugdraaien en is dus een extra laag naast het netwerk. Restrisico: de editor in de browser van de host haalt externe adressen op (GitHub-sterren, Discord-teller); er gaat geen interne inhoud mee.
