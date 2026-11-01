@@ -536,7 +536,17 @@ def test_beheer_alleen_llama_swap_en_socket_proxy(config_gpu) -> None:
 def test_socket_proxy_configuratie_b(config_gpu) -> None:
     """P7, K2: alleen starten en stoppen; create, exec en inspect dicht."""
     env = config_gpu["services"]["socket-proxy"]["environment"]
-    assert env == {"POST": "1", "ALLOW_START": "1", "ALLOW_STOP": "1", "CONTAINERS": "0"}
+    assert env == {"POST": "1", "ALLOW_START": "1", "ALLOW_STOP": "1", "CONTAINERS": "0",
+                   "EVENTS": "0", "VERSION": "0"}
+
+
+def test_proxy_en_llama_swap_gehard(config_gpu) -> None:
+    """Review F2-11, punt 6."""
+    for naam in ("socket-proxy", "llama-swap"):
+        dienst = config_gpu["services"][naam]
+        assert dienst.get("read_only") is True, naam
+        assert dienst.get("cap_drop") == ["ALL"], naam
+        assert "no-new-privileges:true" in (dienst.get("security_opt") or []), naam
 
 
 def test_docker_socket_alleen_in_de_socket_proxy(config_gpu) -> None:
@@ -605,7 +615,11 @@ def test_llama_swap_image_met_docker_client_en_configuratie() -> None:
     assert re.search(r"^FROM docker:29\.9\.2-cli@sha256:\S+ AS cli$", tekst, re.M)
     assert re.search(r"^FROM ghcr\.io/mostlygeek/llama-swap:v268-cuda13-b11977@sha256:", tekst, re.M)
     assert "COPY --from=cli /usr/local/bin/docker /usr/local/bin/docker" in tekst
-    assert re.search(r"^COPY config\.yaml /app/config\.yaml$", tekst, re.M)
+    assert re.search(r"^COPY --chmod=444 config\.yaml /app/config\.yaml$", tekst, re.M)
+    # Geen -watch-config: de configuratie verandert alleen met een nieuw image.
+    assert re.search(r'^ENTRYPOINT \["/app/llama-swap", "-config", "/app/config\.yaml"\]$',
+                     tekst, re.M)
+    assert "watch-config" not in tekst.replace("zonder -watch-config", "")
     assert "docker.sock" not in tekst
 
 
