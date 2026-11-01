@@ -9,7 +9,9 @@
    * ``SIGNAAL_BRONARCHIEF`` is alleen-lezen gekoppeld, ``SIGNAAL_FORK_ARCHIEF``
      schrijfbaar;
    * geen koppeling ligt in of onder een pad uit ``SIGNAAL_VAULT_PADEN``;
-   * geen koppeling bevat een map ``.obsidian`` (een vault, hoe ook gekoppeld).
+   * geen innamemap, watchfolder of exportmap bevat een map ``.obsidian`` (een
+     vault, hoe ook gekoppeld), tot ``OBSIDIAN_DIEPTE`` niveaus diep; een map die
+     niet te lezen is, telt als fout.
    Faalt de controle, dan start de API niet (exitcode 1).
 3. Start supervisord (API en interface).
 
@@ -26,8 +28,8 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 GEHEIMEN = Path("/run/secrets")
-#: Koppelpunten van het systeem; daar zoekt de controle niet naar ``.obsidian``.
-_SYSTEEM = ("/proc", "/sys", "/dev", "/etc", "/run", "/usr", "/lib")
+#: Zo diep zoekt de startcontrole naar ``.obsidian`` (een vault ligt hoog in een map).
+OBSIDIAN_DIEPTE = 6
 SUPERVISORD = ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
 
 
@@ -85,17 +87,21 @@ def controleer_koppelingen(kop: dict[str, set[str]], env: dict[str, str]) -> lis
     return fouten
 
 
-def obsidian_mappen(punten: Iterable[str]) -> list[str]:
-    """Mappen ``.obsidian`` in of onder de gegeven koppelpunten."""
-    gevonden: list[str] = []
+def obsidian_mappen(punten: Iterable[str], diepte: int = OBSIDIAN_DIEPTE) -> list[str]:
+    """Fouten: mappen ``.obsidian`` in of onder de punten (tot ``diepte``
+    niveaus), en mappen die niet te lezen zijn."""
+    fouten: list[str] = []
     for punt in punten:
-        if punt == "/" or any(punt == s or punt.startswith(s + "/") for s in _SYSTEEM):
-            continue
-        for map_, submappen, _ in os.walk(punt, followlinks=False):
+        def fout(exc: OSError) -> None:
+            fouten.append(f"{getattr(exc, 'filename', punt)} niet te lezen ({type(exc).__name__})")
+        basis = punt.rstrip("/").count("/")
+        for map_, submappen, _ in os.walk(punt, onerror=fout, followlinks=False):
             if ".obsidian" in submappen:
-                gevonden.append(os.path.join(map_, ".obsidian"))
-                break
-    return gevonden
+                fouten.append(f"koppeling bevat een vault ({os.path.join(map_, '.obsidian')})")
+                submappen.clear()
+            if map_.rstrip("/").count("/") - basis >= diepte:
+                submappen.clear()
+    return fouten
 
 
 def main(argv: list[str]) -> int:
@@ -105,7 +111,11 @@ def main(argv: list[str]) -> int:
         os.execvpe(argv[0], argv, env)
     kop = koppelingen(Path("/proc/self/mountinfo").read_text(encoding="utf-8"))
     fouten = controleer_koppelingen(kop, env)
-    fouten += [f"koppeling bevat een vault ({p})" for p in obsidian_mappen(kop)]
+    te_doorzoeken = [p for p in _lijst(env.get("SIGNAAL_INNAME_PADEN")) if _posix(p)]
+    # De exportmap is pas in fase 5 gekoppeld; zonder koppeling niets te doorzoeken.
+    te_doorzoeken += [p for p in _lijst(env.get("SIGNAAL_EXPORTMAP_PADEN"))
+                      if _posix(p) and p in kop]
+    fouten += obsidian_mappen(te_doorzoeken)
     if fouten:
         for fout in fouten:
             print(f"startcontrole: {fout}", file=sys.stderr)

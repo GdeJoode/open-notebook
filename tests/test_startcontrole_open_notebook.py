@@ -86,5 +86,24 @@ def test_koppeling_met_obsidian_wordt_geweigerd(tmp_path) -> None:
     vault = tmp_path / "andere-naam"
     (vault / "20 Atlas" / ".obsidian").mkdir(parents=True)
     assert s.obsidian_mappen([str(schoon)]) == []
-    assert s.obsidian_mappen([str(schoon), str(vault)]) == [str(vault / "20 Atlas" / ".obsidian")]
-    assert s.obsidian_mappen(["/proc", "/"]) == []
+    [fout] = s.obsidian_mappen([str(schoon), str(vault)])
+    assert str(vault / "20 Atlas" / ".obsidian") in fout
+
+
+def test_obsidian_alleen_tot_de_maximale_diepte(tmp_path) -> None:
+    s = _start()
+    diep = tmp_path / "inname"
+    pad = diep
+    for i in range(s.OBSIDIAN_DIEPTE + 2):
+        pad = pad / f"n{i}"
+    (pad / ".obsidian").mkdir(parents=True)
+    assert s.obsidian_mappen([str(diep)]) == []
+    ondiep = tmp_path / "watch" / "a" / "b"
+    (ondiep / ".obsidian").mkdir(parents=True)
+    assert s.obsidian_mappen([str(tmp_path / "watch")])
+
+
+def test_fout_tijdens_de_doorloop_wordt_gemeld(tmp_path) -> None:
+    s = _start()
+    fouten = s.obsidian_mappen([str(tmp_path / "bestaat-niet")])
+    assert fouten and "niet te lezen" in fouten[0]
