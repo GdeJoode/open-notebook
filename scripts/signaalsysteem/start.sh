@@ -2,11 +2,15 @@
 # Start de Compose-omgeving van het signaalsysteem (F2-10). `up` gaat alleen via
 # dit script; stoppen met scripts/signaalsysteem/stop.sh.
 #
+# 0. Weigert als de oude stack draait (containers van project open-notebook,
+#    of iets op poort 8000 van de host).
 # 1. Hostpaden (SIGNAAL_INNAMEMAP, SIGNAAL_WATCHFOLDER, SIGNAAL_VAULT,
 #    SIGNAAL_EXPORTMAP) uit de omgeving of uit .env (voorbeeld in .env.example).
 # 2. Een minimale kloon van de flowmap (HEAD, alleen services/langflow/flows)
 #    voor het flowregister, alleen-lezen gekoppeld; niet de hele .git (K1).
-# 3. SIGNAAL_FORK_COMMIT = HEAD, als build-argument van het image (K2).
+# 3. SIGNAAL_FORK_COMMIT = HEAD, of HEAD-dirty bij een vuile werkmap, als
+#    build-argument van het image (K2); zonder --build een waarschuwing als het
+#    label van het bestaande image afwijkt (controle/forkcommit.sh).
 # 4. Startcontrole: elk bind-pad op de host canoniek (controle/canoniek.ps1),
 #    daarna controle/padlijsten.py. Faalt die, dan start er niets (exitcode 1).
 # 5. `docker compose up -d`; extra argumenten gaan naar `up` (bijv. --build).
@@ -20,6 +24,16 @@ CONTROLE="$ROOT/scripts/signaalsysteem/controle"
 PY_IMG="python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337"
 STAAT="${SIGNAAL_STAAT:-$HOME/.cache/signaal}"
 FLOWS=services/langflow/flows
+
+# 0. Niet naast de oude stack.
+if [[ -n "$(docker ps -q --filter label=com.docker.compose.project=open-notebook)" ]]; then
+  echo "weigert: containers van de oude stack (project open-notebook) draaien" >&2; exit 1
+fi
+rc=0; curl -s -o /dev/null --max-time 3 "http://127.0.0.1:8000/" || rc=$?
+if [[ $rc -ne 7 ]]; then
+  echo "weigert: poort 8000 op de host is in gebruik (curl $rc); de oude stack draait mogelijk" >&2
+  exit 1
+fi
 
 # 1. Alleen de hostpaden uit .env overnemen, geen andere waarden.
 for naam in SIGNAAL_INNAMEMAP SIGNAAL_WATCHFOLDER SIGNAAL_VAULT SIGNAAL_EXPORTMAP; do
@@ -49,7 +63,13 @@ git -C "$kloon" remote remove origin
 export SIGNAAL_FLOWS_KLOON="$kloon"
 
 # 3. De commit van de fork voor het image.
-export SIGNAAL_FORK_COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
+SIGNAAL_FORK_COMMIT="$(bash "$CONTROLE/forkcommit.sh" "$ROOT")"
+export SIGNAAL_FORK_COMMIT
+if [[ " $* " != *" --build "* ]]; then
+  label="$(docker image inspect signaal/open-notebook:lokaal \
+    -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
+  bash "$CONTROLE/forkcommit.sh" "$ROOT" --label "$label" || true
+fi
 
 # 4. Startcontrole.
 config="$("${COMPOSE[@]}" config --format json)"
