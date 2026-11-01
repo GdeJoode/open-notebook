@@ -126,5 +126,5 @@ def test_refresh_never_loads_less_than_is_loaded(tmp_path, monkeypatch):
     _opzet(tmp_path / "kleiner", monkeypatch, [_BZK])
     r = _refresh(repo)
     assert r.status_code == 409
-    assert "mnre1150" in r.json()["detail"]
+    assert "would drop" in r.json()["detail"] and "mnre1150" not in r.json()["detail"]
     assert repo.rows == voor

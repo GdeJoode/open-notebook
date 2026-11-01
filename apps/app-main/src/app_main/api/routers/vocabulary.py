@@ -47,6 +47,7 @@ from app_main.services.entity_resolution.vocabulary_reconciler import (
     VocabularyReconciler,
 )
 from app_main.api.agent_auth import RECHT_BEHEERDER
+from app_main.api.fouten import fout_zonder_inhoud
 
 router = APIRouter(prefix="/vocabulary", tags=["vocabulary"], dependencies=[RECHT_BEHEERDER])
 
@@ -154,11 +155,13 @@ async def refresh_vocabulary(
             verslag = await laad_tooi(repo, tooi_set(lees_inventaris(_inventaris())),
                                       _cachemap())
         except BronOntbreekt as exc:
-            raise HTTPException(status_code=503, detail=(
-                f"TOOI registers not available: {exc}. Run "
-                "scripts/signaalsysteem/laad_referentiegegevens.sh")) from exc
+            raise fout_zonder_inhoud(exc, (
+                "TOOI registers not available; run "
+                "scripts/signaalsysteem/laad_referentiegegevens.sh"), status_code=503) from exc
         except MinderGegevens as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise fout_zonder_inhoud(exc, (
+                "TOOI load refused: it would drop organisations already loaded"),
+                status_code=409) from exc
         results.append(ProviderRefreshOut(name="tooi", loaded=verslag["geladen"]))
 
     if wanted is None or "crossref" in wanted:
