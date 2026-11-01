@@ -633,3 +633,113 @@ def test_startcontrole_toetst_ook_diensten_van_llama_swap(config_gpu, hostpaden)
              "read_only": True}
     fouten = _padlijsten().controleer(_met(config_gpu, "docling-serve", [vault]), hostpaden)
     assert any(f.startswith("docling-serve:") for f in fouten), fouten
+
+
+# --------------------------------------------------------------------------
+# Langflow en de editor (F2-12; ADR 0017, ADR 0022 A, D, F)
+# --------------------------------------------------------------------------
+
+LANGFLOW_DIGEST = "sha256:ff2716e017f4a4bbb9e83556bf66c3d5d70a1d3eb7cffd893312600ba84e303f"
+LANGFLOW_VAST = {
+    "LANGFLOW_AUTO_LOGIN": "false",
+    "LANGFLOW_MCP_SERVER_ENABLED": "false",
+    "LANGFLOW_ADD_PROJECTS_TO_MCP_SERVERS": "false",
+    "LANGFLOW_MCP_COMPOSER_ENABLED": "false",
+    "LANGFLOW_COMPONENTS_PATH": "/app/componenten",
+    "LANGFLOW_ALLOW_CUSTOM_COMPONENTS": "false",
+    "LANGFLOW_SUBSTITUTE_OUTDATED_COMPONENT_CODE": "false",
+    "LANGFLOW_BLOCK_CODE_INTERPRETER_COMPONENTS": "true",
+    "LANGFLOW_AGENTIC_EXPERIENCE": "false",
+    "LANGFLOW_ALLOW_COMPONENTS_PATHS_OVERRIDE": "true",
+    "LANGFLOW_DEACTIVATE_TRACING": "true",
+    "DO_NOT_TRACK": "true",
+    "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+    "LANGFLOW_MODELS_DEV_REFRESH": "false",
+    "SIGNAAL_MODELREGISTER": "/config/modelregister.yaml",
+}
+_VERBODEN = re.compile(r"^(LANGCHAIN_|LANGSMITH_|LANGFUSE_|LANGWATCH_|ARIZE_|OPIK_|PHOENIX_|"
+                       r"TRACELOOP_|OPENLAYER_|OTEL_EXPORTER_OTLP_|ANTHROPIC_|CLAUDE_)", re.I)
+
+
+def test_langflow_alleen_op_verwerking_en_editor_intern(config) -> None:
+    assert _netwerken(config["services"]["langflow"]) == {"verwerking", "editor-intern"}
+    assert not config["services"]["langflow"].get("ports")
+    assert _netwerken(config["services"]["editor-toegang"]) == {"editor-intern", "toegang"}
+    assert _leden(config, "editor-intern") == {"editor-toegang", "langflow"}
+
+
+def test_editor_alleen_via_proxy_op_localhost(config) -> None:
+    [poort] = config["services"]["editor-toegang"]["ports"]
+    assert poort["host_ip"] == "127.0.0.1" and str(poort["target"]) == "8080"
+    tekst = (ROOT / "services" / "proxy" / "editor.conf").read_text(encoding="utf-8")
+    doelen = re.findall(r"http://[^\s;]+", tekst)
+    assert doelen == ["http://langflow:7860"], doelen
+    # Geen MCP via de editor.
+    assert re.search(r"location \^~ /api/v1/mcp \{\s*return 404;", tekst)
+    assert re.search(r"location \^~ /api/v2/mcp \{\s*return 404;", tekst)
+
+
+def test_langflow_vaste_instellingen(config) -> None:
+    env = config["services"]["langflow"]["environment"]
+    for naam, waarde in LANGFLOW_VAST.items():
+        assert env.get(naam) == waarde, naam
+
+
+def test_langflow_geen_verboden_variabele_en_alleen_drie_geheimen(config) -> None:
+    langflow = config["services"]["langflow"]
+    assert not [n for n in langflow["environment"] if _VERBODEN.match(n)]
+    assert sorted(s["source"] for s in langflow["secrets"]) == [
+        "langflow_secret_key", "langflow_superuser", "sleutel_pijplijn"]
+    for naam, waarde in langflow["environment"].items():
+        assert "claude" not in naam.lower() and "anthropic" not in str(waarde).lower(), naam
+
+
+def test_geen_andere_dienst_heeft_de_langflow_geheimen(config) -> None:
+    for naam, dienst in config["services"].items():
+        if naam != "langflow":
+            bronnen = {s["source"] for s in dienst.get("secrets") or []}
+            assert not bronnen & {"langflow_secret_key", "langflow_superuser"}, naam
+
+
+def test_langflow_koppelingen(config, hostpaden) -> None:
+    langflow = config["services"]["langflow"]
+    kop = {k["target"]: k for k in langflow["volumes"]}
+    assert kop["/app/componenten"].get("read_only") is True
+    assert Path(kop["/app/componenten"]["source"]) == ROOT / "services" / "langflow" / "components"
+    assert kop["/config"].get("read_only") is True
+    assert kop["/app/flows-git"].get("read_only") is True
+    assert Path(kop["/app/flows-git"]["source"]) == Path(hostpaden["SIGNAAL_FLOWS_KLOON"])
+    assert langflow["environment"]["SIGNAAL_FLOWS_MAP"] == \
+        config["services"]["open-notebook"]["environment"]["SIGNAAL_FLOWS_DIR"]
+    for doel in ("/inname", "/watchfolder"):
+        assert kop[doel].get("read_only") is True
+    # Schrijfbaar alleen de eigen gegevens en het bronarchief; nooit de vault.
+    schrijfbaar = {d for d, k in kop.items() if not k.get("read_only")}
+    assert schrijfbaar == {"/app/data", "/bronarchief"}
+    assert not any(d.startswith("/vault") for d in kop)
+    assert Path(hostpaden["SIGNAAL_VAULT"]) not in {Path(k["source"]) for k in kop.values()
+                                                    if k["type"] == "bind"}
+
+
+def test_langflow_image_vast_en_met_modelregister() -> None:
+    tekst = (ROOT / "services" / "langflow" / "Dockerfile").read_text(encoding="utf-8")
+    assert re.search(rf"^FROM langflowai/langflow:1\.13\.0@{LANGFLOW_DIGEST}$", tekst, re.M)
+    assert re.search(r"^ENV SIGNAAL_MODELREGISTER=/config/modelregister\.yaml", tekst, re.M)
+    assert "COPY --from=llm_manager . /app/signaal/lib/llm_manager/" in tekst
+    assert re.search(r'^ENTRYPOINT \["/app/signaal/start\.sh"\]$', tekst, re.M)
+    code = "\n".join(r for r in tekst.splitlines() if not r.lstrip().startswith("#"))
+    assert "pip install" not in code and "uv pip" not in code
+
+
+def test_langflow_build_met_llm_manager(config) -> None:
+    build = config["services"]["langflow"]["build"]
+    extra = build.get("additional_contexts") or {}
+    assert Path(extra["llm_manager"]) == ROOT / "packages" / "llm-manager" / "src" / "llm_manager"
+
+
+def test_start_sh_maakt_de_langflow_geheimen() -> None:
+    tekst = (ROOT / "scripts" / "signaalsysteem" / "start.sh").read_text(encoding="utf-8")
+    for geheim in ("langflow_superuser", "langflow_secret_key", "sleutel_pijplijn"):
+        assert f'"$ROOT/secrets/{geheim}"' in tekst, geheim
+    # Fernet: url-veilig base64 van 32 bytes.
+    assert "head -c 32 /dev/urandom | base64 | tr '+/' '-_'" in tekst

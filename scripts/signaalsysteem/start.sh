@@ -18,6 +18,8 @@
 # 6. De containers die llama-swap start (profiel door-llama-swap, F2-11) worden
 #    alleen aangemaakt, niet gestart. Het geheim van docling-serve wordt
 #    aangemaakt als het ontbreekt (secrets/, buiten Git).
+#    Ook de geheimen van Langflow (F2-12): wachtwoord en Fernet-sleutel, en een
+#    leeg bestand voor de pijplijnsleutel (die maakt de beheerder).
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 
@@ -98,9 +100,25 @@ if ! bash "$ROOT/scripts/signaalsysteem/modellen_laden.sh" --controle >/dev/null
 fi
 
 # 5. Starten.
+mkdir -p "$ROOT/secrets"
 if [[ ! -s "$ROOT/secrets/docling_api_key" ]]; then
-  mkdir -p "$ROOT/secrets"
   (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$ROOT/secrets/docling_api_key")
+fi
+# Langflow (F2-12): wachtwoord van de superuser en LANGFLOW_SECRET_KEY, een
+# Fernet-sleutel (32 bytes, url-veilig base64; proeven.md §8 punt 15). Alleen
+# als ze ontbreken: de database van Langflow (langflow_data) hangt ervan af.
+if [[ ! -s "$ROOT/secrets/langflow_superuser" ]]; then
+  (umask 077; head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$ROOT/secrets/langflow_superuser")
+fi
+if [[ ! -s "$ROOT/secrets/langflow_secret_key" ]]; then
+  (umask 077; head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n' > "$ROOT/secrets/langflow_secret_key")
+fi
+# De pijplijnsleutel maakt de beheerder met maak_sleutel.py (README, Beheer);
+# tot die tijd een leeg bestand, zodat Compose kan starten. Het startscript van
+# langflow meldt dat de sleutel ontbreekt.
+if [[ ! -e "$ROOT/secrets/sleutel_pijplijn" ]]; then
+  (umask 077; : > "$ROOT/secrets/sleutel_pijplijn")
+  echo "let op: secrets/sleutel_pijplijn is leeg; maak de pijplijnsleutel (docs/signaalsysteem/README.md, Beheer)" >&2
 fi
 "${COMPOSE[@]}" up -d "$@"
 
