@@ -6,8 +6,9 @@
 #   llm_manager gebruikt alleen pydantic, pyyaml, loguru en httpx, die het image
 #   al heeft (geen pip install, niets van internet bij het bouwen);
 # - het startscript en de scripts voor laden en exporteren van flows.
-# De eigen componenten (services/langflow/components) en config/ worden
-# alleen-lezen gekoppeld; de componenten zitten niet in het image.
+# De eigen componenten en de componentenlijst komen uit de kloon van HEAD
+# (/app/flows-git, alleen-lezen) en config/ wordt alleen-lezen gekoppeld; ze
+# zitten niet in het image.
 FROM langflowai/langflow:1.13.0@sha256:ff2716e017f4a4bbb9e83556bf66c3d5d70a1d3eb7cffd893312600ba84e303f
 
 USER root
@@ -18,20 +19,24 @@ RUN rm -rf /app/signaal/lib/llm_manager/__pycache__ /app/signaal/lib/llm_manager
  && chmod -R a+rX,go-w /app/signaal && chmod 755 /app/signaal/start.sh \
  && mkdir -p /app/data && chown 1000:0 /app/data
 
-# MCP-server van Langflow uit (FO 11, ADR 0017). In 1.13.0 hangt
-# langflow/api/router.py de MCP-routes altijd in, ook met
-# LANGFLOW_MCP_SERVER_ENABLED=false: aangemeld gaf /api/v1/mcp/sse HTTP 200
-# (F2-12). Daarom gaan die drie regels eruit; main.py hangt de MCP-router alleen
-# in als de instelling aan staat. Ontbreekt een regel (andere versie), dan faalt
-# de build.
-RUN f=/app/.venv/lib/python3.14/site-packages/langflow/api/router.py \
- && for r in 'router_v1.include_router(mcp_router)' 'router_v1.include_router(mcp_projects_router)' \
-             'router_v2.include_router(mcp_router_v2)'; do \
-      grep -qxF "$r" "$f" || { echo "niet gevonden in $f: $r" >&2; exit 1; }; done \
- && sed -i -e '/^router_v1\.include_router(mcp_router)$/d' -e '/^router_v1\.include_router(mcp_projects_router)$/d' \
-           -e '/^router_v2\.include_router(mcp_router_v2)$/d' "$f" \
- && ! grep -q 'include_router(mcp' "$f" \
- && rm -f /app/.venv/lib/python3.14/site-packages/langflow/api/__pycache__/router.*.pyc
+# Agent- en MCP-interfaces van Langflow uit (FO 11, ADR 0017, ADR 0022).
+# In 1.13.0 hangt langflow/api/router.py ze altijd in, ook met
+# LANGFLOW_MCP_SERVER_ENABLED=false: aangemeld gaf /api/v1/mcp/sse HTTP 200, en
+# /api/v1/agentic/mcp is een tweede MCP-server (F2-12, review B1). Weg gaan: de
+# MCP-server (v1, per project, v2-configuratie), de MCP-server van de assistent,
+# A2A (/api/v1/a2a) en de OpenAI-Responses-API (/api/v1/responses). main.py
+# hangt de MCP-router alleen in als de instelling aan staat. Ontbreekt een regel
+# (andere versie), of blijft daarna in langflow/api een include_router met mcp,
+# a2a of openai_responses over, dan faalt de build.
+RUN d=/app/.venv/lib/python3.14/site-packages/langflow/api \
+ && for r in 'router_v1\.include_router\(mcp_router\)' 'router_v1\.include_router\(mcp_projects_router\)' \
+             'router_v2\.include_router\(mcp_router_v2\)' 'router_v1\.include_router\(agentic_mcp_router\)' \
+             'router_v1\.include_router\(a2a_router\)' 'router_v1\.include_router\(openai_responses_router\)'; do \
+      grep -qE "^[[:space:]]*$r\$" "$d/router.py" || { echo "niet gevonden in router.py: $r" >&2; exit 1; }; \
+      sed -i -E "/^[[:space:]]*$r\$/d" "$d/router.py"; done \
+ && if grep -rnE 'include_router\(.*(mcp|a2a|openai_responses)' "$d" --include=*.py; then \
+      echo "nog een MCP- of agentrouter in langflow/api" >&2; exit 1; fi \
+ && rm -f "$d"/__pycache__/router.*.pyc
 
 # Geen versiecontrole bij het starten (F2-12, controle L7): `langflow run` vraagt
 # in print_banner altijd de nieuwste versie op bij pypi.org; de telling vond
@@ -45,8 +50,10 @@ RUN f=/app/.venv/lib/python3.14/site-packages/langflow/utils/version.py \
 
 # Verplicht in dit image: het standaardpad van llm_manager wijst naar een
 # checkout van de repository (review F2-07). Compose koppelt config/ op /config.
+# De componentenlijst en de eigen componenten komen uit de kloon van HEAD
+# (start.sh), net als de flows (review F2-12, punt 3).
 ENV SIGNAAL_MODELREGISTER=/config/modelregister.yaml \
-    SIGNAAL_COMPONENTENLIJST=/config/langflow-componenten.yaml
+    SIGNAAL_COMPONENTENLIJST=/app/flows-git/config/langflow-componenten.yaml
 
 USER 1000
 ENTRYPOINT ["/app/signaal/start.sh"]
