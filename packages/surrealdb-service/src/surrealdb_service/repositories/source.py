@@ -605,7 +605,10 @@ class SourceRepository(BaseRepository[Source]):
 
     async def delete_embeddings(self, source_id: str) -> int:
         """
-        Delete all embeddings for a source.
+        Delete the embeddings without a run for a source.
+
+        Embeddings with a run are provenance (ADR 0003, F2-15) and stay: a
+        re-embed never wipes another run's embeddings.
 
         Args:
             source_id: Source ID.
@@ -615,7 +618,7 @@ class SourceRepository(BaseRepository[Source]):
         """
         try:
             result = await execute_query(
-                "DELETE source_embedding WHERE source=$source_id",
+                "DELETE source_embedding WHERE source=$source_id AND run = NONE",
                 {"source_id": ensure_record_id(source_id)},
                 self.config,
             )

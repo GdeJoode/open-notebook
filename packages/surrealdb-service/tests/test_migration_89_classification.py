@@ -183,6 +183,7 @@ async def test_embedding_niet_losser_dan_zijn_fragment(live_surrealdb: SurrealDB
     await _q(
         live_surrealdb,
         "CREATE type::thing($id) CONTENT {source: type::thing($b), chunk: type::thing($c),"
+        " run: type::thing($c).run, embedding_model: 'embed:v1', afgekapt: false,"
         " content: 'x', order: 0, embedding: []}",
         {"id": rid, "b": bron, "c": fragment},
     )

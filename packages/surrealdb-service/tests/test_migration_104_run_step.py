@@ -145,11 +145,10 @@ async def test_embedding_met_run_schrijven_en_teruglezen(live_surrealdb) -> None
                          {"id": ensure_record_id(rij["id"])})
     assert (str(gelezen["run"]), gelezen["embedding_model"], gelezen["afgekapt"]) == (
         o["run"], "embed:v1", True)
-    # Zonder run (de oude route) blijft het als voorheen.
-    zonder = _embedding(o, run=None, embedding_model=None, afgekapt=None)
-    for veld in ("run", "embedding_model", "afgekapt"):
-        zonder.pop(veld, None)
-    await _q(live_surrealdb, "CREATE source_embedding CONTENT $d", {"d": zonder})
+    # Zonder run en zonder fragment blijft het als voorheen; zonder run bij een
+    # fragment met een run kan sinds migratie 105 niet meer.
+    await _q(live_surrealdb, "CREATE source_embedding CONTENT $d",
+             {"d": _embedding(o, chunk=None, run=None, embedding_model=None, afgekapt=None)})
 
 
 @pytest.mark.parametrize("weg", ["embedding_model", "afgekapt", "chunk"])

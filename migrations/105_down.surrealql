@@ -1,0 +1,12 @@
+-- ============================================================================
+-- Migratie 105 terug (F2-15): `source_embedding.source` weer zonder ASSERT,
+-- zonder de unieke index op fragment en run, en zonder het event op
+-- `processing_run`. `run_step.review_item` houdt het brede type, zodat
+-- bestaande stappen geldig blijven (zoals `102_down`). Idempotent.
+-- ============================================================================
+
+DEFINE FIELD OVERWRITE source ON source_embedding TYPE record<source> READONLY;
+REMOVE INDEX IF EXISTS uniek_embedding_run ON source_embedding;
+REMOVE EVENT IF EXISTS stappen_bij_sluiten ON processing_run;
+
+RETURN NONE;

@@ -1,0 +1,43 @@
+-- ============================================================================
+-- Migratie 105: reviewpunten F2-15 (ADR 0011, 0003).
+--
+-- 1. `source_embedding`: een embedding van een fragment hoort bij de bron van
+--    dat fragment, en heeft de run van dat fragment. Een embedding zonder run
+--    bij een fragment met een run kan dus niet meer (de oude route
+--    `embed_source` schreef die, en wiste daarbij embeddings met een run).
+--    De eis staat bij `source`: onder v2.7.0 draait een ASSERT niet op een
+--    ontbrekend veld, en `source` is er altijd.
+-- 2. Hoogstens één embedding per fragment en run (gelijktijdige stappen).
+-- 3. `run_step.review_item`: een item in `triage_queue`, of het notebook
+--    waarvan het schema op review wacht (de schemapoort van de extractie).
+-- 4. Gaat een run dicht, dan gaan zijn open stappen op `mislukt`, met een
+--    vaste melding (event; geldt voor elke plek die een run sluit).
+--
+-- Lege database (B3): geen omzetting van bestaande records. Idempotent via
+-- OVERWRITE. Alleen hele regels commentaar: de migratieloader plakt de regels
+-- aan elkaar.
+-- ============================================================================
+
+-- 1. Herkomst van een embedding volgt haar fragment.
+DEFINE FIELD OVERWRITE source ON source_embedding TYPE record<source> READONLY
+    ASSERT $before != NONE OR $this.chunk = NONE
+        OR ($this.chunk.source = $value
+            AND ($this.chunk.run = NONE OR $this.run = $this.chunk.run));
+
+-- 2. Eén embedding per fragment en run.
+DEFINE INDEX OVERWRITE uniek_embedding_run ON source_embedding FIELDS chunk, run UNIQUE;
+
+-- 3. Het reviewitem van een stap.
+DEFINE FIELD OVERWRITE review_item ON run_step TYPE option<record<triage_queue | notebook>>;
+
+-- 4. Open stappen van een gesloten run.
+DEFINE EVENT OVERWRITE stappen_bij_sluiten ON processing_run
+    WHEN $event = 'UPDATE' AND $before.status = 'bezig' AND $after.status != 'bezig'
+    THEN {
+        UPDATE run_step SET status = 'mislukt',
+            error = string::concat('Stap ', stap, ' mislukt na ', <string> attempts,
+                ' pogingen (RunAfgesloten)')
+        WHERE run = $after.id AND status NOT IN ['geslaagd', 'mislukt'] RETURN NONE;
+    };
+
+RETURN NONE;
