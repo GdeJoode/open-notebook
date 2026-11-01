@@ -40,7 +40,7 @@ from loguru import logger
 
 from shared.types.enums import JobStatus
 
-from job_queue.exceptions import JobNotRetryableError, JobPausedForReviewError
+from job_queue.exceptions import JOB_ID_SLEUTEL, JobNotRetryableError, JobPausedForReviewError
 from job_queue.queue import JobQueue
 from job_queue.registry import HandlerRegistry
 from job_queue.repository import JobRepository
@@ -268,6 +268,8 @@ class JobWorker:
                     "so the FLEXIBLE field override takes effect."
                 )
 
+            # F2-15: the handler can check that it runs the job it expects.
+            payload[JOB_ID_SLEUTEL] = str(job_id)
             result = await self._registry.execute(job.job_type, payload)
             await self._repository.update_status(
                 job_id,

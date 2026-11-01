@@ -4,7 +4,7 @@ job-queue: Background job queue for async pipeline execution.
 Provides an asyncio-based job queue backed by SurrealDB persistence.
 """
 
-from job_queue.exceptions import JobNotRetryableError, JobPausedForReviewError
+from job_queue.exceptions import JOB_ID_SLEUTEL, JobNotRetryableError, JobPausedForReviewError
 from job_queue.queue import JobQueue
 from job_queue.registry import HandlerRegistry
 from job_queue.repository import JobRepository
@@ -19,4 +19,5 @@ __all__ = [
     "HandlerRegistry",
     "JobPausedForReviewError",
     "JobNotRetryableError",
+    "JOB_ID_SLEUTEL",
 ]

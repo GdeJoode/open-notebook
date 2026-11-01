@@ -59,18 +59,21 @@ class JobService:
     # Job submission
     # ------------------------------------------------------------------
 
-    async def submit(self, submission: JobSubmitRequest) -> Job:
+    async def submit(self, submission: JobSubmitRequest, *, enqueue: bool = True) -> Job:
         """
         Create a DB record and enqueue the job. Returns immediately.
 
         Args:
             submission: Job submission details.
+            enqueue: ``False`` only creates the record; the caller enqueues it
+                with :meth:`enqueue` once it has linked the job (F2-15).
 
         Returns:
             The created Job record (status=QUEUED).
         """
         job = await self._repository.create_from_submission(submission)
-        await self._queue.enqueue(job.id, submission.priority)
+        if enqueue:
+            await self._queue.enqueue(job.id, submission.priority)
         logger.info(
             f"Submitted job {job.id} (type={submission.job_type.value}, "
             f"priority={submission.priority.value})"
@@ -130,6 +133,11 @@ class JobService:
         await self._repository.update_status(job_id, JobStatus.CANCELLED)
         logger.info(f"Cancelled job {job_id}")
         return True
+
+    async def enqueue(self, job: Job) -> None:
+        """Put an existing QUEUED job on the queue: after ``submit(enqueue=False)``,
+        or after resuming a paused job (F2-15)."""
+        await self._queue.enqueue(str(job.id), job.priority)
 
     async def retry_failed(self) -> int:
         """

@@ -12,6 +12,11 @@ schema extensions need user review, the worker transitions the job to
 dead-letter).
 """
 
+from typing import Optional
+
+#: Payload key under which the worker passes the job id to the handler (F2-15).
+JOB_ID_SLEUTEL = "_job_id"
+
 
 class JobPausedForReviewError(Exception):
     """Raised by a job handler when execution must pause for user review.
@@ -21,6 +26,9 @@ class JobPausedForReviewError(Exception):
     Subclasses should expose attributes carrying enough context for the
     UI to render a review prompt.
     """
+
+    #: What the review is about (a record id), if the handler knows (F2-15).
+    review_item: Optional[str] = None
 
     def __init__(self, message: str = "Job paused pending user review"):
         super().__init__(message)

@@ -82,3 +82,24 @@ async def test_fout_in_de_afhandeling_verdringt_de_job_niet():
 
     repo.add_to_dead_letter.assert_awaited_once()
     assert repo.update_status.call_args_list[-1].args[1] == JobStatus.FAILED
+
+
+async def test_de_handler_krijgt_het_job_id():
+    from job_queue.exceptions import JOB_ID_SLEUTEL
+
+    ontvangen = {}
+    repo = MagicMock(spec=JobRepository)
+    repo.get = AsyncMock(return_value=_job(0))
+    repo.update_status = AsyncMock()
+    registry = HandlerRegistry()
+
+    async def handler(payload):
+        ontvangen.update(payload)
+        return {}
+
+    registry.register_handler(JobType.RUN_STEP, handler)
+    queue = JobQueue()
+    await _draai(JobWorker(queue, repo, registry), queue)
+
+    assert ontvangen[JOB_ID_SLEUTEL] == "job:stap"
+    assert ontvangen["step_id"] == "run_step:s"
