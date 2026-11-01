@@ -79,7 +79,7 @@ def _service(server: LlamaServer, audit: Audit, intern: str = "ja",
     repo.delete_embeddings = AsyncMock(return_value=0)
     repo.add_embedding = AsyncMock(side_effect=lambda **kw: SourceEmbedding(
         source=kw["source_id"], content=kw["content"], order=kw["order"],
-        embedding=kw["embedding"], chunk=kw.get("chunk_id")))
+        embedding=kw["embedding"], chunk=kw.get("chunk_id"), afgekapt=kw.get("afgekapt")))
     return EmbeddingService(repo, embedder, EmbeddingConfig(retry_delay=0, **config)), repo
 
 
@@ -205,3 +205,27 @@ async def test_een_gemengde_batch_telt_als_intern():
     assert server.invoer == [["extern stuk", "intern stuk"]]
     [regel] = audit.regels
     assert regel.classification == "intern"
+
+
+async def test_stap_embed_legt_run_model_en_afgekapt_vast():
+    """F2-15: de stap ``embed`` geeft per embedding run, model en ``afgekapt``.
+
+    Afgekapt is zowel de vaste grens (1 536) als het halveren na een lengtefout.
+    Een fragment in ``overslaan`` heeft al een embedding in deze run.
+    """
+    server, audit = LlamaServer(grens=1000), Audit()
+    service, repo = _service(server, audit, retry_attempts=0)
+    fragmenten = [_fragment("kort", 0), _fragment("I" * 1200, 1), _fragment("J" * 5000, 2),
+                  _fragment("al gedaan", 3)]
+
+    uitkomst = await service.embed_fragmenten(
+        "source:s", fragmenten, run_id="processing_run:r", overslaan={"chunk:3"})
+
+    gegeven = [c.kwargs for c in repo.add_embedding.call_args_list]
+    assert [(k["chunk_id"], k["afgekapt"]) for k in gegeven] == [
+        ("chunk:0", False), ("chunk:1", True), ("chunk:2", True)]
+    assert {(k["run_id"], k["embedding_model"]) for k in gegeven} == {
+        ("processing_run:r", "embed:v1")}
+    assert (uitkomst.embeddings_created, uitkomst.afgekapt) == (3, 2)
+    assert {r.run for r in audit.regels} == {"processing_run:r"}
+    repo.delete_embeddings.assert_not_called()
