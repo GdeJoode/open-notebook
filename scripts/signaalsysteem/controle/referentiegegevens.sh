@@ -35,7 +35,7 @@ INVENTARIS=config/referentiegegevens.yaml
 MISLUKT=0
 criterium() { # <naam> <geslaagd|mislukt|let op> <toelichting>
   printf '%-3s %-8s %s\n' "$1" "$2" "$3"
-  [[ "$2" == mislukt ]] && MISLUKT=1
+  if [[ "$2" == mislukt ]]; then MISLUKT=1; fi
 }
 
 docker info >/dev/null 2>&1 || { echo "Docker niet bereikbaar"; exit 2; }
