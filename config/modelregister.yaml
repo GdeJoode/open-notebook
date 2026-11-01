@@ -33,9 +33,10 @@ modellen:
     toegestaan_intern: ja
     taken: [embedding]
 
-  # docling-serve (ADR 0014), lokaal onder llama-swap.
+  # docling-serve (ADR 0014), lokaal onder llama-swap. Na +modellen- het begin
+  # van de hash over de Docling-modellen (scripts/signaalsysteem/modellen_downloaden.py).
   - naam: docling
-    versie: quay.io/docling-project/docling-serve-cu128:v1.38.2
+    versie: quay.io/docling-project/docling-serve-cu128:v1.38.2+modellen-41b04b963c87
     aanroepwijze: llama-swap
     locatie: lokaal
     toegestaan_intern: ja

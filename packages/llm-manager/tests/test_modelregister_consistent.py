@@ -2,10 +2,11 @@
 
 - Elk model met aanroepwijze ``llama-swap`` in ``config/modelregister.yaml`` staat
   in ``services/llama-swap/config.yaml``, en omgekeerd.
-- Uit de review van F2-07: elk model met ``toegestaan_intern: ja`` wijst in de
-  configuratie naar een lokaal bestand (llama-server met een bestand uit
-  ``/modellen``) of een lokale container op het netwerk ``verwerking``, zonder
-  ``proxy`` naar een extern adres. De configuratie kent geen ``peers``.
+- Uit de reviews van F2-07 en F2-11: elk model wijst in de configuratie naar
+  een lokaal bestand (llama-server met een bestand uit ``/modellen``) of een
+  lokale container op het netwerk ``verwerking``, zonder ``proxy`` naar een
+  extern adres, zonder ``env`` met ``HF_``/``MODEL_URL`` en zonder macro met een
+  URL of ``--hf``; ook de vorm ``--optie=waarde`` telt. Geen ``peers``.
 - De versie in het register past bij wat llama-swap draait: revisie en bestand
   uit het downloadscript, contextlengte, en het image van docling-serve.
 
@@ -42,11 +43,15 @@ def _yaml(pad: Path) -> dict:
     return yaml.safe_load(pad.read_text(encoding="utf-8"))
 
 
-def _manifest() -> list[dict]:
+def _downloadscript():
     spec = importlib.util.spec_from_file_location("modellen_downloaden", DOWNLOAD)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod.GGUF
+    return mod
+
+
+def _manifest() -> list[dict]:
+    return _downloadscript().GGUF
 
 
 def _containers(compose: dict) -> dict[str, dict]:
@@ -64,26 +69,60 @@ def _netwerken(dienst: dict) -> set[str]:
     return set(netten if isinstance(netten, list) else netten.keys())
 
 
+def _opties(cmd: list[str]) -> dict[str, str]:
+    """Optie naar waarde; ook de vorm ``--optie=waarde``."""
+    uit: dict[str, str] = {}
+    for i, deel in enumerate(cmd):
+        if not deel.startswith("-"):
+            continue
+        if "=" in deel:
+            optie, waarde = deel.split("=", 1)
+        else:
+            volgende = cmd[i + 1] if i + 1 < len(cmd) else ""
+            optie, waarde = deel, ("" if volgende.startswith("-") else volgende)
+        uit[optie] = waarde
+    return uit
+
+
+def _naar_buiten(waarde: str) -> bool:
+    """Een URL, of een optie die een model van Hugging Face haalt."""
+    return "://" in waarde or re.search(r"(^|\s)--?hf", waarde) is not None
+
+
+def fouten_macros(config: dict) -> list[str]:
+    """Macro's, globaal en per model, zonder URL of ``--hf``."""
+    bronnen = [("macros", config.get("macros") or {})]
+    bronnen += [(f"{n}.macros", m.get("macros") or {})
+                for n, m in (config.get("models") or {}).items()]
+    return [f"{plek}.{sleutel}: URL of --hf in een macro"
+            for plek, macros in bronnen for sleutel, waarde in macros.items()
+            if _naar_buiten(str(waarde))]
+
+
 def fouten_lokaal(naam: str, model: dict, compose: dict, bestanden: set[str]) -> list[str]:
     """Waarom een model in de llama-swap-configuratie niet lokaal is, of []."""
-    fouten: list[str] = []
+    fouten: list[str] = fouten_macros({"models": {naam: model}})
     cmd = shlex.split(str(model.get("cmd", "")))
+    opties = _opties(cmd)
     proxy = model.get("proxy")
     interne_netten = {n for n, w in (compose.get("networks") or {}).items()
                       if (w or {}).get("internal") is True}
+    for regel in model.get("env") or []:
+        sleutel = str(regel).split("=", 1)[0]
+        if sleutel.startswith("HF_") or "MODEL_URL" in sleutel or _naar_buiten(str(regel)):
+            fouten.append(f"{naam}: env {sleutel} kan een model van buiten halen")
     if proxy is None:
         if cmd[:1] != [LLAMA_SERVER]:
             fouten.append(f"{naam}: zonder proxy alleen {LLAMA_SERVER}")
-        if "--host" not in cmd or cmd[cmd.index("--host") + 1] != "127.0.0.1":
+        if opties.get("--host") != "127.0.0.1":
             fouten.append(f"{naam}: llama-server luistert niet alleen op 127.0.0.1")
-        if set(cmd) & OPHALEN or any("://" in d for d in cmd):
+        if set(opties) & OPHALEN or any("://" in d for d in cmd):
             fouten.append(f"{naam}: llama-server haalt een model van buiten")
-        if "-m" not in cmd:
+        bestand = opties.get("-m") or opties.get("--model")
+        if not bestand:
             fouten.append(f"{naam}: geen modelbestand (-m)")
-        else:
-            bestand = cmd[cmd.index("-m") + 1]
-            if not bestand.startswith(MODELMAP) or bestand[len(MODELMAP):] not in bestanden:
-                fouten.append(f"{naam}: {bestand} staat niet in het downloadscript onder {MODELMAP}")
+        elif not bestand.startswith(MODELMAP) or bestand[len(MODELMAP):] not in bestanden:
+            fouten.append(f"{naam}: {bestand} staat niet in het downloadscript onder {MODELMAP}")
         return fouten
     delen = urlsplit(str(proxy))
     host = delen.hostname or ""
@@ -94,7 +133,7 @@ def fouten_lokaal(naam: str, model: dict, compose: dict, bestanden: set[str]) ->
     netten = _netwerken(dienst)
     if LOKAAL_NETWERK not in netten or not netten <= interne_netten:
         fouten.append(f"{naam}: {host} hangt niet alleen aan interne netwerken met {LOKAAL_NETWERK}")
-    if cmd[:3] != ["/bin/sh", WACHT, host] or not cmd[3].startswith(f"http://{host}:"):
+    if cmd[:3] != ["/bin/sh", WACHT, host] or not cmd[3:4] or not cmd[3].startswith(f"http://{host}:"):
         fouten.append(f"{naam}: cmd start niet de container {host} via {WACHT}")
     if model.get("cmdStop") != f"docker stop {host}":
         fouten.append(f"{naam}: cmdStop stopt niet de container {host}")
@@ -130,14 +169,13 @@ def test_geen_extern_adres_in_de_configuratie(config) -> None:
         assert not model.get("aliases"), naam
 
 
-def test_intern_toegestaan_wijst_naar_iets_lokaals(register, config, compose) -> None:
+def test_elk_model_wijst_naar_iets_lokaals(register, config, compose) -> None:
+    """Review F2-07 en F2-11: alle modellen, niet alleen die met ``toegestaan_intern: ja``."""
     bestanden = {item["bestand"] for item in _manifest()}
-    intern = [m.naam for m in register.modellen
-              if m.aanroepwijze == "llama-swap" and m.intern_toegestaan]
-    assert intern
-    fouten = []
-    for naam in intern:
-        fouten += fouten_lokaal(naam, config["models"][naam], compose, bestanden)
+    assert any(m.intern_toegestaan for m in register.modellen if m.aanroepwijze == "llama-swap")
+    fouten = fouten_macros({"macros": config.get("macros") or {}})
+    for naam, model in config["models"].items():
+        fouten += fouten_lokaal(naam, model, compose, bestanden)
     assert not fouten, "\n".join(fouten)
 
 
@@ -172,9 +210,11 @@ def test_versie_in_register_past_bij_wat_draait(register, config, compose) -> No
         ctx = re.search(r":ctx-(\d+)$", model.versie)
         if ctx:
             assert cmd[cmd.index("-c") + 1] == ctx.group(1), naam
-    docling = register.zoek("docling")
-    image = compose["services"]["docling-serve"]["image"]
-    assert image.startswith(docling.versie + "@sha256:")
+    # Image plus het begin van de hash over de Docling-modellen, die
+    # modellen_laden.sh (via modellen_downloaden.py) controleert (review F2-11).
+    image_versie, _, boom = register.zoek("docling").versie.partition("+modellen-")
+    assert compose["services"]["docling-serve"]["image"].startswith(image_versie + "@sha256:")
+    assert len(boom) >= 12 and _downloadscript().DOCLING["sha256_boom"].startswith(boom)
 
 
 # --------------------------------------------------------------------------
@@ -210,6 +250,27 @@ def test_lokaal_model_wordt_aanvaard(model) -> None:
     {"cmd": "/app/llama-server --host 127.0.0.1 --port ${PORT} -m /elders/a.gguf"},
     {"cmd": "/app/llama-server --host 127.0.0.1 --port ${PORT} -m /modellen/onbekend.gguf"},
     {"cmd": "curl http://ergens"},
+    # De vorm --optie=waarde (review F2-11).
+    {"cmd": "/app/llama-server --host=0.0.0.0 --port ${PORT} -m /modellen/a.gguf"},
+    {"cmd": "/app/llama-server --host=127.0.0.1 -m /modellen/a.gguf --hf-repo=org/model"},
+    {"cmd": "/app/llama-server --host=127.0.0.1 --port ${PORT} --model=/elders/a.gguf"},
+    # env en macros (review F2-11).
+    dict(GOED_SERVER, env=["HF_ENDPOINT=elders"]),
+    dict(GOED_SERVER, env=["LLAMA_ARG_MODEL_URL=x"]),
+    dict(GOED_SERVER, env=["X=https://ergens"]),
+    dict(GOED_SERVER, macros={"m": "--hf-repo org/model"}),
+    dict(GOED_SERVER, macros={"m": "https://ergens/model.gguf"}),
 ])
 def test_niet_lokaal_model_wordt_geweigerd(model) -> None:
     assert fouten_lokaal("m", model, COMPOSE_KLEIN, {"a.gguf"})
+
+
+def test_gelijkteken_env_en_macro_zonder_buiten_worden_aanvaard() -> None:
+    model = {"cmd": "/app/llama-server --host=127.0.0.1 --port ${PORT} --model=/modellen/a.gguf",
+             "env": ["CUDA_VISIBLE_DEVICES=0"], "macros": {"ctx": 512}}
+    assert fouten_lokaal("m", model, COMPOSE_KLEIN, {"a.gguf"}) == []
+
+
+@pytest.mark.parametrize("waarde", ["--hf-repo org/model", "-hf org/m", "http://ergens"])
+def test_globale_macro_naar_buiten_wordt_geweigerd(waarde) -> None:
+    assert fouten_macros({"macros": {"x": waarde}})
