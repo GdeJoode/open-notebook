@@ -2,7 +2,8 @@
 # Controle van de netwerkafscherming van het signaalsysteem (F2-10; opzet van P8).
 #
 # Toetst de draaiende Compose-omgeving (project signaal); start en stopt niets.
-#   N1  open-notebook en surrealdb hebben geen internet; voor werkbak-toegang
+#   N1  open-notebook en surrealdb hebben geen internet; voor werkbak-toegang en
+#       editor-toegang (F2-12)
 #       wordt het vastgelegd (proef masquerade, ADR 0002 F: onder Docker Desktop
 #       heeft een proxy op `toegang` internet, daarom de geharde proxy, N7 en N8)
 #   N2  geen bereikbare poort van surrealdb of open-notebook op de host
@@ -16,7 +17,7 @@
 #       schrijft testgegevens, dus alleen tegen een toetsdatabase; het testbestand in
 #       het bronarchief wordt daarna verwijderd
 #   N10 containers op `toegang` bereiken elkaar niet (enable_icc=false)
-#   N11 wat de proxy op de host bereikt (host.docker.internal, 192.168.65.254):
+#   N11 wat werkbak-toegang en editor-toegang op de host bereiken (host.docker.internal, 192.168.65.254):
 #       vergeleken met de bekende uitkomst; een verandering telt als mislukt
 #
 # Exitcodes: 0 alles geslaagd, 1 een criterium niet gehaald, 2 omgeving ongeschikt.
@@ -42,7 +43,7 @@ in_netwerk_van() { local c=$1; shift; docker run --rm --network "container:$c" "
 
 docker info >/dev/null 2>&1 || { echo "Docker niet bereikbaar"; exit 2; }
 declare -A C
-for d in surrealdb open-notebook werkbak-toegang; do
+for d in surrealdb open-notebook werkbak-toegang editor-toegang; do
   C[$d]="$(container "$d")"
   [[ -n "${C[$d]}" ]] || { echo "dienst $d draait niet"; exit 2; }
 done
@@ -68,9 +69,9 @@ except Exception as e:
 print(" ".join(uit)); sys.exit(rc)
 '
 # N1: geen internet (rc 1 van het script = geen verbinding).
-for d in open-notebook surrealdb werkbak-toegang; do
+for d in open-notebook surrealdb werkbak-toegang editor-toegang; do
   uit="$(in_netwerk_van "${C[$d]}" "$PY_INTERNET" 2>&1 | tail -n1)"; rc=$?
-  if [[ "$d" == werkbak-toegang ]]; then
+  if [[ "$d" == *-toegang ]]; then
     printf '%-4s %-8s %s\n' N1 vastgelegd "$d (proef masquerade): $uit"
   elif [[ "$uit" == *"https=fout"* && "$uit" == *"ip=fout"* ]]; then
     criterium N1 geslaagd "$d heeft geen internet ($uit)"
@@ -196,12 +197,14 @@ for h, p in (("host.docker.internal", int(sys.argv[1])), ("192.168.65.254", int(
     uit.append("%s:%d=%s" % (h, p, r))
 print(" ".join(uit))
 '
-host_uit="$(in_netwerk_van "${C[werkbak-toegang]}" "$PY_HOST" "$POORT" 2>&1 | tail -n1)"
-if [[ "$host_uit" == "$BEKEND_HOST" ]]; then
-  printf '%-4s %-8s %s\n' N11 vastgelegd "proxy naar de host, zoals bekend: $host_uit"
-else
-  criterium N11 mislukt "proxy naar de host wijkt af van de bekende uitkomst: $host_uit (bekend: $BEKEND_HOST)"
-fi
+for d in werkbak-toegang editor-toegang; do
+  host_uit="$(in_netwerk_van "${C[$d]}" "$PY_HOST" "$POORT" 2>&1 | tail -n1)"
+  if [[ "$host_uit" == "$BEKEND_HOST" ]]; then
+    printf '%-4s %-8s %s\n' N11 vastgelegd "$d naar de host, zoals bekend: $host_uit"
+  else
+    criterium N11 mislukt "$d naar de host wijkt af van de bekende uitkomst: $host_uit (bekend: $BEKEND_HOST)"
+  fi
+done
 
 # N9: classificatie end-to-end (schrijft testgegevens).
 if [[ $MET_CLASSIFICATIE == 1 ]]; then

@@ -5,8 +5,12 @@
 # Herstart alleen de container langflow, voor L7.
 #   L1  aanmelden zonder wachtwoord faalt: auto_login geweigerd, leeg of fout
 #       wachtwoord geen token, de API zonder token geweigerd
-#   L2  het MCP-eindpunt geeft geen 200: via editor-toegang, en in de container
-#       zelf, met en zonder aanmelding
+#   L2  geen MCP en geen andere agentinterface: de MCP-eindpunten, de MCP-server
+#       van de assistent (POST /api/v1/agentic/mcp, initialize), A2A en de
+#       OpenAI-Responses-API en de Store geven geen 2xx. Via editor-toegang
+#       aangemeld 404; in de container zelf aangemeld hetzelfde antwoord als een
+#       route die niet bestaat (GET 404; POST 405, want de interface bedient elk
+#       ander pad met GET) (review F2-12, B1 en punt 10)
 #   L3  langflow bereikt geen internet (opzet van P8)
 #   L4  docker inspect: geen verboden variabele (tracers, ANTHROPIC_, CLAUDE_),
 #       geen geheim in de omgeving, alleen de secrets sleutel_pijplijn,
@@ -18,9 +22,11 @@
 #       geen root, geen koppelingen) en heeft geen shell
 #   L7  uitgaande verbindingspogingen bij het opstarten en daarna: langflow
 #       herstarten, in zijn netwerknaamruimte de DNS-vragen naar namen buiten
-#       Compose tellen, en de logregels zoals in P2. Doel 0 (ADR 0017)
+#       Compose tellen, ook terwijl de editor- en store-eindpunten worden
+#       aangeroepen, en de logregels zoals in P2. Doel 0 (ADR 0017)
 #   L8  SIGNAAL_MODELREGISTER gezet, het register geldig, llm_manager.gate laadbaar
-#   L9  koppelingen: geen vault; schrijfbaar alleen /app/data en /bronarchief
+#   L9  koppelingen: geen vault; schrijfbaar alleen /app/data en /bronarchief; het
+#       image alleen-lezen met /tmp als tmpfs (review F2-12, punt 8)
 #
 # Exitcodes: 0 alles geslaagd, 1 een criterium niet gehaald, 2 omgeving ongeschikt.
 set -uo pipefail
@@ -74,14 +80,35 @@ s, body = vraag("POST", "/api/v1/login", urllib.parse.urlencode({"username": "si
 token = json.loads(body)["access_token"]
 s, body = vraag("GET", "/api/v1/projects/", kop={"Authorization": "Bearer " + token}, lees=True)
 project = json.loads(body)[0]["id"]
-uit = []
-for pad in ("/api/v1/mcp/sse", "/api/v1/mcp/streamable", "/api/v1/mcp/project/%s/sse" % project,
-            "/api/v1/mcp/project/%s/streamable" % project, "/api/v2/mcp/servers"):
+INIT = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+    "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "toets", "version": "0"}}}).encode()
+def status(methode, pad, data, metaan):
+    kop = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    if metaan:
+        kop["Authorization"] = "Bearer " + token
+    return vraag(methode, pad, data=data, kop=kop, timeout=3)[0]
+# Wat Langflow antwoordt op een route die niet bestaat: GET 404; POST 405, omdat de
+# interface (statische bestanden) elk ander pad met GET bedient. Een uitgezette
+# route moet hetzelfde antwoord geven.
+referentie = {m: status(m, "/api/v1/f212-bestaat-niet", INIT if m == "POST" else None, True)
+              for m in ("GET", "POST")}
+uit, oordeel = [], "ok"
+for methode, pad, data in (
+        ("GET", "/api/v1/mcp/sse", None), ("GET", "/api/v1/mcp/streamable", None),
+        ("GET", "/api/v1/mcp/project/%s/sse" % project, None),
+        ("GET", "/api/v1/mcp/project/%s/streamable" % project, None), ("GET", "/api/v2/mcp/servers", None),
+        ("POST", "/api/v1/agentic/mcp", INIT), ("POST", "/api/v1/agentic/mcp/", INIT),
+        ("GET", "/api/v1/agentic/mcp", None),
+        ("GET", "/api/v1/a2a/agents", None),
+        ("POST", "/api/v1/responses", json.dumps({"model": project, "input": "x"}).encode()),
+        ("GET", "/api/v1/store/check/", None), ("GET", "/api/v1/store/tags", None)):
     for metaan in (False, True):
-        kop = {"Authorization": "Bearer " + token, "Accept": "text/event-stream, application/json"} if metaan else {}
-        s, _ = vraag("GET", pad, kop=kop, timeout=3)
-        uit.append("%s%s=%s" % (pad, "(aangemeld)" if metaan else "", s))
-print(" ".join(uit))
+        s = status(methode, pad, data, metaan)
+        if str(s).startswith("2") or (metaan and s != referentie[methode]):
+            oordeel = "fout"
+        uit.append("%s%s%s=%s" % ("POST " if methode == "POST" else "", pad, "(aangemeld)" if metaan else "", s))
+print(" ".join(uit), "referentie(niet-bestaand): GET=%s POST=%s" % (referentie["GET"], referentie["POST"]),
+      "oordeel=" + oordeel)
 '
 
 # ---------------------------------------------------------------- L1
@@ -96,12 +123,32 @@ else
 fi
 
 # ---------------------------------------------------------------- L2
+token_via_proxy() {
+  curl -s --max-time 30 -X POST --data-urlencode username=signaalbeheer \
+    --data-urlencode "password=$(tr -d '\r\n' < "$WACHTWOORD_BESTAND")" "http://127.0.0.1:$POORT/api/v1/login" \
+    | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
+}
+TOKEN="$(token_via_proxy)"
+INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"toets","version":"0"}}}'
 via_proxy=""
-for pad in /api/v1/mcp/sse /api/v1/mcp/streamable /api/v1/mcp/project/x/sse /api/v2/mcp/servers; do
+for pad in /api/v1/mcp/sse /api/v1/mcp/streamable /api/v1/mcp/project/x/sse /api/v2/mcp/servers /api/v1/a2a/agents \
+           /api/v1/agentic/mcp /api/v1/store/check/ /api/v1/store/tags; do
   via_proxy+=" $pad=$(status "$pad" 3)"
+  via_proxy+=" $pad(aangemeld)=$(status "$pad" 3 -H "Authorization: Bearer $TOKEN")"
+done
+for pad in /api/v1/agentic/mcp /api/v1/agentic/mcp/ /api/v1/responses; do
+  for kop in "X-Geen: 1" "Authorization: Bearer $TOKEN"; do
+    via_proxy+=" POST $pad$([[ "$kop" == Auth* ]] && echo '(aangemeld)')=$(status "$pad" 3 -X POST \
+      -H "$kop" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$INIT")"
+  done
 done
 binnen="$(docker exec -i "$LF" python - <<<"$PY_IN_CONTAINER" 2>&1 | tail -n1)"
-if [[ "$via_proxy" != *=200* && -n "$binnen" && "$binnen" != *=200* && "$binnen" == *"/api/v1/mcp/sse(aangemeld)="* ]]; then
+# Via de proxy: geen 2xx en aangemeld 404. In de container: geen 2xx en aangemeld
+# hetzelfde antwoord als een route die niet bestaat (GET 404, POST 405).
+geen_2xx() { [[ ! "$1" =~ =2[0-9][0-9]( |$) ]]; }
+aangemeld_404() { local w; for w in $1; do [[ "$w" != *"(aangemeld)="* || "$w" == *"(aangemeld)=404" ]] || return 1; done; }
+if [[ -n "$TOKEN" && "$binnen" == *"POST /api/v1/agentic/mcp(aangemeld)="* && "$binnen" == *"oordeel=ok" ]] \
+    && geen_2xx "$via_proxy" && aangemeld_404 "$via_proxy"; then
   criterium L2 geslaagd "via editor-toegang:$via_proxy; in de container: $binnen"
 else
   criterium L2 mislukt "via editor-toegang:$via_proxy; in de container: $binnen"
@@ -193,10 +240,11 @@ fi
 mounts="$(docker inspect -f '{{range .Mounts}}{{.Destination}}|{{.RW}}|{{.Source}}{{println}}{{end}}' "$LF")"
 schrijfbaar="$(printf '%s\n' "$mounts" | awk -F'|' '$2=="true"{print $1}' | sort | tr '\n' ' ')"
 vault="$(printf '%s\n' "$mounts" | grep -i -E '^/vault|obsidian|vault\|' || true)"
-if [[ "$schrijfbaar" == "/app/data /bronarchief " && -z "$vault" ]]; then
-  criterium L9 geslaagd "schrijfbaar alleen: $schrijfbaar; geen vault"
+lf_ro="$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{json .HostConfig.Tmpfs}}' "$LF")"
+if [[ "$schrijfbaar" == "/app/data /bronarchief " && -z "$vault" && "$lf_ro" == 'true {"/tmp":""}' ]]; then
+  criterium L9 geslaagd "schrijfbaar alleen: $schrijfbaar en tmpfs /tmp; image alleen-lezen; geen vault"
 else
-  criterium L9 mislukt "schrijfbaar: [$schrijfbaar] vault: [$vault]"
+  criterium L9 mislukt "schrijfbaar: [$schrijfbaar] alleen-lezen/tmpfs: [$lf_ro] vault: [$vault]"
 fi
 
 # ---------------------------------------------------------------- L7
@@ -254,6 +302,19 @@ for _ in $(seq 1 90); do
   [[ "$(docker inspect -f '{{.State.Health.Status}}' "$LF")" == healthy ]] && { gezond=1; break; }
   sleep 2
 done
+# Binnen de telling: de editor en de eindpunten van de store en de modellen
+# aanroepen, aangemeld via editor-toegang (review F2-12, punt 4).
+aanroepen=""
+if [[ $gezond == 1 ]]; then
+  T2="$(token_via_proxy)"
+  for pad in / /flows /api/v1/config /api/v1/version /api/v1/all /api/v1/flows/ /api/v1/projects/ \
+             /api/v1/variables/ /api/v1/starter-projects/ /api/v1/store/check/ /api/v1/store/check/api_key \
+             /api/v1/store/components/ /api/v1/store/tags /api/v1/store/users/likes /api/v1/models \
+             /api/v1/models/providers /api/v1/models/enabled_providers /api/v1/models/enabled_models \
+             /api/v1/models/default_model /api/v1/model_options/language /api/v1/model_options/embedding; do
+    aanroepen+=" $pad=$(status "$pad" 30 -H "Authorization: Bearer $T2")"
+  done
+fi
 docker wait "$SNIF" >/dev/null
 telling="$(docker logs "$SNIF" 2>&1 | tail -n1)"
 docker rm -f "$SNIF" >/dev/null 2>&1 || true
@@ -262,8 +323,8 @@ voorbeelden="$(docker logs --since "$herstart" "$LF" 2>&1 | grep -oiE 'https?://
 extern="$(docker run --rm -i --network none "$PY_IMG" python -c 'import json,sys
 d=json.loads(sys.stdin.read()); print(sum(d["extern"].values()) + sum(d["syn_buiten"].values()), json.dumps(d, sort_keys=True))' <<<"$telling" 2>/dev/null)"
 aantal="${extern%% *}"
-toelichting="herstart $gestart_lf, telling vanaf $gestart_sn, ${TELLEN_S} s; healthy=$gezond; pakketten: ${extern#* }; logregels (P2): $logregels; adressen in de log: [${voorbeelden}]"
-if [[ $gezond == 1 && "$aantal" == 0 && "$logregels" == 0 ]]; then
+toelichting="herstart $gestart_lf, telling vanaf $gestart_sn, ${TELLEN_S} s; healthy=$gezond; pakketten: ${extern#* }; logregels (P2): $logregels; adressen in de log: [${voorbeelden}]; aangeroepen:${aanroepen}"
+if [[ $gezond == 1 && "$aantal" == 0 && "$logregels" == 0 && -n "$aanroepen" && -n "${T2:-}" ]]; then
   criterium L7 geslaagd "0 uitgaande pogingen; $toelichting"
 else
   criterium L7 mislukt "${aantal:-?} DNS-vragen of SYN naar buiten; $toelichting"
