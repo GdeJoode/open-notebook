@@ -57,6 +57,15 @@ PIJPLIJN = agent_auth.AgentKeyContext(
 HASH = "sha256:" + "b" * 64
 
 
+def _bestand(pad, inhoud: bytes = b"%PDF-1.7 openbaar testbestand") -> str:
+    """Schrijf een synthetisch bestand en geef zijn hash (B29: de fork hasht zelf)."""
+    import hashlib
+
+    pad.parent.mkdir(parents=True, exist_ok=True)
+    pad.write_bytes(inhoud)
+    return "sha256:" + hashlib.sha256(inhoud).hexdigest()
+
+
 @pytest.fixture(scope="module")
 def app():
     return create_app()
@@ -553,9 +562,9 @@ async def test_gelijktijdige_besluiten_over_een_item(env, app, mappen) -> None:
 
     env["ctx"] = PIJPLIJN
     async with _client(app) as c:
+        pad = mappen[2] / "inbox" / "gelijk.pdf"
         item = (await c.post("/api/v1/intake/items", json={
-            "origin": "watchfolder", "path": str(mappen[2] / "inbox" / "gelijk.pdf"),
-            "content_hash": "sha256:" + "e" * 64})).json()
+            "origin": "watchfolder", "path": str(pad), "content_hash": _bestand(pad)})).json()
         env["ctx"] = BEHEERDER
         pad = f"/api/v1/intake/items/{item['id']}/decision"
         een, twee = await asyncio.gather(
@@ -583,6 +592,7 @@ async def test_batch_alleen_bij_een_regel_voor_bulkupload(env, app, mappen) -> N
 
 async def test_ongeldige_invoer_geeft_422(env, app, mappen) -> None:
     pad = str(mappen[2] / "inbox" / "x.pdf")
+    hash_ = _bestand(mappen[2] / "inbox" / "x.pdf")
     async with _client(app) as c:
         r = await c.post("/api/v1/source-map-rules", json=_regel(route="flow; DROP"))
         assert r.status_code == 422
@@ -594,7 +604,7 @@ async def test_ongeldige_invoer_geeft_422(env, app, mappen) -> None:
                 "origin": "watchfolder", "path": pad, "content_hash": fout})
             assert r.status_code == 422, fout
         item = (await c.post("/api/v1/intake/items", json={
-            "origin": "watchfolder", "path": pad, "content_hash": HASH})).json()
+            "origin": "watchfolder", "path": pad, "content_hash": hash_})).json()
         env["ctx"] = BEHEERDER
         r = await c.post(f"/api/v1/intake/items/{item['id']}/decision", json={
             "rev": item["rev"], "route": "../vault", "classification": "intern"})
@@ -605,7 +615,8 @@ async def test_watchfolder_item_wacht_zonder_standaard(env, app, mappen) -> None
     inbox = mappen[2] / "inbox"
     env["ctx"] = PIJPLIJN
     async with _client(app) as c:
-        item = {"origin": "watchfolder", "path": str(inbox / "verslag.pdf"), "content_hash": HASH}
+        item = {"origin": "watchfolder", "path": str(inbox / "verslag.pdf"),
+                "content_hash": _bestand(inbox / "verslag.pdf")}
         r = await c.post("/api/v1/intake/items", json=item)
         assert r.status_code == 201, r.text
         nieuw = r.json()
@@ -660,3 +671,26 @@ async def test_watchfolder_item_wacht_zonder_standaard(env, app, mappen) -> None
         r = await c.post(f"/api/v1/intake/items/{nieuw['id']}/decision", json={
             "rev": r.json()["rev"], "route": "inname_pdf", "classification": "intern"})
         assert r.status_code == 409
+
+
+async def test_fork_hasht_een_watchfolder_item_zelf(env, app, mappen) -> None:
+    """B29 (ADR 0010, 0020): de fork berekent de hash van een watchfolder-item
+    zelf; een andere hash of een onleesbaar bestand geeft 422 en geen item."""
+    inbox = mappen[2] / "inbox"
+    hash_ = _bestand(inbox / "zelf.pdf")
+    env["ctx"] = PIJPLIJN
+    async with _client(app) as c:
+        for pad, opgegeven in ((inbox / "zelf.pdf", "sha256:" + "a" * 64),
+                               (inbox / "bestaat-niet.pdf", hash_), (inbox, hash_)):
+            r = await c.post("/api/v1/intake/items", json={
+                "origin": "watchfolder", "path": str(pad), "content_hash": opgegeven})
+            assert r.status_code == 422, (pad, r.text)
+            assert str(pad) not in r.text
+        r = await c.post("/api/v1/intake/items", json={
+            "origin": "watchfolder", "path": str(inbox / "zelf.pdf"), "content_hash": hash_})
+        assert r.status_code == 201, r.text
+        assert r.json()["content_hash"] == hash_
+    rijen = await conn.execute_query(
+        "SELECT VALUE content_hash FROM intake_item WHERE path = $p",
+        {"p": str(inbox / "zelf.pdf")})
+    assert rijen == [hash_]

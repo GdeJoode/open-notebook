@@ -6,7 +6,8 @@
 * **Wachtrij-item**: Langflow (``pijplijn``) meldt documenten uit een
   watchfolder, losse uploads en bronnen zonder regel aan, haalt besloten items
   op en zet een item op ``verwerkt``, alleen met een run die aan dat item
-  gebonden is (F2-14). Een watchfolder-item heeft geen
+  gebonden is (F2-14). De hash van een watchfolder-item berekent de fork
+  zelf (B29). Een watchfolder-item heeft geen
   standaardclassificatie en wacht; een upload krijgt het voorstel van de
   poortwachter. Tot het besluit van de beheerder geldt ``intern`` (FO 9).
   Het besluit (route en classificatie) neemt alleen een ``beheerder``, met
@@ -207,8 +208,20 @@ class IntakeService:
         gatekeeper: Optional[Dict[str, Any]],
         registered_by: str,
     ) -> tuple[IntakeItem, bool]:
-        """Meld een item aan; geeft (item, nieuw). Hetzelfde item nog eens geeft het bestaande."""
+        """Meld een item aan; geeft (item, nieuw). Hetzelfde item nog eens geeft het bestaande.
+
+        Een watchfolder-item hasht de fork zelf (B29): de watchfolder is
+        alleen-lezen gekoppeld; een onleesbaar bestand of een andere hash dan
+        opgegeven geeft 422.
+        """
         self.locatiecontrole.controleer(path)
+        if origin == "watchfolder":
+            try:
+                berekend = await asyncio.to_thread(_sha256, path)
+            except OSError:
+                raise InvalidInputError("Wachtrij-item niet leesbaar") from None
+            if berekend != content_hash:
+                raise InvalidInputError("Hash van het wachtrij-item wijkt af")
         voorstel = None
         if origin == "upload":
             # Losse upload: voorstel van de poortwachter, zonder voorstel intern.
