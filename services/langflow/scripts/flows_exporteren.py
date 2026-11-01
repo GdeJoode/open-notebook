@@ -47,6 +47,10 @@ STANDAARD_MAP = "/app/flows-git/services/langflow/flows"
 _HIER = Path(__file__).resolve()
 STANDAARD_LIJST = os.environ.get("SIGNAAL_COMPONENTENLIJST") or (
     str(_HIER.parents[3] / "config" / "langflow-componenten.yaml") if len(_HIER.parents) > 3 else "")
+#: Op de host: secrets/ in de werkmap; --schrijf zoekt de letterlijke waarden.
+STANDAARD_GEHEIMEN = str(_HIER.parents[3] / "secrets") if len(_HIER.parents) > 3 else ""
+#: Kortere geheimen (zoals een gebruikersnaam) geven valse treffers in code.
+MIN_GEHEIM = 8
 
 #: Waarden die op een sleutel of token lijken (review F2-12, punt 6).
 SLEUTELPATRONEN = tuple(re.compile(p) for p in (
@@ -136,13 +140,44 @@ def geheimen(waarde, pad: str = "") -> list[str]:
     return uit
 
 
-def toets_bundel(bundel: dict[str, dict], lijst: Path | str) -> list[str]:
-    """Weigeringen voor ``--schrijf``: typen buiten de lijst en waarden die op een sleutel lijken."""
+def letterlijke_geheimen(waarde, map_: Path | str, pad: str = "") -> list[str]:
+    """Plaatsen in de flow met de letterlijke waarde van een bestand uit ``secrets/``.
+
+    Herreview F2-12, punt 5. Alleen waarden van ten minste :data:`MIN_GEHEIM`
+    tekens; de treffer noemt het bestand, niet de waarde.
+    """
+    map_ = Path(map_)
+    waarden = {}
+    if map_.is_dir():
+        for bestand in sorted(map_.iterdir()):
+            if bestand.is_file():
+                inhoud = bestand.read_text(encoding="utf-8", errors="replace").strip()
+                if len(inhoud) >= MIN_GEHEIM:
+                    waarden[bestand.name] = inhoud
+    return _zoek(waarde, waarden, pad) if waarden else []
+
+
+def _zoek(waarde, waarden: dict[str, str], pad: str) -> list[str]:
+    if isinstance(waarde, dict):
+        return [t for k, v in waarde.items() for t in _zoek(v, waarden, f"{pad}/{k}")]
+    if isinstance(waarde, list):
+        return [t for i, v in enumerate(waarde) for t in _zoek(v, waarden, f"{pad}[{i}]")]
+    if isinstance(waarde, str):
+        return [f"{pad or '/'}: {naam}" for naam, w in waarden.items() if w in waarde]
+    return []
+
+
+def toets_bundel(bundel: dict[str, dict], lijst: Path | str, geheimen_map: Path | str = "") -> list[str]:
+    """Weigeringen voor ``--schrijf``: typen buiten de lijst, waarden die op een sleutel
+    lijken en letterlijke waarden uit ``secrets/``."""
     from flows_laden import lees_lijst, toets
 
     fouten = [f"{b}: {r}" for b, r in toets(bundel, lees_lijst(lijst))]
     for naam, flow in sorted(bundel.items()):
         fouten += [f"{naam}: lijkt op een sleutel: {p}" for p in geheimen(flow)]
+        if geheimen_map:
+            fouten += [f"{naam}: geheim uit secrets/ in {p}"
+                       for p in letterlijke_geheimen(flow, geheimen_map)]
     return fouten
 
 
@@ -181,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--map", default=os.environ.get("SIGNAAL_FLOWS_MAP", STANDAARD_MAP))
     p.add_argument("--id", action="append", default=[], help="id van een flow (herhaalbaar)")
     p.add_argument("--lijst", default=STANDAARD_LIJST, help="componentenlijst voor --schrijf")
+    p.add_argument("--geheimen", default=STANDAARD_GEHEIMEN, help="map met geheimen voor --schrijf")
     args = p.parse_args(argv)
 
     if args.schrijf or args.vergelijk:
@@ -189,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
             print("flows_exporteren: geen bundel op stdin", file=sys.stderr)
             return 2
         if args.schrijf:
-            fouten = toets_bundel(bundel, args.lijst)
+            fouten = toets_bundel(bundel, args.lijst, args.geheimen)
             for regel in fouten:
                 print(f"flows_exporteren: geweigerd: {regel}", file=sys.stderr)
             if fouten:

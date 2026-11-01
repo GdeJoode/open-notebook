@@ -38,7 +38,7 @@ from typing import Iterable, Iterator
 import yaml
 
 STANDAARD_MAP = "/app/flows-git/services/langflow/flows"
-STANDAARD_LIJST = "/config/langflow-componenten.yaml"
+STANDAARD_LIJST = "/app/flows-git/config/langflow-componenten.yaml"
 SOORTEN = ("kern", "notities", "eigen")
 GEEN_TYPE = "<geen type>"
 
@@ -140,10 +140,18 @@ def toets(flows: dict[str, dict], toegestaan: Iterable[str]) -> list[tuple[str, 
             weigeringen.append((bestand, f"id ook in {ids[flow_id]}"))
         else:
             ids[flow_id] = bestand
+        # Alleen privé: een openbare flow is zonder aanmelding te draaien
+        # (herreview F2-12, punt 1). Een export van Langflow laat het veld weg;
+        # dan wordt de flow privé opgeslagen (zie laad()).
+        if flow.get("access_type", PRIVE) != PRIVE:
+            weigeringen.append((bestand, f"access_type is niet {PRIVE}"))
         for soort in sorted(set(typen) - toegestaan):
             weigeringen.append((bestand, f"type niet op de lijst: {soort}"))
     return weigeringen
 
+
+#: De enige toegestane waarde van ``access_type`` (herreview F2-12, punt 1).
+PRIVE = "PRIVATE"
 
 #: Langflow 1.13.0 neemt hooguit zoveel sleutels in een blokkeerset.
 MAX_BLOKKEERSET = 1000
@@ -156,19 +164,24 @@ def zet_catalogusbeleid(api, toegestaan: Iterable[str]) -> str:
     geldt ook voor de editor: een geblokkeerde component is daar niet te kiezen en
     een flow met zo'n component draait niet. De set wordt daarna opnieuw gelezen.
     """
-    # Langflow laat geblokkeerde componenten weg uit /api/v1/all; de huidige
-    # blokkeerset hoort er dus bij, anders zou een tweede start alles vrijgeven.
-    namen = api.componentnamen() | api.blokkeerset()
+    # De hele catalogus, ook wat al geblokkeerd is, in de eigen schrijfwijze: een
+    # sleutel in kleine letters blokkeert in 1.13.0 niets (vastgesteld in F2-12).
+    namen = api.componentnamen(ook_geblokkeerd=True)
     laag = {t.lower() for t in toegestaan}
     blokkeren = {n for n in namen if n.lower() not in laag}
+    # Geteld in kleine letters: zo geeft Langflow de set terug (herreview, punt 7).
+    blokkeren_laag = {b.lower() for b in blokkeren}
     if not blokkeren or len(blokkeren) > MAX_BLOKKEERSET:
         raise ValueError(f"blokkeerset van {len(blokkeren)} componenten past niet")
     api.zet_blokkeerset(blokkeren)
-    # Langflow bewaart de sleutels na een herstart in kleine letters.
-    staat = api.blokkeerset()
-    if {s.lower() for s in staat} != {b.lower() for b in blokkeren}:
+    if {s.lower() for s in api.blokkeerset()} != blokkeren_laag:
         raise ValueError("catalogusbeleid staat na het zetten niet zoals gevraagd")
-    return f"catalogusbeleid: {len(blokkeren)} van {len(namen)} componenten geblokkeerd"
+    # En het werkt: in de catalogus van de editor staat alleen nog wat op de lijst staat.
+    zichtbaar = {n.lower() for n in api.componentnamen()}
+    if not zichtbaar <= laag:
+        raise ValueError(f"catalogusbeleid werkt niet: {len(zichtbaar - laag)} componenten nog zichtbaar")
+    return (f"catalogusbeleid: {len(blokkeren_laag)} van {len({n.lower() for n in namen})} "
+            "componenten geblokkeerd (sleutels in kleine letters)")
 
 
 def zet_andere_triggers_uit(api, geladen: Iterable[str]) -> str:
@@ -189,7 +202,9 @@ def laad(api, flows: dict[str, dict]) -> list[str]:
     """Laad de flows en zet hun triggers aan; geeft een regel per flow terug."""
     regels = []
     for bestand, flow in flows.items():
-        api.upload(flow, bestand)
+        opgeslagen = api.upload(flow, bestand)
+        if any(f.get("access_type", PRIVE) != PRIVE for f in opgeslagen):
+            raise ValueError(f"{bestand}: Langflow sloeg de flow niet privé op")
         aangezet = 0
         for trigger in api.triggers(flow["id"]):
             if trigger.get("state") != "active":

@@ -132,7 +132,7 @@ def test_live_rondgang(live, flows_exporteren) -> None:
             "toegestaan = lees_lijst(os.environ['SIGNAAL_COMPONENTENLIJST'])\n"
             "laag = {t.lower() for t in toegestaan}\n"
             "geblokkeerd = a.blokkeerset()\n"
-            "print('beleid', a.componentnamen() <= toegestaan, len(geblokkeerd) > 300, "
+            "print('beleid', a.componentnamen() <= toegestaan, {g.lower() for g in geblokkeerd} == {n.lower() for n in a.componentnamen(ook_geblokkeerd=True)} - laag, "
             "sorted(b for b in geblokkeerd if b.lower() in laag))\n"
             f"print(sorted(t['state'] for t in a.triggers({flow['id']!r})))")
         assert staat.returncode == 0, staat.stderr
@@ -166,17 +166,22 @@ class NepLangflowMetBeleid(NepLangflow):
         self.geblokkeerd: set[str] = set()
         self.negeer_beleid = negeer_beleid
 
-    def componentnamen(self) -> set[str]:
-        # Zoals Langflow 1.13.0: geblokkeerde componenten staan niet in /api/v1/all.
+    def componentnamen(self, ook_geblokkeerd: bool = False) -> set[str]:
+        # Zoals Langflow 1.13.0: geblokkeerde componenten staan niet in /api/v1/all,
+        # behalve met include_blocked; alleen een sleutel in de eigen schrijfwijze
+        # blokkeert.
+        if ook_geblokkeerd:
+            return set(self.namen)
         return set(self.namen) - self.geblokkeerd
 
     def zet_blokkeerset(self, sleutels: set[str]) -> set[str]:
         if not self.negeer_beleid:
             self.geblokkeerd = set(sleutels)
-        return self.geblokkeerd
+        return self.blokkeerset()
 
     def blokkeerset(self) -> set[str]:
-        return set(self.geblokkeerd)
+        # Langflow geeft de sleutels terug in kleine letters.
+        return {s.lower() for s in self.geblokkeerd}
 
     def flow_ids(self) -> list[str]:
         return list(self.flows)
@@ -190,6 +195,7 @@ def test_catalogusbeleid_blokkeert_alles_buiten_de_lijst(flows_laden) -> None:
     api = NepLangflowMetBeleid({"TextInput", "TextOutput", "ScheduleTrigger", "APIRequest",
                                 "ext:openai:OpenAIModelComponent@official"})
     regel = flows_laden.zet_catalogusbeleid(api, {"TextInput", "TextOutput", "ScheduleTrigger", "note"})
+    # In de eigen schrijfwijze: alleen zo blokkeert Langflow (F2-12).
     assert api.geblokkeerd == {"APIRequest", "ext:openai:OpenAIModelComponent@official"}
     assert "2 van 5" in regel
 
@@ -257,3 +263,19 @@ def test_schrijven_weigert_waarden_die_op_een_sleutel_lijken(flows_exporteren, t
     veld["load_from_db"] = True
     assert flows_exporteren.geheimen(flow) == []
     assert flows_exporteren.geheimen(_rondgang()) == []
+
+
+def test_schrijven_weigert_letterlijke_geheimen(flows_exporteren, tmp_path: Path, monkeypatch) -> None:
+    """Herreview F2-12, punt 5: een waarde uit secrets/ in een flow wordt geweigerd."""
+    geheimen = tmp_path / "secrets"
+    geheimen.mkdir()
+    (geheimen / "langflow_superuser").write_text("a1b2c3d4e5f6a7b8c9d0\n", encoding="utf-8")
+    (geheimen / "surreal_gebruiker").write_text("root", encoding="utf-8")     # te kort om te zoeken
+    flow = _rondgang()
+    flow["description"] = "wachtwoord a1b2c3d4e5f6a7b8c9d0 hier"
+    assert flows_exporteren.letterlijke_geheimen(flow, geheimen) == ["/description: langflow_superuser"]
+    assert flows_exporteren.letterlijke_geheimen(_rondgang(), geheimen) == []
+    import io
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"x.json": flow})))
+    assert flows_exporteren.main(["--schrijf", str(tmp_path / "uit"), "--geheimen", str(geheimen)]) == 1
+    assert not (tmp_path / "uit").exists()

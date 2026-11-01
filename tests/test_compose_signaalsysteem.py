@@ -657,11 +657,12 @@ LANGFLOW_VAST = {
     "DO_NOT_TRACK": "true",
     "LITELLM_LOCAL_MODEL_COST_MAP": "True",
     "LANGFLOW_MODELS_DEV_REFRESH": "false",
-    "SIGNAAL_MODELREGISTER": "/config/modelregister.yaml",
+    "SIGNAAL_MODELREGISTER": "/app/flows-git/config/modelregister.yaml",
+    "LANGFLOW_CORS_ORIGINS": "http://127.0.0.1:8530",
     "SIGNAAL_COMPONENTENLIJST": "/app/flows-git/config/langflow-componenten.yaml",
 }
 _VERBODEN = re.compile(r"^(LANGCHAIN_|LANGSMITH_|LANGFUSE_|LANGWATCH_|ARIZE_|OPIK_|PHOENIX_|"
-                       r"TRACELOOP_|OPENLAYER_|OTEL_EXPORTER_OTLP_|ANTHROPIC_|CLAUDE_)", re.I)
+                       r"TRACELOOP_|OPENLAYER_|OTEL_EXPORTER_OTLP_|ANTHROPIC_|CLAUDE_|LANGFLOW_FEATURE_)", re.I)
 
 
 def test_langflow_alleen_op_verwerking_en_editor_intern(config) -> None:
@@ -679,7 +680,9 @@ def test_editor_alleen_via_proxy_op_localhost(config) -> None:
     assert doelen == ["http://langflow:7860"], doelen
     # Geen MCP en geen andere agentinterface via de editor.
     for pad in ("/api/v1/mcp", "/api/v2/mcp", "/api/v1/agentic", "/api/v1/a2a", "/api/v1/responses",
-                "/api/v1/store"):
+                "/api/v1/store", "/api/v1/run", "/api/v1/webhook", "/api/v1/process",
+                "/api/v1/predict", "/api/v1/build_public_tmp", "/api/v1/flows/public_flow",
+                "/api/v2/workflows", "/api/v1/voice"):
         assert re.search(rf"location \^~ {re.escape(pad)} \{{\s*return 404;", tekst), pad
 
 
@@ -713,7 +716,8 @@ def test_langflow_koppelingen(config, hostpaden) -> None:
     assert not any(Path(k["source"]) == ROOT / "services" / "langflow" / "components"
                    for k in kop.values() if k["type"] == "bind")
     assert langflow["environment"]["LANGFLOW_COMPONENTS_PATH"].startswith("/app/flows-git/")
-    assert kop["/config"].get("read_only") is True
+    # Ook het modelregister komt uit de kloon (herreview punt 4): geen /config.
+    assert "/config" not in kop
     # Alleen-lezen, met /tmp als tmpfs (punt 8).
     assert langflow.get("read_only") is True
     assert "/tmp" in (langflow.get("tmpfs") or [])
@@ -734,7 +738,7 @@ def test_langflow_koppelingen(config, hostpaden) -> None:
 def test_langflow_image_vast_en_met_modelregister() -> None:
     tekst = (ROOT / "services" / "langflow" / "Dockerfile").read_text(encoding="utf-8")
     assert re.search(rf"^FROM langflowai/langflow:1\.13\.0@{LANGFLOW_DIGEST}$", tekst, re.M)
-    assert re.search(r"^ENV SIGNAAL_MODELREGISTER=/config/modelregister\.yaml", tekst, re.M)
+    assert re.search(r"^ENV SIGNAAL_MODELREGISTER=/app/flows-git/config/modelregister\.yaml", tekst, re.M)
     assert "COPY --from=llm_manager . /app/signaal/lib/llm_manager/" in tekst
     assert re.search(r'^ENTRYPOINT \["/app/signaal/start\.sh"\]$', tekst, re.M)
     code = "\n".join(r for r in tekst.splitlines() if not r.lstrip().startswith("#"))
@@ -760,14 +764,21 @@ def test_langflow_image_zonder_mcp_en_agentinterfaces() -> None:
     als er in langflow/api nog een include_router met mcp, a2a of openai_responses is."""
     tekst = (ROOT / "services" / "langflow" / "Dockerfile").read_text(encoding="utf-8")
     for router in ("mcp_router", "mcp_projects_router", "mcp_router_v2", "agentic_mcp_router",
-                   "a2a_router", "openai_responses_router", "store_router"):
+                   "a2a_router", "openai_responses_router", "store_router", "voice_mode_router"):
         assert rf"include_router\({router}\)" in tekst, router
-    assert r"include_router\(.*(mcp|a2a|openai_responses|store_router)" in tekst
+    assert r"include_router\(.*(mcp|a2a|openai_responses|store_router|voice_mode_router)" in tekst
+    assert r"'_include_agentic_router\(\)'" in tekst
 
 
 def test_start_sh_kloont_lijst_en_componenten() -> None:
     """Review F2-12, punt 3: langflow gebruikt lijst en componenten uit HEAD."""
     tekst = (ROOT / "scripts" / "signaalsysteem" / "start.sh").read_text(encoding="utf-8")
     assert re.search(r'^KLOON_PADEN=\("\$FLOWS/" services/langflow/components/ '
-                     r'config/langflow-componenten\.yaml\)$', tekst, re.M)
+                     r'config/langflow-componenten\.yaml\n\s+config/modelregister\.yaml\)$', tekst, re.M)
     assert 'sparse-checkout set --no-cone "${KLOON_PADEN[@]/#//}"' in tekst
+
+
+def test_editor_toegang_controleert_host() -> None:
+    """Herreview F2-12, punt 1: alleen 127.0.0.1:8530 en localhost:8530 (DNS-rebinding)."""
+    tekst = (ROOT / "services" / "proxy" / "editor.conf").read_text(encoding="utf-8")
+    assert r'if ($http_host !~ "^(127\.0\.0\.1|localhost):8530$") {' in tekst

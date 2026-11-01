@@ -182,3 +182,32 @@ def test_live_verboden_flow_niet_geladen(live) -> None:
     assert bestaat.returncode == 0, bestaat.stderr
     assert bestaat.stdout.strip().splitlines()[-1] == "False"
     live.exec("rm", "-rf", "/tmp/f212-verboden")
+
+
+@pytest.mark.parametrize("waarde", ["PUBLIC", "public", None, ""])
+def test_flow_die_niet_prive_is_wordt_geweigerd(flows_laden, waarde) -> None:
+    """Herreview F2-12, punt 1: alleen access_type PRIVATE (of afwezig, dan privé)."""
+    flow = _rondgang()
+    flow["access_type"] = waarde
+    weigeringen = flows_laden.toets({"x.json": flow}, flows_laden.lees_lijst(LIJST))
+    assert ("x.json", "access_type is niet PRIVATE") in weigeringen
+    flow["access_type"] = "PRIVATE"
+    assert flows_laden.toets({"x.json": flow}, flows_laden.lees_lijst(LIJST)) == []
+
+
+def test_live_langflow_weigert_zelf_een_geblokkeerde_component(live) -> None:
+    """Catalogusbeleid (review F2-12, punt 2): ook een upload buiten het laadscript om
+    met een component buiten de lijst weigert Langflow zelf."""
+    slecht = _met_type(_rondgang(), "APIRequest")
+    slecht["id"] = str(uuid.uuid4())
+    uit = live.python(
+        "import json\n"
+        "from langflow_api import LangflowApi, LangflowFout\n"
+        "a = LangflowApi()\n"
+        f"f = json.loads({json.dumps(json.dumps(slecht))})\n"
+        "try:\n"
+        "    a.upload(f, 'v.json'); print('geladen'); a.verwijder(f['id'])\n"
+        "except LangflowFout as e:\n"
+        "    print('geweigerd', e.status)\n")
+    assert uit.returncode == 0, uit.stderr
+    assert uit.stdout.strip().splitlines()[-1] == "geweigerd 400"

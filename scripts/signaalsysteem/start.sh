@@ -7,7 +7,7 @@
 # 1. Hostpaden (SIGNAAL_INNAMEMAP, SIGNAAL_WATCHFOLDER, SIGNAAL_VAULT,
 #    SIGNAAL_EXPORTMAP) uit de omgeving of uit .env (voorbeeld in .env.example).
 # 2. Een minimale kloon van HEAD met alleen de flowmap, de eigen
-#    Langflow-componenten en de componentenlijst, voor het flowregister en voor
+#    Langflow-componenten, de componentenlijst en het modelregister, voor het flowregister en voor
 #    langflow, alleen-lezen gekoppeld; niet de hele .git (K1; review F2-12, punt 3).
 # 3. SIGNAAL_FORK_COMMIT = HEAD, of HEAD-dirty bij een vuile werkmap, als
 #    build-argument van het image (K2); zonder --build een waarschuwing als het
@@ -32,7 +32,8 @@ PY_IMG="python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb
 STAAT="${SIGNAAL_STAAT:-$HOME/.cache/signaal}"
 FLOWS=services/langflow/flows
 # Wat langflow uit HEAD gebruikt naast de flows (review F2-12, punt 3).
-KLOON_PADEN=("$FLOWS/" services/langflow/components/ config/langflow-componenten.yaml)
+KLOON_PADEN=("$FLOWS/" services/langflow/components/ config/langflow-componenten.yaml
+             config/modelregister.yaml)
 
 # 0. Niet naast de oude stack.
 if [[ -n "$(docker ps -q --filter label=com.docker.compose.project=open-notebook)" ]]; then

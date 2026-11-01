@@ -178,13 +178,16 @@ class LangflowApi:
         return [str(f["id"]) for f in antwoord if isinstance(f, dict) and f.get("id")]
 
     # ------------------------------------------------------------------ catalogus
-    def componentnamen(self) -> set[str]:
+    def componentnamen(self, ook_geblokkeerd: bool = False) -> set[str]:
         """De sleutels van de componenten in ``GET /api/v1/all`` (de catalogussleutels).
 
-        Langflow laat geblokkeerde componenten daar weg; ``component_display_names``
-        is geen categorie maar een tabel met weergavenamen.
+        Langflow laat geblokkeerde componenten daar weg, behalve met
+        ``include_blocked=true`` (alleen voor de superuser): dan de hele catalogus,
+        met de sleutels in hun eigen schrijfwijze. ``component_display_names`` is
+        geen categorie maar een tabel met weergavenamen.
         """
-        status, antwoord = self._verzoek("GET", "/api/v1/all")
+        pad = "/api/v1/all?include_blocked=true" if ook_geblokkeerd else "/api/v1/all"
+        status, antwoord = self._verzoek("GET", pad)
         if status != 200 or not isinstance(antwoord, dict):
             raise LangflowFout("componenten opvragen", status)
         return {naam for categorie, groep in antwoord.items()
