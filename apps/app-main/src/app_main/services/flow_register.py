@@ -162,8 +162,13 @@ class FlowRegister:
 
 @lru_cache(maxsize=1)
 def fork_commit() -> Optional[str]:
-    """De Git-commit van de fork: ``SIGNAAL_FLOWS_COMMIT``, anders HEAD van de repository."""
-    gezet = (os.environ.get("SIGNAAL_FLOWS_COMMIT") or "").strip().lower()
-    if gezet:
+    """De Git-commit van de fork.
+
+    In de container de commit waaruit het image is gebouwd (build-argument
+    ``SIGNAAL_FORK_COMMIT``, F2-10); daarbuiten HEAD van de repository. De
+    commit van de flows (``SIGNAAL_FLOWS_COMMIT``) telt hier niet.
+    """
+    gezet = (os.environ.get("SIGNAAL_FORK_COMMIT") or "").strip().lower()
+    if gezet and gezet != "onbekend":
         return gezet
     return FlowRegister(_ROOT).head()
