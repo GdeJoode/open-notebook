@@ -42,3 +42,13 @@ class TestTokenCount:
         text = "word " * 1000
         result = token_count(text)
         assert result > 0
+
+
+def test_fallback_when_encoding_unavailable():
+    """F2-10: zonder internet kan tiktoken het encodingbestand niet ophalen; elke
+    uitzondering valt terug op de schatting, de API valt niet om."""
+    import tiktoken
+
+    text = "hello world foo bar"
+    with patch.object(tiktoken, "get_encoding", side_effect=OSError("geen netwerk")):
+        assert token_count(text) == count_tokens_estimate(text)

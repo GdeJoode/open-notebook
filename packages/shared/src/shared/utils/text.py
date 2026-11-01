@@ -212,7 +212,8 @@ def token_count(text: str) -> int:
     """
     Count tokens using tiktoken's ``o200k_base`` encoding.
 
-    Falls back to :func:`count_tokens_estimate` when tiktoken is not installed.
+    Falls back to :func:`count_tokens_estimate` when tiktoken is not installed
+    or its encoding file cannot be loaded (no internet in the container, F2-10).
 
     Args:
         text: The input text.
@@ -227,7 +228,7 @@ def token_count(text: str) -> int:
 
         encoding = tiktoken.get_encoding("o200k_base")
         return len(encoding.encode(text))
-    except ImportError:
+    except Exception:
         return count_tokens_estimate(text)
 
 
