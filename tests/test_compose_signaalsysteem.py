@@ -645,7 +645,9 @@ LANGFLOW_VAST = {
     "LANGFLOW_MCP_SERVER_ENABLED": "false",
     "LANGFLOW_ADD_PROJECTS_TO_MCP_SERVERS": "false",
     "LANGFLOW_MCP_COMPOSER_ENABLED": "false",
-    "LANGFLOW_COMPONENTS_PATH": "/app/componenten",
+    "LANGFLOW_COMPONENTS_PATH": "/app/flows-git/services/langflow/components",
+    "LANGFLOW_CREATE_STARTER_PROJECTS": "false",
+    "LANGFLOW_STORE": "false",
     "LANGFLOW_ALLOW_CUSTOM_COMPONENTS": "false",
     "LANGFLOW_SUBSTITUTE_OUTDATED_COMPONENT_CODE": "false",
     "LANGFLOW_BLOCK_CODE_INTERPRETER_COMPONENTS": "true",
@@ -656,6 +658,7 @@ LANGFLOW_VAST = {
     "LITELLM_LOCAL_MODEL_COST_MAP": "True",
     "LANGFLOW_MODELS_DEV_REFRESH": "false",
     "SIGNAAL_MODELREGISTER": "/config/modelregister.yaml",
+    "SIGNAAL_COMPONENTENLIJST": "/app/flows-git/config/langflow-componenten.yaml",
 }
 _VERBODEN = re.compile(r"^(LANGCHAIN_|LANGSMITH_|LANGFUSE_|LANGWATCH_|ARIZE_|OPIK_|PHOENIX_|"
                        r"TRACELOOP_|OPENLAYER_|OTEL_EXPORTER_OTLP_|ANTHROPIC_|CLAUDE_)", re.I)
@@ -674,9 +677,9 @@ def test_editor_alleen_via_proxy_op_localhost(config) -> None:
     tekst = (ROOT / "services" / "proxy" / "editor.conf").read_text(encoding="utf-8")
     doelen = re.findall(r"http://[^\s;]+", tekst)
     assert doelen == ["http://langflow:7860"], doelen
-    # Geen MCP via de editor.
-    assert re.search(r"location \^~ /api/v1/mcp \{\s*return 404;", tekst)
-    assert re.search(r"location \^~ /api/v2/mcp \{\s*return 404;", tekst)
+    # Geen MCP en geen andere agentinterface via de editor.
+    for pad in ("/api/v1/mcp", "/api/v2/mcp", "/api/v1/agentic", "/api/v1/a2a", "/api/v1/responses"):
+        assert re.search(rf"location \^~ {re.escape(pad)} \{{\s*return 404;", tekst), pad
 
 
 def test_langflow_vaste_instellingen(config) -> None:
@@ -704,9 +707,15 @@ def test_geen_andere_dienst_heeft_de_langflow_geheimen(config) -> None:
 def test_langflow_koppelingen(config, hostpaden) -> None:
     langflow = config["services"]["langflow"]
     kop = {k["target"]: k for k in langflow["volumes"]}
-    assert kop["/app/componenten"].get("read_only") is True
-    assert Path(kop["/app/componenten"]["source"]) == ROOT / "services" / "langflow" / "components"
+    # Componenten en lijst komen uit de kloon van HEAD, niet uit de werkmap (punt 3).
+    assert "/app/componenten" not in kop
+    assert not any(Path(k["source"]) == ROOT / "services" / "langflow" / "components"
+                   for k in kop.values() if k["type"] == "bind")
+    assert langflow["environment"]["LANGFLOW_COMPONENTS_PATH"].startswith("/app/flows-git/")
     assert kop["/config"].get("read_only") is True
+    # Alleen-lezen, met /tmp als tmpfs (punt 8).
+    assert langflow.get("read_only") is True
+    assert "/tmp" in (langflow.get("tmpfs") or [])
     assert kop["/app/flows-git"].get("read_only") is True
     assert Path(kop["/app/flows-git"]["source"]) == Path(hostpaden["SIGNAAL_FLOWS_KLOON"])
     assert langflow["environment"]["SIGNAAL_FLOWS_MAP"] == \
@@ -743,3 +752,21 @@ def test_start_sh_maakt_de_langflow_geheimen() -> None:
         assert f'"$ROOT/secrets/{geheim}"' in tekst, geheim
     # Fernet: url-veilig base64 van 32 bytes.
     assert "head -c 32 /dev/urandom | base64 | tr '+/' '-_'" in tekst
+
+
+def test_langflow_image_zonder_mcp_en_agentinterfaces() -> None:
+    """Review F2-12, B1 en punt 10: de routers gaan uit router.py, en de build faalt
+    als er in langflow/api nog een include_router met mcp, a2a of openai_responses is."""
+    tekst = (ROOT / "services" / "langflow" / "Dockerfile").read_text(encoding="utf-8")
+    for router in ("mcp_router", "mcp_projects_router", "mcp_router_v2", "agentic_mcp_router",
+                   "a2a_router", "openai_responses_router"):
+        assert rf"include_router\({router}\)" in tekst, router
+    assert r"include_router\(.*(mcp|a2a|openai_responses)" in tekst
+
+
+def test_start_sh_kloont_lijst_en_componenten() -> None:
+    """Review F2-12, punt 3: langflow gebruikt lijst en componenten uit HEAD."""
+    tekst = (ROOT / "scripts" / "signaalsysteem" / "start.sh").read_text(encoding="utf-8")
+    assert re.search(r'^KLOON_PADEN=\("\$FLOWS/" services/langflow/components/ '
+                     r'config/langflow-componenten\.yaml\)$', tekst, re.M)
+    assert 'sparse-checkout set --no-cone "${KLOON_PADEN[@]/#//}"' in tekst
