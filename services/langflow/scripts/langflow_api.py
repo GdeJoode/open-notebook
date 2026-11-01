@@ -163,3 +163,43 @@ class LangflowApi:
         if status != 200 or not isinstance(antwoord, dict):
             raise LangflowFout(f"trigger {trigger_id} aanzetten", status)
         return antwoord
+
+    def zet_uit(self, trigger_id: str) -> dict:
+        status, antwoord = self._verzoek("POST", f"/api/v1/triggers/{trigger_id}/disable")
+        if status != 200 or not isinstance(antwoord, dict):
+            raise LangflowFout(f"trigger {trigger_id} uitzetten", status)
+        return antwoord
+
+    def flow_ids(self) -> list[str]:
+        """De id's van alle flows van de superuser (ook die uit de editor)."""
+        status, antwoord = self._verzoek("GET", "/api/v1/flows/?get_all=true&header_flows=true")
+        if status != 200 or not isinstance(antwoord, list):
+            raise LangflowFout("flows opvragen", status)
+        return [str(f["id"]) for f in antwoord if isinstance(f, dict) and f.get("id")]
+
+    # ------------------------------------------------------------------ catalogus
+    def componentnamen(self) -> set[str]:
+        """De sleutels van de componenten in ``GET /api/v1/all`` (de catalogussleutels).
+
+        Langflow laat geblokkeerde componenten daar weg; ``component_display_names``
+        is geen categorie maar een tabel met weergavenamen.
+        """
+        status, antwoord = self._verzoek("GET", "/api/v1/all")
+        if status != 200 or not isinstance(antwoord, dict):
+            raise LangflowFout("componenten opvragen", status)
+        return {naam for categorie, groep in antwoord.items()
+                if categorie != "component_display_names" and isinstance(groep, dict)
+                for naam in groep}
+
+    def blokkeerset(self) -> set[str]:
+        status, antwoord = self._verzoek("GET", "/api/v1/catalog-policy/components")
+        if status != 200 or not isinstance(antwoord, dict):
+            raise LangflowFout("catalogusbeleid opvragen", status)
+        return set(antwoord.get("blocked") or [])
+
+    def zet_blokkeerset(self, sleutels: set[str]) -> set[str]:
+        status, antwoord = self._verzoek("PUT", "/api/v1/catalog-policy/components",
+                                         body={"blocked": sorted(sleutels)})
+        if status != 200 or not isinstance(antwoord, dict):
+            raise LangflowFout("catalogusbeleid zetten", status)
+        return set(antwoord.get("blocked") or [])

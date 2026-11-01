@@ -17,6 +17,12 @@ repository, dus exporteren gaat in twee stappen::
     # 2. op de host: de bundel naar de flowmap schrijven
     python services/langflow/scripts/flows_exporteren.py --schrijf services/langflow/flows < export.json
 
+Zet ``export.json`` in een tijdelijke map buiten de repository (``.gitignore``
+sluit ``export.json`` ook uit). ``--schrijf`` schrijft alleen als elke flow alleen
+typen van de componentenlijst gebruikt (``--lijst``, standaard
+``config/langflow-componenten.yaml``) en geen waarde bevat die op een sleutel lijkt
+(:func:`geheimen`); anders schrijft het niets en eindigt het met exitcode 1.
+
     # controle: verschilt Langflow van de map? (exitcode 1 bij een verschil)
     ... flows_exporteren.py --vergelijk <map> < export.json
 
@@ -36,6 +42,23 @@ import sys
 from pathlib import Path
 
 STANDAARD_MAP = "/app/flows-git/services/langflow/flows"
+#: Op de host: de lijst in de werkmap (services/langflow/scripts -> root); in de
+#: container is er geen werkmap en geldt SIGNAAL_COMPONENTENLIJST.
+_HIER = Path(__file__).resolve()
+STANDAARD_LIJST = os.environ.get("SIGNAAL_COMPONENTENLIJST") or (
+    str(_HIER.parents[3] / "config" / "langflow-componenten.yaml") if len(_HIER.parents) > 3 else "")
+
+#: Waarden die op een sleutel of token lijken (review F2-12, punt 6).
+SLEUTELPATRONEN = tuple(re.compile(p) for p in (
+    r"sk-[A-Za-z0-9_-]{16,}",                          # OpenAI, Anthropic
+    r"\bak_[A-Za-z0-9_-]{16,}",                        # sleutels van de fork
+    r"\bAKIA[0-9A-Z]{16}\b",                           # AWS
+    r"\bgh[pousr]_[A-Za-z0-9]{20,}",                   # GitHub
+    r"\bxox[abpr]-[A-Za-z0-9-]{10,}",                  # Slack
+    r"\bAIza[0-9A-Za-z_-]{35}",                        # Google
+    r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.",  # JWT
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+))
 
 #: Velden die Langflow 1.13.0 niet zelf weghaalt, maar die per installatie of per
 #: opslag verschillen (vastgesteld in F2-12): de werkruimte, de gebruiker die het
@@ -92,6 +115,37 @@ def exporteer(api, ids: list[str], bekend: dict[str, str]) -> dict[str, dict]:
     return bundel
 
 
+def geheimen(waarde, pad: str = "") -> list[str]:
+    """Plaatsen in de flow met een waarde die op een sleutel lijkt.
+
+    Ook een veld met ``password: true`` en een ingevulde waarde, tenzij die
+    waarde de naam van een globale variabele is (``load_from_db``).
+    """
+    uit: list[str] = []
+    if isinstance(waarde, dict):
+        if (waarde.get("password") is True and isinstance(waarde.get("value"), str)
+                and waarde["value"].strip() and not waarde.get("load_from_db")):
+            uit.append(f"{pad}/value (wachtwoordveld ingevuld)")
+        for sleutel, binnen in waarde.items():
+            uit += geheimen(binnen, f"{pad}/{sleutel}")
+    elif isinstance(waarde, list):
+        for i, binnen in enumerate(waarde):
+            uit += geheimen(binnen, f"{pad}[{i}]")
+    elif isinstance(waarde, str) and any(p.search(waarde) for p in SLEUTELPATRONEN):
+        uit.append(pad or "/")
+    return uit
+
+
+def toets_bundel(bundel: dict[str, dict], lijst: Path | str) -> list[str]:
+    """Weigeringen voor ``--schrijf``: typen buiten de lijst en waarden die op een sleutel lijken."""
+    from flows_laden import lees_lijst, toets
+
+    fouten = [f"{b}: {r}" for b, r in toets(bundel, lees_lijst(lijst))]
+    for naam, flow in sorted(bundel.items()):
+        fouten += [f"{naam}: lijkt op een sleutel: {p}" for p in geheimen(flow)]
+    return fouten
+
+
 def schrijf(bundel: dict[str, dict], doel: Path | str) -> list[str]:
     doel = Path(doel)
     doel.mkdir(parents=True, exist_ok=True)
@@ -126,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
     vorm.add_argument("--vergelijk", metavar="MAP", help="bundel van stdin met MAP vergelijken")
     p.add_argument("--map", default=os.environ.get("SIGNAAL_FLOWS_MAP", STANDAARD_MAP))
     p.add_argument("--id", action="append", default=[], help="id van een flow (herhaalbaar)")
+    p.add_argument("--lijst", default=STANDAARD_LIJST, help="componentenlijst voor --schrijf")
     args = p.parse_args(argv)
 
     if args.schrijf or args.vergelijk:
@@ -134,6 +189,12 @@ def main(argv: list[str] | None = None) -> int:
             print("flows_exporteren: geen bundel op stdin", file=sys.stderr)
             return 2
         if args.schrijf:
+            fouten = toets_bundel(bundel, args.lijst)
+            for regel in fouten:
+                print(f"flows_exporteren: geweigerd: {regel}", file=sys.stderr)
+            if fouten:
+                print("flows_exporteren: niets geschreven", file=sys.stderr)
+                return 1
             for naam in schrijf(bundel, args.schrijf):
                 print(f"flows_exporteren: geschreven: {naam}", file=sys.stderr)
             return 0

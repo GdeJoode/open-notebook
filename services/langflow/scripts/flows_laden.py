@@ -12,9 +12,13 @@ maakt (``/app/flows-git``), dezelfde als die van het flowregister van de fork
 (F2-04). Elke flow heeft een vaste ``id``: zo werkt het laden bij een herstart
 de bestaande flow bij in plaats van een kopie te maken.
 
+Na het toetsen zet het script ook het catalogusbeleid van Langflow: elke
+component die niet op de lijst staat, is geblokkeerd, ook in de editor. Na het
+laden zet het de triggers uit van flows die niet uit de kloon komen (review F2-12).
+
 Gebruik (in de container, door ``start.sh``)::
 
-    python flows_laden.py                    # toetsen, laden, triggers aanzetten
+    python flows_laden.py                    # toetsen, beleid, laden, triggers
     python flows_laden.py --alleen-toetsen   # alleen de componentenlijst
 
 Exitcodes: 0 geslaagd; 1 een flow geweigerd (type niet op de lijst, ongeldige
@@ -141,6 +145,46 @@ def toets(flows: dict[str, dict], toegestaan: Iterable[str]) -> list[tuple[str, 
     return weigeringen
 
 
+#: Langflow 1.13.0 neemt hooguit zoveel sleutels in een blokkeerset.
+MAX_BLOKKEERSET = 1000
+
+
+def zet_catalogusbeleid(api, toegestaan: Iterable[str]) -> str:
+    """Blokkeer in Langflow zelf elke component die niet op de lijst staat (review F2-12, punt 2).
+
+    Het catalogusbeleid van Langflow 1.13.0 (``PUT /api/v1/catalog-policy/components``)
+    geldt ook voor de editor: een geblokkeerde component is daar niet te kiezen en
+    een flow met zo'n component draait niet. De set wordt daarna opnieuw gelezen.
+    """
+    # Langflow laat geblokkeerde componenten weg uit /api/v1/all; de huidige
+    # blokkeerset hoort er dus bij, anders zou een tweede start alles vrijgeven.
+    namen = api.componentnamen() | api.blokkeerset()
+    laag = {t.lower() for t in toegestaan}
+    blokkeren = {n for n in namen if n.lower() not in laag}
+    if not blokkeren or len(blokkeren) > MAX_BLOKKEERSET:
+        raise ValueError(f"blokkeerset van {len(blokkeren)} componenten past niet")
+    api.zet_blokkeerset(blokkeren)
+    # Langflow bewaart de sleutels na een herstart in kleine letters.
+    staat = api.blokkeerset()
+    if {s.lower() for s in staat} != {b.lower() for b in blokkeren}:
+        raise ValueError("catalogusbeleid staat na het zetten niet zoals gevraagd")
+    return f"catalogusbeleid: {len(blokkeren)} van {len(namen)} componenten geblokkeerd"
+
+
+def zet_andere_triggers_uit(api, geladen: Iterable[str]) -> str:
+    """Zet de triggers uit van flows die niet uit de kloon komen (review F2-12, punt 2)."""
+    geladen = set(geladen)
+    uit = 0
+    for flow_id in api.flow_ids():
+        if flow_id in geladen:
+            continue
+        for trigger in api.triggers(flow_id):
+            if trigger.get("state") != "disabled":
+                api.zet_uit(trigger["id"])
+                uit += 1
+    return f"triggers van flows buiten Git uitgezet: {uit}"
+
+
 def laad(api, flows: dict[str, dict]) -> list[str]:
     """Laad de flows en zet hun triggers aan; geeft een regel per flow terug."""
     regels = []
@@ -190,9 +234,11 @@ def main(argv: list[str] | None = None) -> int:
         print("flows_laden: Langflow niet gezond", file=sys.stderr)
         return 3
     try:
+        print(f"flows_laden: {zet_catalogusbeleid(api, toegestaan)}")
         for regel in laad(api, flows):
             print(f"flows_laden: {regel}")
-    except LangflowFout as e:
+        print(f"flows_laden: {zet_andere_triggers_uit(api, (f['id'] for f in flows.values()))}")
+    except (LangflowFout, ValueError) as e:
         print(f"flows_laden: {e}", file=sys.stderr)
         return 3
     return 0

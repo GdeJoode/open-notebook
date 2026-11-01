@@ -159,3 +159,5 @@ NIM info.txt
 
 # Geheimbestanden voor Docker secrets (signaalsysteem, ADR 0002 F)
 secrets/
+# Tussenbestand van flows_exporteren.py (F2-12); hoort in een tijdelijke map.
+export.json
