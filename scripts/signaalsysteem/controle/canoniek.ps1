@@ -47,7 +47,9 @@ function Canoniek([string]$pad, [int]$diepte) {
     return ($huidig -replace '\\', '/')
 }
 
-$uit = [ordered]@{}
+# Ordinaal (hoofdlettergevoelig): elk opgegeven pad is een eigen sleutel, ook als
+# twee paden alleen in hoofdletters verschillen; anders ontbreekt er een (fail-open).
+$uit = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
 foreach ($regel in [Console]::In.ReadToEnd() -split "`r?`n") {
     if ($regel -ne '') { $uit[$regel] = Canoniek $regel 0 }
 }

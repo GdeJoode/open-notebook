@@ -435,8 +435,9 @@ def test_canoniek_pad_uit_start_sh_telt() -> None:
     p = _padlijsten()
     env = {"SIGNAAL_VAULT": _VAULT}
     assert p.controleer(_cfg("C:/inname"), env) == []
-    assert p.controleer(_cfg("C:/kop"), env, {"C:/kop": "D:/# Vault/20 Atlas"})
-    assert p.controleer(_cfg("C:/weg"), env, {"C:/weg": None})
+    vast = {"C:/w": "C:/w", _VAULT: _VAULT}
+    assert p.controleer(_cfg("C:/kop"), env, {**vast, "C:/kop": "D:/# Vault/20 Atlas"})
+    assert p.controleer(_cfg("C:/weg"), env, {**vast, "C:/weg": None})
 
 
 def test_andere_dienst_koppelt_de_vault() -> None:
@@ -449,3 +450,59 @@ def test_andere_dienst_koppelt_de_vault() -> None:
 def test_koppelpunt_met_puntpunt() -> None:
     assert _padlijsten().controleer(_cfg("C:/inname", "/inname/../vault"),
                                     {"SIGNAAL_VAULT": _VAULT})
+
+
+def test_ontbrekend_canoniek_pad_wordt_geweigerd() -> None:
+    """Herreview 1: een pad dat niet in de canonieke map staat, telt niet als in orde."""
+    p = _padlijsten()
+    env = {"SIGNAAL_VAULT": _VAULT}
+    alles = {"C:/inname": "C:/inname", "C:/w": "C:/w", _VAULT: _VAULT}
+    assert p.controleer(_cfg("C:/inname"), env, alles) == []
+    zonder = {k: v for k, v in alles.items() if k != "C:/inname"}
+    assert p.controleer(_cfg("C:/inname"), env, zonder)
+    assert p.controleer(_cfg("C:/inname"), env, {})
+
+
+@pytest.mark.parametrize("waarde", [None, "", "{}"])
+def test_main_weigert_zonder_canonieke_paden(monkeypatch, capsys, waarde) -> None:
+    import io
+
+    p = _padlijsten()
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_cfg("C:/inname"))))
+    monkeypatch.setenv("SIGNAAL_VAULT", _VAULT)
+    if waarde is None:
+        monkeypatch.delenv("SIGNAAL_CANONIEK", raising=False)
+    else:
+        monkeypatch.setenv("SIGNAAL_CANONIEK", waarde)
+    assert p.main([]) == 1
+    assert "SIGNAAL_CANONIEK" in capsys.readouterr().err
+
+
+def _powershell() -> str | None:
+    vast = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    return shutil.which("powershell.exe") or (vast if os.path.exists(vast) else None)
+
+
+@pytest.mark.skipif(_powershell() is None, reason="PowerShell niet beschikbaar")
+def test_canoniek_ps1_lost_paden_op_en_onderscheidt_hoofdletters() -> None:
+    """Draait canoniek.ps1 zelf (vanuit WSL via powershell.exe)."""
+    script = ROOT / "scripts" / "signaalsysteem" / "controle" / "canoniek.ps1"
+    if str(script).startswith("/mnt/"):
+        script_win = subprocess.run(["wslpath", "-w", str(script)], capture_output=True,
+                                    text=True).stdout.strip()
+    else:
+        script_win = str(script)
+    paden_in = [r"C:\Windows", r"c:\windows", r"C:\PROGRA~1", r"C:\bestaat-niet-f210",
+                r"C:\Windows\..\Windows"]
+    uit = subprocess.run([_powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass",
+                          "-File", script_win], input="\n".join(paden_in).encode("utf-8"),
+                         capture_output=True, timeout=60)
+    assert uit.returncode == 0, uit.stderr
+    paden = json.loads(uit.stdout.decode("utf-8"))
+    # Ordinaal: twee schrijfwijzen zijn twee sleutels.
+    assert set(paden) == set(paden_in)
+    assert paden[r"C:\Windows"].lower() == "c:/windows"
+    assert paden[r"c:\windows"].lower() == "c:/windows"
+    assert paden[r"C:\PROGRA~1"] == "C:/Program Files"
+    assert paden[r"C:\bestaat-niet-f210"] is None
+    assert paden[r"C:\Windows\..\Windows"] is None

@@ -122,12 +122,15 @@ def controleer(config: Mapping, host: Mapping[str, str],
                canoniek: Optional[Mapping[str, Optional[str]]] = None) -> list[str]:
     """Fouten in de koppelingen van een opgeloste Compose-configuratie."""
     fouten: list[str] = []
-    canoniek = canoniek or {}
 
     def canon(pad: str) -> Optional[str]:
-        if pad in canoniek:
-            return _norm(canoniek[pad]) if canoniek[pad] else None
-        return _norm(pad)
+        """Met een canonieke map (start.sh): een pad dat er niet in staat, of
+        dat niet op te lossen was, geeft None en wordt geweigerd. Zonder map
+        (alleen in tests van de vorm): de vorm zelf."""
+        if canoniek is None:
+            return _norm(pad)
+        waarde = canoniek.get(pad)
+        return _norm(waarde) if waarde else None
 
     hostpaden: dict[str, str] = {}
     for naam in HOSTVARIABELEN:
@@ -190,7 +193,14 @@ def main(argv: list[str]) -> int:
     if argv[:1] == ["--bronnen"]:
         print("\n".join(bind_bronnen(config)))
         return 0
-    canoniek = json.loads(os.environ.get("SIGNAAL_CANONIEK") or "{}")
+    try:
+        canoniek = json.loads(os.environ.get("SIGNAAL_CANONIEK") or "null")
+    except ValueError:
+        canoniek = None
+    if not isinstance(canoniek, dict) or not canoniek:
+        print("padlijsten: SIGNAAL_CANONIEK ontbreekt of is leeg; start via start.sh "
+              "(fail-closed)", file=sys.stderr)
+        return 1
     fouten = controleer(config, os.environ, canoniek)
     for fout in fouten:
         print(f"padlijsten: {fout}", file=sys.stderr)
