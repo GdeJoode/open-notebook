@@ -18,7 +18,9 @@
 # 5. Leest het superuserwachtwoord en LANGFLOW_SECRET_KEY uit /run/secrets in de
 #    omgeving van het proces, niet in die van de container.
 # 6. Start Langflow, laadt de flows (POST /api/v1/flows/upload/) en zet hun
-#    triggers aan. Lukt dat niet, dan stopt Langflow (exitcode 1). Daarna
+#    triggers aan, zet de triggers van andere flows uit en zet het
+#    catalogusbeleid van Langflow (alles buiten de lijst geblokkeerd; zie
+#    flows_laden.py). Lukt dat niet, dan stopt Langflow (exitcode 1). Daarna
 #    /tmp/signaal-flows-geladen, voor de healthcheck.
 set -eu
 
@@ -43,27 +45,44 @@ if [ -n "$gevonden" ]; then
   exit 1
 fi
 
-# 2. Vaste instellingen.
-vereist() { # <naam> <waarde, kleine letters>
-  eval "waarde=\${$1-}"
-  if [ "$(printf '%s' "$waarde" | tr '[:upper:]' '[:lower:]')" != "$2" ]; then
-    fout "weigert te starten: $1 moet $2 zijn (ADR 0017, 0022)"
+# 2. Vaste instellingen: precies deze naam met precies deze waarde (kleine
+#    letters vergeleken). Een tweede variabele met dezelfde naam in andere
+#    hoofdletters (zoals langflow_auto_login) wordt geweigerd: pydantic leest
+#    die ook, en welke dan wint, is niet vast (review F2-12, punt 1).
+VAST="LANGFLOW_AUTO_LOGIN=false
+LANGFLOW_ALLOW_CUSTOM_COMPONENTS=false
+LANGFLOW_SUBSTITUTE_OUTDATED_COMPONENT_CODE=false
+LANGFLOW_BLOCK_CODE_INTERPRETER_COMPONENTS=true
+LANGFLOW_AGENTIC_EXPERIENCE=false
+LANGFLOW_ALLOW_COMPONENTS_PATHS_OVERRIDE=true
+LANGFLOW_COMPONENTS_PATH=/app/flows-git/services/langflow/components
+LANGFLOW_CREATE_STARTER_PROJECTS=false
+LANGFLOW_STORE=false
+LANGFLOW_DEACTIVATE_TRACING=true
+DO_NOT_TRACK=true
+LANGFLOW_MCP_SERVER_ENABLED=false
+LANGFLOW_ADD_PROJECTS_TO_MCP_SERVERS=false
+LANGFLOW_MCP_COMPOSER_ENABLED=false
+LITELLM_LOCAL_MODEL_COST_MAP=true
+LANGFLOW_MODELS_DEV_REFRESH=false"
+for naam in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p'); do
+  hoog="$(printf '%s' "$naam" | tr '[:lower:]' '[:upper:]')"
+  for regel in $VAST; do
+    vast="${regel%%=*}"
+    if [ "$hoog" = "$vast" ] && [ "$naam" != "$vast" ]; then
+      fout "weigert te starten: $naam lijkt op de vaste instelling $vast (andere hoofdletters)"
+      exit 1
+    fi
+  done
+done
+for regel in $VAST; do
+  vast="${regel%%=*}"
+  eval "waarde=\${$vast-}"
+  if [ "$(printf '%s' "$waarde" | tr '[:upper:]' '[:lower:]')" != "${regel#*=}" ]; then
+    fout "weigert te starten: $vast moet ${regel#*=} zijn (ADR 0017, 0022)"
     exit 1
   fi
-}
-vereist LANGFLOW_AUTO_LOGIN false
-vereist LANGFLOW_ALLOW_CUSTOM_COMPONENTS false
-vereist LANGFLOW_SUBSTITUTE_OUTDATED_COMPONENT_CODE false
-vereist LANGFLOW_BLOCK_CODE_INTERPRETER_COMPONENTS true
-vereist LANGFLOW_AGENTIC_EXPERIENCE false
-vereist LANGFLOW_ALLOW_COMPONENTS_PATHS_OVERRIDE true
-vereist LANGFLOW_DEACTIVATE_TRACING true
-vereist DO_NOT_TRACK true
-vereist LANGFLOW_MCP_SERVER_ENABLED false
-vereist LANGFLOW_ADD_PROJECTS_TO_MCP_SERVERS false
-vereist LANGFLOW_MCP_COMPOSER_ENABLED false
-vereist LITELLM_LOCAL_MODEL_COST_MAP true
-vereist LANGFLOW_MODELS_DEV_REFRESH false
+done
 
 if [ "${1:-}" = "--controle" ]; then
   echo "langflow-start: controle geslaagd"

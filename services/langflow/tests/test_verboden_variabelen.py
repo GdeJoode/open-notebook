@@ -27,6 +27,9 @@ VAST = {
     "LANGFLOW_BLOCK_CODE_INTERPRETER_COMPONENTS": "true",
     "LANGFLOW_AGENTIC_EXPERIENCE": "false",
     "LANGFLOW_ALLOW_COMPONENTS_PATHS_OVERRIDE": "true",
+    "LANGFLOW_COMPONENTS_PATH": "/app/flows-git/services/langflow/components",
+    "LANGFLOW_CREATE_STARTER_PROJECTS": "false",
+    "LANGFLOW_STORE": "false",
     "LANGFLOW_DEACTIVATE_TRACING": "true",
     "DO_NOT_TRACK": "true",
     "LANGFLOW_MCP_SERVER_ENABLED": "false",
@@ -92,3 +95,18 @@ def test_startscript_weigert_zonder_vaste_instelling(naam: str) -> None:
 def test_startscript_weigert_afwijkende_instelling(naam: str, waarde: str) -> None:
     uit = _start({naam: waarde})
     assert uit.returncode == 1 and naam in uit.stderr
+
+
+@pytest.mark.parametrize("naam", sorted(VAST))
+def test_startscript_weigert_naam_in_andere_hoofdletters(naam: str) -> None:
+    """Review F2-12, punt 1: pydantic leest ook kleine letters; een tweede variabele
+    met dezelfde naam in andere hoofdletters wordt geweigerd, ook met de vaste waarde."""
+    anders = naam.lower() if naam != naam.lower() else naam.upper()
+    uit = _start({anders: VAST[naam]})
+    assert uit.returncode == 1, uit.stderr
+    assert anders in uit.stderr and "andere hoofdletters" in uit.stderr
+
+
+def test_gemengde_hoofdletters_worden_ook_geweigerd() -> None:
+    uit = _start({"Langflow_Auto_Login": "false"})
+    assert uit.returncode == 1 and "Langflow_Auto_Login" in uit.stderr
