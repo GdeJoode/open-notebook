@@ -75,3 +75,11 @@ Thumbs.db
 
 .quarentena/
 surreal_single_data/
+
+# Signaalsysteem (F2-10): geen geheimen of lokale data in het image.
+secrets/
+NIM info.txt
+notebook_data_live/
+ingestion_output/
+graphify-out/
+claudedocs/

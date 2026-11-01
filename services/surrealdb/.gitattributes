@@ -1,0 +1,2 @@
+# start.sh draait in de container (busybox sh): altijd LF.
+*.sh text eol=lf

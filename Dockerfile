@@ -1,8 +1,8 @@
 # Build stage
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337 AS builder
 
 # Install uv using the official method
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.13@sha256:841c8e6fe30a8b07b4478d12d0c608cba6de66102d29d65d1cc423af86051563 /uv /uvx /bin/
 
 # Install system dependencies required for building certain Python packages
 # Add Node.js 20.x LTS for building frontend
@@ -71,20 +71,22 @@ RUN npm run build
 WORKDIR /app
 
 # Runtime stage
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337 AS runtime
 
 # Install only runtime system dependencies (no build tools)
+# git: het flowregister leest de alleen-lezen gekoppelde Git-gegevens (F2-04, F2-10)
 # Add Node.js 20.x LTS for running frontend
 RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     ffmpeg \
     supervisor \
     curl \
+    git \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv using the official method
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.13@sha256:841c8e6fe30a8b07b4478d12d0c608cba6de66102d29d65d1cc423af86051563 /uv /uvx /bin/
 
 # Set the working directory in the container to /app
 WORKDIR /app

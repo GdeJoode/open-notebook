@@ -1,0 +1,4 @@
+# Flows worden in de container open-notebook met Git gecontroleerd (F2-04,
+# FlowRegister). Geen regeleindeconversie: het bestand in de werkmap moet
+# byte voor byte gelijk zijn aan de blob in HEAD, ook na een checkout onder Windows.
+* -text
