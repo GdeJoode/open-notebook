@@ -4,14 +4,22 @@ FROM python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21e
 # Install uv using the official method
 COPY --from=ghcr.io/astral-sh/uv:0.11.13@sha256:841c8e6fe30a8b07b4478d12d0c608cba6de66102d29d65d1cc423af86051563 /uv /uvx /bin/
 
-# Install system dependencies required for building certain Python packages
-# Add Node.js 20.x LTS for building frontend
-RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+# Install system dependencies required for building certain Python packages.
+# Geen apt-get upgrade: de basis ligt vast op digest (F2-10).
+RUN apt-get update && apt-get install -y \
     gcc g++ git make \
     curl \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Node.js met vaste versie en SHA-256 (uit nodejs.org/dist/v20.19.5/SHASUMS256.txt),
+# in plaats van het NodeSource-script (F2-10). De runtime neemt /opt/node over.
+ARG NODE_VERSION=20.19.5
+ARG NODE_SHA256=4eba5fbe1fb10753bc06e42f001a91c5cec16798b7764a3e9257adc59af47fe1
+RUN curl -fsSLo /tmp/node.tar.gz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" \
+    && echo "${NODE_SHA256}  /tmp/node.tar.gz" | sha256sum -c - \
+    && mkdir -p /opt/node && tar -xzf /tmp/node.tar.gz -C /opt/node --strip-components=1 \
+    && rm /tmp/node.tar.gz
+ENV PATH="/opt/node/bin:${PATH}"
 
 # Set build optimization environment variables
 ENV MAKEFLAGS="-j$(nproc)"
@@ -67,23 +75,29 @@ RUN --mount=type=cache,target=/root/.npm \
     npm ci
 RUN npm run build
 
+# Het tiktoken-encodingbestand bij de build ophalen: in de container is geen
+# internet (F2-10). Zelfde pad in de runtime via TIKTOKEN_CACHE_DIR.
+RUN TIKTOKEN_CACHE_DIR=/opt/tiktoken /app/.venv/bin/python -c \
+    "import tiktoken; tiktoken.get_encoding('o200k_base')"
+
 # Return to app root
 WORKDIR /app
 
 # Runtime stage
 FROM python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337 AS runtime
 
-# Install only runtime system dependencies (no build tools)
-# git: het flowregister leest de alleen-lezen gekoppelde Git-gegevens (F2-04, F2-10)
-# Add Node.js 20.x LTS for running frontend
-RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+# Install only runtime system dependencies (no build tools); geen apt-get upgrade.
+# git: het flowregister leest een alleen-lezen kloon van de flowmap (F2-04, F2-10)
+RUN apt-get update && apt-get install -y \
     ffmpeg \
     supervisor \
     curl \
     git \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /opt/node /opt/node
+ENV PATH="/opt/node/bin:${PATH}"
+COPY --from=builder /opt/tiktoken /opt/tiktoken
+ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken
 
 # Install uv using the official method
 COPY --from=ghcr.io/astral-sh/uv:0.11.13@sha256:841c8e6fe30a8b07b4478d12d0c608cba6de66102d29d65d1cc423af86051563 /uv /uvx /bin/
@@ -122,5 +136,12 @@ RUN mkdir -p /var/log/supervisor
 # Set API_URL when using reverse proxies or custom domains.
 #
 # Example: docker run -e API_URL=https://your-domain.com/api ...
+
+# De commit van de fork waaruit dit image is gebouwd (fork_commit(), F2-10);
+# start.sh geeft hem mee. De HEAD van de host geldt alleen voor de flows.
+# Achteraan, zodat een nieuwe commit de grote lagen niet ongeldig maakt.
+ARG SIGNAAL_FORK_COMMIT=onbekend
+LABEL org.opencontainers.image.revision=$SIGNAAL_FORK_COMMIT
+ENV SIGNAAL_FORK_COMMIT=$SIGNAAL_FORK_COMMIT
 
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
