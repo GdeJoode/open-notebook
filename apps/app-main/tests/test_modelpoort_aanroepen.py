@@ -205,13 +205,31 @@ async def test_filteringsmatcher_via_de_poort(poort):
 
     svc = EntityExtractionService.__new__(EntityExtractionService)
     svc._classificatie = "intern"
+    svc._run_id = "processing_run:r"
     antwoord = await svc._llm_chat([{"role": "user", "content": "zelfde?"}])
 
     assert antwoord.model == "werkmodel"
     _alles_naar_llama_swap(poort)
     assert poort.payload()["response_format"] == {"type": "json_object"}
     [regel] = poort.regels
-    assert (regel.task, regel.classification) == ("entity_dedup", "intern")
+    assert (regel.task, regel.classification, regel.run) == (
+        "entity_dedup", "intern", "processing_run:r")
+
+
+async def test_extractie_en_samenvatten_geven_de_run_mee(poort):
+    """F2-15 (review F2-08): de run gaat mee naar de poort, voor ``processing_run.models``."""
+    from app_main.services.entity_extraction_service import EntityExtractionService
+    from app_main.services.summarization_service import SummarizationService
+
+    svc = EntityExtractionService.__new__(EntityExtractionService)
+    svc._classificatie, svc._run_id = "intern", "processing_run:r"
+    caller = await svc._make_routed_caller()
+    await caller("systeem", "gebruiker")
+    await SummarizationService._poortmodel("intern", "processing_run:r").achat_complete(
+        [{"role": "user", "content": "vat samen"}])
+
+    assert [(r.task, r.run) for r in poort.regels] == [
+        ("entity_extraction", "processing_run:r"), ("summarization", "processing_run:r")]
 
 
 async def test_zoeken_embedt_de_vraag_via_de_poort(poort):

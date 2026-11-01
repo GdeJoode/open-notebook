@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from llm_manager.aanroep import PoortAanroeper
+from llm_manager.aanroep import EMBEDDING, PoortAanroeper
 
 
 class PoortEmbedder:
@@ -25,3 +25,12 @@ class PoortEmbedder:
         return await self._aanroeper.embed(
             teksten=list(texts), classificatie=classificatie, run_id=run_id
         )
+
+    def herkomst(self) -> Optional[str]:
+        """``naam:versie`` van het embeddingmodel uit het register (ADR 0003, 0008).
+
+        Hetzelfde model als :meth:`aembed` kiest; ``None`` als het register geen
+        embeddingmodel heeft (dan weigert de poort de aanroep toch).
+        """
+        model = self._aanroeper.gate.register.voor_taak(EMBEDDING)
+        return f"{model.naam}:{model.versie}" if model else None

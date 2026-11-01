@@ -422,6 +422,8 @@ class EntityExtractionService:
         # F2-08: de classificatie van de fragmenten van deze run, voor de poort.
         # ``None`` (geen run) telt als intern.
         self._classificatie: Optional[str] = None
+        # F2-15: de run van de stap, voor ``model_call`` en ``processing_run.models``.
+        self._run_id: Optional[str] = None
         # Run-scoped applied schemas (Track L.1). Set in ``_run_multi_schema``
         # after ``detect_applicable_schemas`` and consumed at the persist site
         # so the canonical bridge has them WITHOUT re-detecting. Reset at the
@@ -453,6 +455,7 @@ class EntityExtractionService:
         return await get_aanroeper().chat(
             taak="entity_dedup",
             classificatie=self._classificatie,
+            run_id=self._run_id,
             messages=messages,
             json_mode=True,
         )
@@ -467,6 +470,7 @@ class EntityExtractionService:
             model_id=model_id,
             classificatie=self._classificatie,
             default_field="default_extraction_model",
+            run_id=self._run_id,
         )
         self._last_routed_caller = caller
         return caller
@@ -550,7 +554,7 @@ class EntityExtractionService:
             embed_svc = await get_embedding_service()
             # Batch embed all entity texts
             vectors = await embed_svc.embedding_model.aembed(
-                texts, classificatie=self._classificatie
+                texts, classificatie=self._classificatie, run_id=self._run_id
             )
 
             # Map vectors back to entities
@@ -1376,9 +1380,16 @@ class EntityExtractionService:
         filtering_config: Optional[FilteringConfig] = None,
         notebook_id: Optional[str] = None,
         multi_schema_enabled: bool = True,
+        run_id: Optional[str] = None,
+        fragmenten: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         """
         Run entity extraction and optional filtering for a source.
+
+        Stap ``entity_extraction`` (F2-15): ``fragmenten`` zijn die van de
+        bronversie en de run van de stap, en ``run_id`` gaat mee naar de
+        modelpoort, zodat ``processing_run.models`` gevuld wordt (ADR 0003,
+        0007). Zonder ``fragmenten`` de huidige versie en run van de bron.
 
         1. Fetch chunks via SourceRepository.
         2. Build ExtractionConfig and ExtractionWorkflow.
@@ -1413,7 +1424,11 @@ class EntityExtractionService:
         # F2-04 (ADR 0003): alleen de huidige versie en run, zodat oude en
         # nieuwe tekst niet allebei naar het model gaan. De run van een
         # vermelding leidt de database af uit haar fragment (migratie 90).
-        chunks = await self._source_repo.get_chunks(source_id, huidig=True)
+        self._run_id = run_id
+        chunks = (
+            fragmenten if fragmenten is not None
+            else await self._source_repo.get_chunks(source_id, huidig=True)
+        )
         if not chunks:
             logger.warning(f"No chunks found for source {source_id}")
             # AC#3: every run_extraction call writes exactly ONE
@@ -1921,6 +1936,7 @@ class EntityExtractionService:
         self._gap_ontology_name = None
         # F2-08: geen classificatie van een eerdere run meenemen; onbekend telt als intern.
         self._classificatie = None
+        self._run_id = None
 
         # Fetch existing extraction result
         rows = await execute_query(

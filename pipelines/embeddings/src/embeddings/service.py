@@ -7,7 +7,7 @@ falling back to simple text splitting for legacy sources or notes.
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Collection, List, Optional, Tuple
 
 from llm_manager.gate import AuditNietGeschreven, ModelGeweigerd, classificatie_van
 from loguru import logger
@@ -34,6 +34,8 @@ class EmbeddingResult:
     chunks_used: int
     used_structural_chunks: bool
     errors: list[str] = field(default_factory=list)
+    #: Aantal fragmenten waarvan de tekst vóór de embedding is afgekapt (ADR 0008).
+    afgekapt: int = 0
 
 
 @dataclass
@@ -134,6 +136,34 @@ class EmbeddingService:
         )
         return result
 
+    async def embed_fragmenten(
+        self,
+        source_id: str,
+        chunks: List[Chunk],
+        *,
+        run_id: str,
+        overslaan: Collection[str] = (),
+    ) -> EmbeddingResult:
+        """De stap ``embed`` van een run (F2-15, ADR 0011): embed deze fragmenten.
+
+        Verwijdert niets: elke embedding krijgt de run, het model en
+        ``afgekapt``, en oudere runs houden hun embeddings (ADR 0003).
+        Fragmenten in ``overslaan`` hebben al een embedding in deze run (een
+        nieuwe poging van dezelfde stap). ``errors`` blijft leeg; het aantal
+        afgekapte fragmenten staat in :attr:`EmbeddingResult.afgekapt`.
+        """
+        embeddings = await self._embed_chunks(source_id, chunks, run_id, overslaan)
+        from embeddings.aggregate import populate_source_embedding
+
+        await populate_source_embedding(source_id, source_repo=self.source_repo)
+        return EmbeddingResult(
+            id=source_id,
+            embeddings_created=len(embeddings),
+            chunks_used=len(chunks),
+            used_structural_chunks=True,
+            afgekapt=sum(1 for e in embeddings if getattr(e, "afgekapt", False)),
+        )
+
     @staticmethod
     def _is_empty_text(text: Optional[str]) -> bool:
         """True when ``text`` carries no embeddable content.
@@ -151,6 +181,7 @@ class EmbeddingService:
         source_id: str,
         chunks: List[Chunk],
         run_id: Optional[str] = None,
+        overslaan: Collection[str] = (),
     ) -> List[SourceEmbedding]:
         """Generate embeddings for structural chunks with chunk linkage.
 
@@ -159,9 +190,17 @@ class EmbeddingService:
         row, no crash. A skipped chunk does not fail its batch-mates — only the
         non-empty chunks of a batch are sent to the model, and output alignment
         is preserved by zipping the vectors back onto exactly those chunks.
+
+        Met ``run_id`` (stap ``embed``, F2-15) krijgt elke embedding de run, het
+        model (naam en versie uit het register) en ``afgekapt`` (ADR 0003,
+        0008). Fragmenten in ``overslaan`` hebben al een embedding in die run.
         """
         embeddings: List[SourceEmbedding] = []
         batch_size = self.config.batch_size
+        herkomst = (
+            {"run_id": run_id, "embedding_model": self.embedding_model.herkomst()}
+            if run_id else {}
+        )
 
         for batch_start in range(0, len(chunks), batch_size):
             batch = chunks[batch_start:batch_start + batch_size]
@@ -172,7 +211,7 @@ class EmbeddingService:
             embeddable = [
                 (batch_start + i, chunk)
                 for i, chunk in enumerate(batch)
-                if not self._is_empty_text(chunk.text)
+                if not self._is_empty_text(chunk.text) and str(chunk.id) not in overslaan
             ]
             skipped = len(batch) - len(embeddable)
             if skipped:
@@ -184,7 +223,7 @@ class EmbeddingService:
                 continue
 
             texts = [chunk.text for _, chunk in embeddable]
-            vectors = await self._embed_with_retry(
+            vectors, lengtes = await self._embed_met_lengtes(
                 texts,
                 classificatie=classificatie_van(
                     getattr(chunk, "classification", None) for _, chunk in embeddable
@@ -192,14 +231,16 @@ class EmbeddingService:
                 run_id=run_id,
             )
 
-            for (order, chunk), vector in zip(embeddable, vectors):
+            for (order, chunk), vector, lengte in zip(embeddable, vectors, lengtes):
                 chunk_id = chunk.id if hasattr(chunk, "id") and chunk.id else None
+                extra = dict(herkomst, afgekapt=lengte < len(chunk.text)) if herkomst else {}
                 embedding = await self.source_repo.add_embedding(
                     source_id=source_id,
                     content=chunk.text,
                     order=order,
                     embedding=vector,
                     chunk_id=chunk_id,
+                    **extra,
                 )
                 embeddings.append(embedding)
 
@@ -239,7 +280,7 @@ class EmbeddingService:
 
     async def _embed_one_with_shrink(
         self, text: str, *, classificatie: Optional[str], run_id: Optional[str] = None
-    ) -> List[float]:
+    ) -> Tuple[List[float], int]:
         """Embed a single text, halving its length until it fits the context.
 
         Char counts are not a reliable proxy for tokens, so the static cap can
@@ -247,6 +288,8 @@ class EmbeddingService:
         retry until it is accepted, but never below :data:`ZEKER_TEKENS`: that
         length always fits, so a rejection there is not about length and is
         raised. Every attempt is one call through the model gate.
+
+        Returns the vector and the number of characters that were embedded.
         """
         candidate = text
         while True:
@@ -259,7 +302,7 @@ class EmbeddingService:
                         f"Embedded after adaptive shrink: {len(text)} -> "
                         f"{len(candidate)} chars (context-length recovery)"
                     )
-                return vectors[0]
+                return vectors[0], len(candidate)
             except Exception as e:  # noqa: BLE001 — only shrink for length errs
                 if not (
                     self.config.truncate_on_context_error
@@ -273,6 +316,16 @@ class EmbeddingService:
         self, texts: List[str], *, classificatie: Optional[str],
         run_id: Optional[str] = None,
     ) -> List[List[float]]:
+        """Embed texts with length-guard, retry logic, and concurrency control."""
+        vectors, _ = await self._embed_met_lengtes(
+            texts, classificatie=classificatie, run_id=run_id
+        )
+        return vectors
+
+    async def _embed_met_lengtes(
+        self, texts: List[str], *, classificatie: Optional[str],
+        run_id: Optional[str] = None,
+    ) -> Tuple[List[List[float]], List[int]]:
         """Embed texts with length-guard, retry logic, and concurrency control.
 
         1. Cap each text to ``max_input_chars`` up front (cheap, one call).
@@ -280,15 +333,19 @@ class EmbeddingService:
         3. On a context-length rejection, fall back to per-text adaptive
            shrinking so a single over-long text never fails its batch-mates
            and every chunk still gets a vector.
+
+        Returns the vectors and, per text, the number of characters that were
+        embedded: fewer than the text has means it was truncated (ADR 0008).
         """
         texts = self._cap_texts(texts)
         async with self._semaphore:
             last_error = None
             for attempt in range(self.config.retry_attempts + 1):
                 try:
-                    return await self.embedding_model.aembed(
+                    vectors = await self.embedding_model.aembed(
                         texts, classificatie=classificatie, run_id=run_id
                     )
+                    return vectors, [len(t) for t in texts]
                 except (ModelGeweigerd, AuditNietGeschreven):
                     # Een weigering van de poort of een ontbrekende auditregel
                     # wordt niet opnieuw geprobeerd (F2-08).
@@ -306,12 +363,13 @@ class EmbeddingService:
                             "Embedding batch hit context-length limit after "
                             "char cap; recovering per-text via adaptive shrink"
                         )
-                        return [
+                        paren = [
                             await self._embed_one_with_shrink(
                                 t, classificatie=classificatie, run_id=run_id
                             )
                             for t in texts
                         ]
+                        return [v for v, _ in paren], [n for _, n in paren]
                     if attempt < self.config.retry_attempts:
                         logger.warning(
                             f"Embedding attempt {attempt + 1} failed: {e}, retrying..."

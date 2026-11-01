@@ -31,15 +31,16 @@ class SummarizationService:
         self.summary_repo = summary_repo
 
     @staticmethod
-    def _poortmodel(classificatie: Optional[str]):
+    def _poortmodel(classificatie: Optional[str], run_id: Optional[str] = None):
         """Het taalmodel voor de strategieën: via de modelpoort (F2-08, ADR 0006).
 
         Taak ``summarization``; het model komt uit het register. Er is geen
-        terugval: zonder poort geen samenvatting.
+        terugval: zonder poort geen samenvatting. ``run_id`` gaat mee naar de
+        poort, zodat ``processing_run.models`` gevuld wordt (F2-15).
         """
         from app_main.services.model_routing.llm_call import PoortTaalmodel
 
-        return PoortTaalmodel(taak="summarization", classificatie=classificatie)
+        return PoortTaalmodel(taak="summarization", classificatie=classificatie, run_id=run_id)
 
     async def list_strategies(self) -> List[Dict[str, Any]]:
         """Return all strategies with their implementation status."""
@@ -64,11 +65,12 @@ class SummarizationService:
         source_id: str,
         strategy: str,
         config: Optional[Dict[str, Any]] = None,
+        run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate a summary for a source.
 
         Loads chunks from the DB, runs the summarization workflow,
-        and persists the result.
+        and persists the result. ``run_id`` goes to the model gate (F2-15).
         """
         from summarization.config import SummarizationConfig
         from summarization.models.result import ChunkInput, SummarizationStrategy
@@ -102,7 +104,8 @@ class SummarizationService:
         # Het model gaat via de poort, met de classificatie van de fragmenten.
         cfg = SummarizationConfig(strategy=strategy, **(config or {}))
         cfg.language_model = self._poortmodel(
-            classificatie_van(getattr(c, "classification", None) for c in chunks_raw)
+            classificatie_van(getattr(c, "classification", None) for c in chunks_raw),
+            run_id,
         )
         workflow = SummarizationWorkflow(config=cfg)
         result = await workflow.process(chunks)
