@@ -6,9 +6,8 @@
 #   llm_manager gebruikt alleen pydantic, pyyaml, loguru en httpx, die het image
 #   al heeft (geen pip install, niets van internet bij het bouwen);
 # - het startscript en de scripts voor laden en exporteren van flows.
-# De eigen componenten en de componentenlijst komen uit de kloon van HEAD
-# (/app/flows-git, alleen-lezen) en config/ wordt alleen-lezen gekoppeld; ze
-# zitten niet in het image.
+# De eigen componenten, de componentenlijst en het modelregister komen uit de
+# kloon van HEAD (/app/flows-git, alleen-lezen); ze zitten niet in het image.
 FROM langflowai/langflow:1.13.0@sha256:ff2716e017f4a4bbb9e83556bf66c3d5d70a1d3eb7cffd893312600ba84e303f
 
 USER root
@@ -26,18 +25,23 @@ RUN rm -rf /app/signaal/lib/llm_manager/__pycache__ /app/signaal/lib/llm_manager
 # MCP-server (v1, per project, v2-configuratie), de MCP-server van de assistent,
 # A2A (/api/v1/a2a) en de OpenAI-Responses-API (/api/v1/responses). Ook de
 # Store (/api/v1/store): met LANGFLOW_STORE=false vroegen de eindpunten nog
-# api.langflow.store op (controle L7). main.py hangt de MCP-router alleen in als
-# de instelling aan staat. Ontbreekt een regel (andere versie), of blijft daarna
-# in langflow/api een include_router met mcp, a2a, openai_responses of
-# store_router over, dan faalt de build.
+# api.langflow.store op (controle L7). Na de herreview ook de spraak-websocket
+# (/api/v1/voice) en de hele assistent (_include_agentic_router: assist,
+# execute, run). main.py hangt de MCP-router alleen in als de instelling aan
+# staat. Ontbreekt een regel (andere versie), of blijft daarna in langflow/api
+# een include_router met mcp, a2a, openai_responses, store_router of
+# voice_mode_router over, of de aanroep van _include_agentic_router, dan faalt
+# de build.
 RUN d=/app/.venv/lib/python3.14/site-packages/langflow/api \
  && for r in 'router_v1\.include_router\(mcp_router\)' 'router_v1\.include_router\(mcp_projects_router\)' \
              'router_v2\.include_router\(mcp_router_v2\)' 'router_v1\.include_router\(agentic_mcp_router\)' \
              'router_v1\.include_router\(a2a_router\)' 'router_v1\.include_router\(openai_responses_router\)' \
-             'router_v1\.include_router\(store_router\)'; do \
+             'router_v1\.include_router\(store_router\)' 'router_v1\.include_router\(voice_mode_router\)' \
+             '_include_agentic_router\(\)'; do \
       grep -qE "^[[:space:]]*$r\$" "$d/router.py" || { echo "niet gevonden in router.py: $r" >&2; exit 1; }; \
       sed -i -E "/^[[:space:]]*$r\$/d" "$d/router.py"; done \
- && if grep -rnE 'include_router\(.*(mcp|a2a|openai_responses|store_router)' "$d" --include=*.py; then \
+ && if grep -rnE 'include_router\(.*(mcp|a2a|openai_responses|store_router|voice_mode_router)' "$d" --include=*.py \
+      || grep -nE '^[[:space:]]*_include_agentic_router\(\)' "$d/router.py"; then \
       echo "nog een MCP- of agentrouter in langflow/api" >&2; exit 1; fi \
  && rm -f "$d"/__pycache__/router.*.pyc
 
@@ -52,10 +56,10 @@ RUN f=/app/.venv/lib/python3.14/site-packages/langflow/utils/version.py \
  && rm -f /app/.venv/lib/python3.14/site-packages/langflow/utils/__pycache__/version.*.pyc
 
 # Verplicht in dit image: het standaardpad van llm_manager wijst naar een
-# checkout van de repository (review F2-07). Compose koppelt config/ op /config.
-# De componentenlijst en de eigen componenten komen uit de kloon van HEAD
-# (start.sh), net als de flows (review F2-12, punt 3).
-ENV SIGNAAL_MODELREGISTER=/config/modelregister.yaml \
+# checkout van de repository (review F2-07). Het register, de componentenlijst
+# en de eigen componenten komen uit de kloon van HEAD (start.sh), net als de
+# flows (review F2-12, punt 3; herreview punt 4).
+ENV SIGNAAL_MODELREGISTER=/app/flows-git/config/modelregister.yaml \
     SIGNAAL_COMPONENTENLIJST=/app/flows-git/config/langflow-componenten.yaml
 
 USER 1000

@@ -18,7 +18,7 @@ import pytest
 START = Path(__file__).resolve().parents[1] / "scripts" / "start.sh"
 
 VOORVOEGSELS = ("LANGCHAIN_", "LANGSMITH_", "LANGFUSE_", "LANGWATCH_", "ARIZE_", "OPIK_",
-                "PHOENIX_", "TRACELOOP_", "OPENLAYER_", "OTEL_EXPORTER_OTLP_")
+                "PHOENIX_", "TRACELOOP_", "OPENLAYER_", "OTEL_EXPORTER_OTLP_", "LANGFLOW_FEATURE_")
 
 VAST = {
     "LANGFLOW_AUTO_LOGIN": "false",
@@ -30,6 +30,7 @@ VAST = {
     "LANGFLOW_COMPONENTS_PATH": "/app/flows-git/services/langflow/components",
     "LANGFLOW_CREATE_STARTER_PROJECTS": "false",
     "LANGFLOW_STORE": "false",
+    "LANGFLOW_CORS_ORIGINS": "http://127.0.0.1:8530",
     "LANGFLOW_DEACTIVATE_TRACING": "true",
     "DO_NOT_TRACK": "true",
     "LANGFLOW_MCP_SERVER_ENABLED": "false",

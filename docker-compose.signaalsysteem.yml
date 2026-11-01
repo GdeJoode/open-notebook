@@ -200,6 +200,8 @@ services:
       LANGFLOW_CREATE_STARTER_PROJECTS: "false"
       # Geen Langflow Store (haalt componenten van internet).
       LANGFLOW_STORE: "false"
+      # Alleen de editor via editor-toegang (standaard "*"; herreview F2-12).
+      LANGFLOW_CORS_ORIGINS: http://127.0.0.1:8530
       # Geen tracing en geen telemetrie (ADR 0022 F); LiteLLM gebruikt zijn eigen
       # kostentabel in plaats van die van GitHub (ADR 0017, P2).
       LANGFLOW_DEACTIVATE_TRACING: "true"
@@ -209,15 +211,14 @@ services:
       LANGFLOW_MODELS_DEV_REFRESH: "false"
       # Het startscript weigert LANGCHAIN_*, LANGSMITH_*, LANGFUSE_*, LANGWATCH_*,
       # ARIZE_*, OPIK_*, PHOENIX_*, TRACELOOP_*, OPENLAYER_*, OTEL_EXPORTER_OTLP_*,
-      # ANTHROPIC_* en CLAUDE_*.
-      SIGNAAL_MODELREGISTER: /config/modelregister.yaml
+      # ANTHROPIC_*, CLAUDE_* en LANGFLOW_FEATURE_*.
+      SIGNAAL_MODELREGISTER: /app/flows-git/config/modelregister.yaml
       SIGNAAL_COMPONENTENLIJST: /app/flows-git/config/langflow-componenten.yaml
       SIGNAAL_FLOWS_MAP: /app/flows-git/services/langflow/flows
     volumes:
       - langflow_data:/app/data
-      - ./config:/config:ro                             # modelregister
       # Dezelfde kloon van HEAD als het flowregister van de fork (F2-04, F2-10),
-      # met ook de componentenlijst en de eigen componenten.
+      # met ook het modelregister, de componentenlijst en de eigen componenten.
       - ${SIGNAAL_FLOWS_KLOON:?start via scripts/signaalsysteem/start.sh}:/app/flows-git:ro
       - bronarchief:/bronarchief                        # langflow schrijft de originelen (F2-14)
       # Zelfde koppelpunten als in open-notebook, zodat een pad in beide gelijk is.
