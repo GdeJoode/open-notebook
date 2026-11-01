@@ -339,11 +339,13 @@ class TestResumeExtractionEndpoint:
         job_repo = MagicMock()
         job_repo.list_jobs = AsyncMock(return_value=paused_jobs)
         job_repo.update_status = AsyncMock(return_value=None)
+        jobs = MagicMock()
+        jobs.enqueue = AsyncMock()
 
         with patch(
             "job_queue.repository.JobRepository",
             return_value=job_repo,
-        ):
+        ), patch("app_main.services.command_service.get_service", return_value=jobs):
             client = _make_app(notebook_svc, schema_repo, source_repo)
             resp = client.post("/api/notebooks/notebook:b3c/extraction/resume")
 
@@ -356,6 +358,8 @@ class TestResumeExtractionEndpoint:
             call.args[0] for call in job_repo.update_status.await_args_list
         }
         assert called_job_ids == {"job:p1", "job:p2"}
+        # F2-15: en weer op de wachtrij van de worker.
+        assert {c.args[0].id for c in jobs.enqueue.await_args_list} == {"job:p1", "job:p2"}
 
     def test_404_for_unknown_notebook(self):
         notebook_svc = AsyncMock(spec=NotebookService)

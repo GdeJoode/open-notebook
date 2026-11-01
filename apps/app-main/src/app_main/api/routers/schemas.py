@@ -1044,6 +1044,8 @@ async def resume_extraction(
     if paused_jobs:
         from job_queue.repository import JobRepository
 
+        from app_main.services.command_service import get_service
+
         job_repo = JobRepository()
         resumed = 0
         for job in paused_jobs:
@@ -1051,6 +1053,9 @@ async def resume_extraction(
                 await job_repo.update_status(
                     job.id, JobStatus.QUEUED, error_message=None
                 )
+                # F2-15: ook op de wachtrij, anders pakt de worker de job pas
+                # na een herstart op.
+                await get_service().enqueue(job)
                 resumed += 1
             except Exception as e:
                 logger.warning(

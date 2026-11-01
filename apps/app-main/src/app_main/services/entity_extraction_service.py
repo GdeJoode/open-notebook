@@ -384,6 +384,8 @@ class SchemaReviewPendingError(JobPausedForReviewError):
         self.notebook_id = notebook_id
         self.source_id = source_id
         self.pending_count = pending_count
+        # F2-15: het notebook waarvan het schema op review wacht.
+        self.review_item = notebook_id
         super().__init__(
             f"Notebook {notebook_id} requires review of pending schema "
             f"extensions before source {source_id} can be extracted "

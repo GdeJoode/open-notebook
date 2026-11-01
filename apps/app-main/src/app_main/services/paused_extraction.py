@@ -35,9 +35,16 @@ async def list_paused_jobs_for_notebook(
     if not source_ids:
         return []
 
+    # F2-15: ook stappen van een run die op de schemareview wachten.
     paused_entity_jobs = await job_repo.list_jobs(
         status=JobStatus.PAUSED_FOR_REVIEW,
         job_type=JobType.ENTITY_EXTRACT,
         limit=200,
     )
-    return [j for j in paused_entity_jobs if j.source_id in source_ids]
+    paused_steps = await job_repo.list_jobs(
+        status=JobStatus.PAUSED_FOR_REVIEW,
+        job_type=JobType.RUN_STEP,
+        limit=200,
+    )
+    paused_steps = [j for j in paused_steps if getattr(j, "job_type", None) == JobType.RUN_STEP]
+    return [j for j in [*paused_entity_jobs, *paused_steps] if j.source_id in source_ids]

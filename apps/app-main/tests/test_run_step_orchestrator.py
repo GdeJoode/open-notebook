@@ -52,6 +52,8 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.requires_docker]
 
 LANGFLOW = agent_auth.AgentKeyContext(
     key_id="agent_keys:langflow", agent_id="langflow", permission=Right.PIJPLIJN)
+BEHEERDER = agent_auth.AgentKeyContext(
+    key_id="agent_keys:beheer", agent_id="mens", permission=Right.BEHEERDER, person="Testpersoon")
 ANDERE = agent_auth.AgentKeyContext(
     key_id="agent_keys:andere", agent_id="andere", permission=Right.PIJPLIJN)
 GEHEIM = "Interne zin die nooit in een melding mag"
@@ -111,7 +113,8 @@ async def env(live_surrealdb, monkeypatch, app, git_flows):
     def als(ctx) -> None:
         sleutel.ctx = ctx
 
-    yield SimpleNamespace(orch=orch, draai=draai, als=als, server=server,
+    monkeypatch.setattr("app_main.services.command_service.get_service", lambda: jobs)
+    yield SimpleNamespace(orch=orch, draai=draai, als=als, server=server, jobs=jobs,
                           flows=git_flows)
     app.dependency_overrides.pop(get_run_step_orchestrator, None)
     app.dependency_overrides.pop(get_processing_run_service, None)
@@ -280,6 +283,12 @@ async def test_bewaking_vanuit_de_stap_maar_niet_bij_wacht_op_review(
         runs.append(str(rij["id"]))
     te_lang, wacht = runs
     _, versie = await _versie(wacht, ["Openbare tekst."])
+    # Een open stap in de run die te lang loopt (die gaat mee op mislukt).
+    bron_oud, versie_oud = await _versie(te_lang, ["Andere openbare tekst."])
+    open_stap = await _een("CREATE ONLY run_step CONTENT $d RETURN id", {"d": {
+        "run": conn.ensure_record_id(te_lang), "stap": "graph",
+        "source_version": conn.ensure_record_id(versie_oud),
+        "source": conn.ensure_record_id(bron_oud)}})
 
     async def pauzeert(stap) -> str:
         raise JobPausedForReviewError("twijfel")
@@ -298,6 +307,10 @@ async def test_bewaking_vanuit_de_stap_maar_niet_bij_wacht_op_review(
         assert (await client.get(f"/api/v1/runs/{wacht}/steps/entity_dedup")).status_code == 200
 
     assert (await _run(te_lang))["status"] == "mislukt"
+    gesloten = await _een("SELECT status, error FROM ONLY $id",
+                          {"id": conn.ensure_record_id(open_stap["id"])})
+    assert gesloten == {"status": "mislukt",
+                        "error": "Stap graph mislukt na 0 pogingen (RunAfgesloten)"}
     assert (await _run(wacht))["status"] == "bezig"
     job = await _een("SELECT * FROM ONLY $id", {"id": conn.ensure_record_id(stap["job_id"])})
     assert job["status"] == "paused_for_review"
@@ -346,6 +359,8 @@ async def test_job_na_het_sluiten_van_de_run_wordt_niet_herhaald(env, app) -> No
         await env.draai()
         gelezen = (await client.get(f"/api/v1/runs/{run}/steps/embed")).json()
     assert gelezen["status"] == "mislukt" and gelezen["attempts"] == 0
+    # De run ging dicht en zette de open stap op mislukt (migratie 105).
+    assert gelezen["error"] == "Stap embed mislukt na 0 pogingen (RunAfgesloten)"
     job = await _een("SELECT * FROM ONLY $id", {"id": conn.ensure_record_id(stap["job_id"])})
     assert job["status"] == "failed" and job["retry_count"] == 0
     assert env.server.invoer == []
@@ -384,3 +399,130 @@ async def test_extractie_krijgt_alleen_de_fragmenten_van_versie_en_run(
     assert gelezen["status"] == "geslaagd"
     assert ontvangen["run_id"] == run and ontvangen["source_id"] == bron
     assert [c.text for c in ontvangen["fragmenten"]] == ["Nieuwe openbare tekst."]
+
+
+# --------------------------------------------------------------------------
+# Reviewpunten
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.echte_sleutels
+async def test_oude_route_wist_geen_embeddings_met_run(env, app) -> None:
+    """Faalscenario van de review: na de stap ``embed`` wiste de oude route
+    ``embed_source`` alle embeddings van de bron, ook die met een run."""
+    from app_main.dependencies import get_embedding_service
+
+    async with _client(app) as client:
+        run = await _start_run(client, env)
+        bron, versie = await _versie(run, ["Openbare tekst een.", "Openbare tekst twee."])
+        await _post(client, run, "embed", versie)
+        await env.draai()
+        voor = await _q("SELECT id, run FROM source_embedding WHERE source = $b ORDER BY id",
+                        {"b": conn.ensure_record_id(bron)})
+        assert len(voor) == 2 and {str(r["run"]) for r in voor} == {run}
+
+        # De oude service wist alleen embeddings zonder run en slaat fragmenten
+        # over die in hun run al een embedding hebben.
+        await (await get_embedding_service()).embed_source(bron)
+        na = await _q("SELECT id, run FROM source_embedding WHERE source = $b ORDER BY id",
+                      {"b": conn.ensure_record_id(bron)})
+        assert na == voor
+
+        # De oude routes geven 409 tot F2-22.
+        env.als(BEHEERDER)
+        resp = await client.post(f"/api/sources/{bron}/run-embed")
+        assert resp.status_code == 409 and resp.json()["detail"]["code"] == "via_stap"
+        resp = await client.post("/api/embeddings/rebuild", json={"mode": "all", "include_sources": True})
+        assert resp.status_code == 409 and resp.json()["detail"]["code"] == "via_stap"
+        env.als(LANGFLOW)
+
+
+@pytest.mark.echte_sleutels
+async def test_wacht_op_review_hervatten_na_het_besluit(env, app) -> None:
+    from app_main.services.entity_extraction_service import SchemaReviewPendingError
+
+    pogingen = []
+
+    async def extractie(stap) -> str:
+        pogingen.append(stap.attempts)
+        if len(pogingen) == 1:
+            raise SchemaReviewPendingError(nb, stap.source, 1)
+        return "0 entiteiten"
+
+    env.orch._uitvoerders["entity_extraction"] = extractie
+    nb = str((await _een("CREATE ONLY notebook SET name = 'Openbaar notebook',"
+                         " description = '' RETURN id"))["id"])
+    async with _client(app) as client:
+        run = await _start_run(client, env)
+        bron, versie = await _versie(run, ["Openbare tekst."])
+        await _q("RELATE $b->reference->$n", {"b": conn.ensure_record_id(bron),
+                                                "n": conn.ensure_record_id(nb)})
+        await _post(client, run, "entity_extraction", versie)
+        await env.draai()
+        stap = (await client.get(f"/api/v1/runs/{run}/steps/entity_extraction")).json()
+        assert (stap["status"], stap["review_item"]) == ("wacht_op_review", nb)
+
+        # Het besluit van de beheerder hervat de job: weer op de wachtrij.
+        env.als(BEHEERDER)
+        resp = await client.post(f"/api/notebooks/{nb}/extraction/resume")
+        assert resp.status_code == 200 and resp.json()["resumed_count"] == 1
+        env.als(LANGFLOW)
+        await env.draai()
+        stap = (await client.get(f"/api/v1/runs/{run}/steps/entity_extraction")).json()
+
+    assert stap["status"] == "geslaagd" and pogingen == [1, 2]
+    assert (await _run(run))["status"] == "bezig"
+
+
+async def test_gelijktijdige_aanroepen_geven_een_stap_en_een_job(env, app) -> None:
+    import asyncio
+
+    async with _client(app) as client:
+        run = await _start_run(client, env)
+        bron, versie = await _versie(run, ["Openbare tekst een.", "Openbare tekst twee."])
+        antwoorden = await asyncio.gather(*(_post(client, run, "embed", versie)
+                                            for _ in range(2)))
+        assert [a.status_code for a in antwoorden] == [202, 202]
+        stappen = {(a.json()["step_id"], a.json()["job_id"]) for a in antwoorden}
+        assert len(stappen) == 1
+        await env.draai()
+
+    jobs = await _q("SELECT id, status FROM job WHERE run = $r", {"r": conn.ensure_record_id(run)})
+    assert sorted(j["status"] for j in jobs if j["status"] != "cancelled") == ["completed"]
+    rijen = await _q("SELECT chunk FROM source_embedding WHERE run = $r",
+                     {"r": conn.ensure_record_id(run)})
+    assert len(rijen) == 2 and len({str(r["chunk"]) for r in rijen}) == 2
+
+
+async def test_een_job_die_niet_die_van_de_stap_is_doet_niets(env, app) -> None:
+    async with _client(app) as client:
+        run = await _start_run(client, env)
+        _, versie = await _versie(run, ["Openbare tekst."])
+        stap = (await _post(client, run, "embed", versie)).json()
+    uitkomst = await env.orch.voer_uit({"step_id": stap["step_id"], "_job_id": "job:ander"})
+    assert uitkomst["status"] == "overgeslagen"
+    assert env.server.invoer == []
+
+
+async def test_weigering_van_de_poort_wordt_niet_herhaald(env, app) -> None:
+    from llm_manager.gate import ModelGeweigerd
+
+    pogingen = []
+
+    async def geweigerd(stap) -> str:
+        pogingen.append(stap.attempts)
+        try:
+            raise ModelGeweigerd("niet_toegestaan_intern", "werkmodel")
+        except ModelGeweigerd as e:
+            raise RuntimeError("verpakt") from e
+
+    env.orch._uitvoerders["graph"] = geweigerd
+    async with _client(app) as client:
+        run = await _start_run(client, env)
+        _, versie = await _versie(run, ["Openbare tekst."])
+        await _post(client, run, "graph", versie)
+        await env.draai()
+        stap = (await client.get(f"/api/v1/runs/{run}/steps/graph")).json()
+    assert pogingen == [1]
+    assert stap["error"] == "Stap graph mislukt na 1 pogingen (ModelGeweigerd)"
+    assert (await _run(run))["status"] == "mislukt"

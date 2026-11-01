@@ -28,7 +28,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from job_queue import JobNotRetryableError, JobPausedForReviewError
+from job_queue import JOB_ID_SLEUTEL, JobNotRetryableError, JobPausedForReviewError
+from llm_manager.gate import AuditNietGeschreven, ModelGeweigerd
 from loguru import logger
 from shared.models.jobs import JobSubmitRequest
 from shared.models.processing_run import RunStep
@@ -53,6 +54,13 @@ STADIUM = {"embed": ["embedded"], "entity_extraction": ["extracted"],
 
 Uitvoerder = Callable[[RunStep], Awaitable[str]]
 
+#: 409 op de oude routes die alle fragmenten van een bron embedden (tot F2-22).
+EMBED_VIA_STAP = {
+    "code": "via_stap",
+    "melding": "Embeddings van een bron alleen via de stap embed van een run (F2-15);"
+               " deze route vervalt in F2-22",
+}
+
 
 class StapNietGebondenError(Exception):
     """De bronversie hoort niet bij de run (HTTP 409 ``niet_gebonden``)."""
@@ -67,6 +75,25 @@ class StapFout(Exception):
     def __init__(self, stap: str, soort: str, fout_id: str) -> None:
         super().__init__(f"Stap {stap} mislukt ({soort}) fout-id {fout_id}")
         self.soort = soort
+
+
+class StapNietHerhaalbaar(JobNotRetryableError):
+    """Een poging die niet opnieuw mag: de poort weigerde, of de auditregel ontbrak."""
+
+    def __init__(self, stap: str, soort: str, fout_id: str) -> None:
+        super().__init__(f"Stap {stap} mislukt ({soort}) fout-id {fout_id}")
+        self.soort = soort
+
+
+def _poortweigering(fout: BaseException) -> Optional[BaseException]:
+    """``ModelGeweigerd`` of ``AuditNietGeschreven`` in de keten van ``fout``."""
+    gezien = set()
+    while fout is not None and id(fout) not in gezien:
+        if isinstance(fout, (ModelGeweigerd, AuditNietGeschreven)):
+            return fout
+        gezien.add(id(fout))
+        fout = fout.__cause__ or fout.__context__
+    return None
 
 
 def _soort(fout: BaseException) -> str:
@@ -144,15 +171,18 @@ class RunStepOrchestrator:
                 if stap_rec is None:
                     raise
         if stap_rec.job is None:
+            # Eerst de job aan de stap koppelen, dan pas in de wachtrij: zo
+            # draait alleen de job van de stap (zie ``voer_uit``).
             job = await self.jobs.submit(JobSubmitRequest(
                 job_type=JobType.RUN_STEP,
                 payload={"step_id": str(stap_rec.id), "run_id": str(run.id), "stap": stap},
                 max_retries=MAX_HERHALINGEN,
                 source_id=bron,
                 run=str(run.id),
-            ))
+            ), enqueue=False)
             if await self.steps.zet_job(str(stap_rec.id), str(job.id)):
                 stap_rec.job = str(job.id)
+                await self.jobs.enqueue(job)
             else:
                 # Een gelijktijdige aanroep zette al een job: deze vervalt.
                 await self.jobs.cancel(str(job.id))
@@ -179,6 +209,9 @@ class RunStepOrchestrator:
         stap_rec = await self.steps.get(str(payload.get("step_id") or ""))
         if stap_rec is None:
             raise JobNotRetryableError("Stap onbekend")
+        if stap_rec.job is None or stap_rec.job != str(payload.get(JOB_ID_SLEUTEL) or ""):
+            # Niet de job van de stap (gelijktijdige aanroep): niets doen.
+            return {"step_id": str(stap_rec.id), "status": "overgeslagen"}
         run = await self.runs.run_repo.get(stap_rec.run)
         if run is None or run.afgesloten:
             raise JobNotRetryableError("Run is al afgesloten")
@@ -189,8 +222,9 @@ class RunStepOrchestrator:
         stap = stap_rec.stap
         try:
             melding = await self._uitvoerders[stap](stap_rec)
-        except JobPausedForReviewError:
-            await self.steps.zet_status(str(stap_rec.id), "wacht_op_review")
+        except JobPausedForReviewError as e:
+            await self.steps.zet_status(str(stap_rec.id), "wacht_op_review",
+                                        review_item=getattr(e, "review_item", None))
             await self.runs.run_repo.append_log(
                 stap_rec.run, [_regel(stap, "wacht_op_review", "Wacht op de beheerder")])
             await set_processing_stage(stap_rec.source, "awaiting_schema_review")
@@ -200,6 +234,11 @@ class RunStepOrchestrator:
         except Exception as e:  # noqa: BLE001 — de worker probeert opnieuw
             soort = _soort(e)
             fout_id = log_fout(e, f"Stap {stap} van {stap_rec.run} mislukt")
+            weigering = _poortweigering(e)
+            if weigering is not None:
+                # Een weigering van de poort of een ontbrekende auditregel wordt
+                # niet opnieuw geprobeerd (F2-08).
+                raise StapNietHerhaalbaar(stap, _soort(weigering), fout_id) from None
             await self.steps.zet_status(
                 str(stap_rec.id), "wachtrij", error=f"Poging {stap_rec.attempts} mislukt ({soort})")
             raise StapFout(stap, soort, fout_id) from None
@@ -213,11 +252,14 @@ class RunStepOrchestrator:
     async def bij_definitief_mislukt(self, job: Any, fout: BaseException) -> None:
         """Na de laatste poging: stap en run ``mislukt``, met een melding zonder inhoud."""
         stap_rec = await self.steps.get(str((job.payload or {}).get("step_id") or ""))
-        if stap_rec is None:
+        if stap_rec is None or stap_rec.job != str(job.id):
             return
         soort = getattr(fout, "soort", None) or _soort(fout)
         melding = f"Stap {stap_rec.stap} mislukt na {stap_rec.attempts} pogingen ({soort})"
-        await self.steps.zet_status(str(stap_rec.id), "mislukt", error=melding)
+        if await self.steps.zet_status(str(stap_rec.id), "mislukt", error=melding) is None:
+            # Al klaar: de run ging intussen dicht en zette de stap op mislukt
+            # (event in migratie 105).
+            return
         regel = [_regel(stap_rec.stap, "mislukt", melding)]
         if await self.runs.run_repo.close(stap_rec.run, status="mislukt", error=melding,
                                           log=regel) is None:
