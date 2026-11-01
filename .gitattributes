@@ -1,0 +1,3 @@
+# Shellscripts altijd met LF, ook bij core.autocrlf=true: met CRLF faalt sh in een
+# container (bijvoorbeeld services/surrealdb/start.sh).
+*.sh text eol=lf
