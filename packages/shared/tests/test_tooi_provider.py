@@ -2,8 +2,9 @@
 
 No live network: the provider talks to a ``ReferenceEntityRepository``-shaped
 fake (in-memory) so the bulk-load / lookup / idempotency logic is exercised
-without a database. The bundled verified seed (real ministry records) is the
-default source, so AC1-2 (BZK resolves to a TOOI URI) is covered offline.
+without a database. The ten core ministries (public TOOI records) are fed in
+through a fake fetcher, so AC1-2 (BZK resolves to a TOOI URI) is covered offline.
+Since F2-28 there is no seed fallback: no source means a refusal, nothing written.
 """
 
 from __future__ import annotations
@@ -12,7 +13,37 @@ import json
 from typing import Any, Dict, List, Optional
 
 import pytest
-from shared.vocabulary.tooi_provider import TOOIProvider
+from shared.vocabulary.tooi_provider import TOOIBronOntbreekt, TOOIProvider
+
+# The ten core ministries, real TOOI organisatiecodes and official names (public).
+_MINISTRIES: List[Dict[str, str]] = [
+    {"organisatiecode": "mnre1010", "afkorting": "AZ", "naam_excl_soort": "Algemene Zaken", "naam_incl_soort": "ministerie van Algemene Zaken", "soort": "ministerie"},
+    {"organisatiecode": "mnre1034", "afkorting": "BZK", "naam_excl_soort": "Binnenlandse Zaken en Koninkrijksrelaties", "naam_incl_soort": "ministerie van Binnenlandse Zaken en Koninkrijksrelaties", "soort": "ministerie"},
+    {"organisatiecode": "mnre1013", "afkorting": "BZ", "naam_excl_soort": "Buitenlandse Zaken", "naam_incl_soort": "ministerie van Buitenlandse Zaken", "soort": "ministerie"},
+    {"organisatiecode": "mnre1018", "afkorting": "Def", "naam_excl_soort": "Defensie", "naam_incl_soort": "ministerie van Defensie", "soort": "ministerie"},
+    {"organisatiecode": "mnre1045", "afkorting": "EZK", "naam_excl_soort": "Economische Zaken en Klimaat", "naam_incl_soort": "ministerie van Economische Zaken en Klimaat", "soort": "ministerie"},
+    {"organisatiecode": "mnre1130", "afkorting": "IenW", "naam_excl_soort": "Infrastructuur en Waterstaat", "naam_incl_soort": "ministerie van Infrastructuur en Waterstaat", "soort": "ministerie"},
+    {"organisatiecode": "mnre1150", "afkorting": "LNV", "naam_excl_soort": "Landbouw, Natuur en Voedselkwaliteit", "naam_incl_soort": "ministerie van Landbouw, Natuur en Voedselkwaliteit", "soort": "ministerie"},
+    {"organisatiecode": "mnre1153", "afkorting": "LVVN", "naam_excl_soort": "Landbouw, Visserij, Voedselzekerheid en Natuur", "naam_incl_soort": "ministerie van Landbouw, Visserij, Voedselzekerheid en Natuur", "soort": "ministerie"},
+    {"organisatiecode": "mnre1109", "afkorting": "OCW", "naam_excl_soort": "Onderwijs, Cultuur en Wetenschap", "naam_incl_soort": "ministerie van Onderwijs, Cultuur en Wetenschap", "soort": "ministerie"},
+    {"organisatiecode": "mnre1025", "afkorting": "VWS", "naam_excl_soort": "Volksgezondheid, Welzijn en Sport", "naam_incl_soort": "ministerie van Volksgezondheid, Welzijn en Sport", "soort": "ministerie"},
+]
+
+
+class FakeBulkFetcher:
+    """Stand-in for a fetcher — returns a fixed record set, no network."""
+
+    def __init__(self, records: List[Dict[str, Any]]) -> None:
+        self._records = records
+        self.calls = 0
+
+    async def fetch_records(self) -> List[Dict[str, Any]]:
+        self.calls += 1
+        return list(self._records)
+
+
+def _ministries(repo) -> TOOIProvider:
+    return TOOIProvider(repo, bulk_fetcher=FakeBulkFetcher(_MINISTRIES))
 
 
 class FakeReferenceRepo:
@@ -68,11 +99,18 @@ class FakeReferenceRepo:
 
 
 @pytest.mark.asyncio
-async def test_refresh_loads_seed():
+async def test_refresh_without_a_source_refuses_and_writes_nothing():
     repo = FakeReferenceRepo()
-    provider = TOOIProvider(repo)
-    loaded = await provider.refresh()
-    assert loaded >= 10  # the verified ministry seed
+    with pytest.raises(TOOIBronOntbreekt):
+        await TOOIProvider(repo).refresh()
+    assert repo.rows == {}
+
+
+@pytest.mark.asyncio
+async def test_refresh_loads_the_fetched_records():
+    repo = FakeReferenceRepo()
+    loaded = await _ministries(repo).refresh()
+    assert loaded == 10
     assert ("mnre1034", "tooi") in repo.rows  # BZK, keyed on organisatiecode
 
 
@@ -80,7 +118,7 @@ async def test_refresh_loads_seed():
 async def test_refresh_idempotent_no_duplicates():
     """AC6: a second refresh upserts the same keys — no duplicate rows."""
     repo = FakeReferenceRepo()
-    provider = TOOIProvider(repo)
+    provider = _ministries(repo)
     first = await provider.refresh()
     n_after_first = len(repo.rows)
     await provider.refresh()
@@ -92,7 +130,7 @@ async def test_refresh_idempotent_no_duplicates():
 async def test_lookup_by_canonical_name_returns_uri():
     """AC1-2: BZK full name → a tooi reference with a non-null external_uri."""
     repo = FakeReferenceRepo()
-    provider = TOOIProvider(repo)
+    provider = _ministries(repo)
     await provider.refresh()
 
     matches = await provider.lookup(
@@ -111,7 +149,7 @@ async def test_lookup_by_canonical_name_returns_uri():
 async def test_lookup_by_alias_abbreviation():
     """The abbreviation surface form resolves via the alias path."""
     repo = FakeReferenceRepo()
-    provider = TOOIProvider(repo)
+    provider = _ministries(repo)
     await provider.refresh()
 
     matches = await provider.lookup("BZK", "organization")
@@ -124,7 +162,7 @@ async def test_lookup_by_alias_abbreviation():
 @pytest.mark.asyncio
 async def test_lookup_miss_returns_empty():
     repo = FakeReferenceRepo()
-    provider = TOOIProvider(repo)
+    provider = _ministries(repo)
     await provider.refresh()
     assert await provider.lookup("Totally Unknown Org", "organization") == []
 
@@ -132,7 +170,7 @@ async def test_lookup_miss_returns_empty():
 @pytest.mark.asyncio
 async def test_lookup_empty_name_returns_empty():
     repo = FakeReferenceRepo()
-    provider = TOOIProvider(repo)
+    provider = _ministries(repo)
     await provider.refresh()
     assert await provider.lookup("", "organization") == []
 
@@ -173,26 +211,15 @@ async def test_refresh_from_bulk_file(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_missing_bulk_file_falls_back_to_seed(tmp_path):
+async def test_missing_bulk_file_refuses(tmp_path):
     repo = FakeReferenceRepo()
     provider = TOOIProvider(repo, source=str(tmp_path / "nope.json"))
-    loaded = await provider.refresh()
-    assert loaded >= 10  # fell back to the bundled seed
+    with pytest.raises(TOOIBronOntbreekt):
+        await provider.refresh()
+    assert repo.rows == {}
 
 
 # --- remote bulk fetch (K-D2) ------------------------------------------------
-
-
-class FakeBulkFetcher:
-    """Stand-in for ``TOOIBulkFetcher`` — returns a fixed record set, no network."""
-
-    def __init__(self, records: List[Dict[str, Any]]) -> None:
-        self._records = records
-        self.calls = 0
-
-    async def fetch_records(self) -> List[Dict[str, Any]]:
-        self.calls += 1
-        return list(self._records)
 
 
 _REMOTE_RECORDS = [
@@ -254,13 +281,27 @@ async def test_refresh_remote_idempotent_no_duplicates():
 
 
 @pytest.mark.asyncio
-async def test_refresh_empty_remote_falls_back_to_seed():
-    """An unreachable register set (fetcher returns []) degrades to the seed."""
+async def test_refresh_without_internet_keeps_the_loaded_register():
+    """F2-28 review: a refresh that reaches nothing (fetcher returns []) used to
+    load the ten-ministry seed over the full register — mnre1150 (LNV, ended
+    2010) lost its aliases and its end date. Now it refuses, writes nothing."""
     repo = FakeReferenceRepo()
-    provider = TOOIProvider(repo, bulk_fetcher=FakeBulkFetcher([]))
-    loaded = await provider.refresh()
-    assert loaded >= 10  # bundled seed
-    assert ("mnre1034", "tooi") in repo.rows  # BZK
+    lnv = {"organisatiecode": "mnre1150", "afkorting": "LNV",
+           "naam_excl_soort": "Landbouw, Natuur en Voedselkwaliteit",
+           "naam_incl_soort": "ministerie van Landbouw, Natuur en Voedselkwaliteit",
+           "soort": "ministerie",
+           "aliases": ["ministerie van Landbouw, Natuur en Voedselkwaliteit", "LNV"],
+           "begindatum": "", "einddatum": "2010-10-13"}  # as parsed from rwc_ministeries_compleet_6
+    await TOOIProvider(repo, bulk_fetcher=FakeBulkFetcher([lnv])).refresh()
+    before = json.loads(json.dumps(repo.rows[("mnre1150", "tooi")]))
+
+    with pytest.raises(TOOIBronOntbreekt):
+        await TOOIProvider(repo, bulk_fetcher=FakeBulkFetcher([])).refresh()
+
+    after = repo.rows[("mnre1150", "tooi")]
+    assert after == before
+    assert "ministerie van Landbouw, Natuur en Voedselkwaliteit" in after["aliases"]
+    assert after["properties"]["einddatum"] == "2010-10-13"
 
 
 @pytest.mark.asyncio

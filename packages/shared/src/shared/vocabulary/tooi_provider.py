@@ -13,25 +13,16 @@ fields this provider keys off (verified live 2026-06-22):
 so e.g. ``mnre1034`` →
 ``https://identifier.overheid.nl/tooi/id/ministerie/mnre1034`` is the BZK URI.
 
-Load model (decision K-D2 — RESOLVED, see escalations.md)
----------------------------------------------------------
+Load model (F2-28)
+------------------
 ``refresh()`` ingests TOOI organisation records into ``reference_entity``
-(``source_vocabulary = "tooi"``) and stamps ``last_validated``. Three sources,
-tried in priority order, each a fail-soft fallback for the next:
-
-1. **Remote bulk fetch** (the resolved K-D2 source) — when a
-   :class:`~shared.vocabulary.tooi_bulk.TOOIBulkFetcher` is attached, the FULL
-   government-organisation vocabulary is pulled from the official versioned
-   JSON-LD registers under ``repository.officiele-overheidspublicaties.nl``
-   through the disciplined HTTP client (timeout + rate-limit + cache + fail-soft).
-   See :mod:`shared.vocabulary.tooi_bulk` for the exact URLs/format.
-2. **Operator bulk file** — ``refresh(source=<path>)`` reads a
-   ``tooi_organisations.json`` dump (the documented JSON shape below) for an
-   air-gapped or version-pinned deploy.
-3. **Bundled verified seed** (``_SEED_RECORDS``, the real ministries) — the
-   always-present floor so a fresh install and the offline tests resolve BZK
-   without any network. Used when the remote fetch yields nothing and no file is
-   given.
+(``source_vocabulary = "tooi"``) and stamps ``last_validated``. The records come
+from the caller: an attached fetcher (``shared.vocabulary.referentiegegevens``
+hands it the registers from the inventory, SHA-256-checked) or a bulk file
+(``refresh(source=<path>)``). There is NO fallback: no source, an empty fetch or
+an unreadable file raises :class:`TOOIBronOntbreekt` and nothing is written. The
+old fallback to a ten-ministry seed overwrote a full register with less (F2-28
+review: aliases and end date of mnre1150 lost after a refresh without internet).
 
 The bulk file format (``tooi_organisations.json``) is a JSON list of records::
 
@@ -65,7 +56,6 @@ from shared.utils.name_normalizer import normalize_entity_name
 from shared.utils.nl_normalization import normalize_alias_key
 from shared.utils.surface_parts import parse_surface
 from shared.vocabulary.provider import VocabMatch
-from shared.vocabulary.tooi_bulk import TOOIBulkFetcher
 
 _TOOI_BASE_URI = "https://identifier.overheid.nl/tooi/id"
 
@@ -75,23 +65,9 @@ _TOOI_BASE_URI = "https://identifier.overheid.nl/tooi/id"
 #: threshold below this makes one-sided evidence link — keep them apart.
 ONE_SIDED_CONFIDENCE = 0.8
 
-# Verified-live representative seed (subset of the ~25 core organisations).
-# Each is the real TOOI organisatiecode + officiële naam fetched from
-# identifier.overheid.nl on 2026-06-22. This is the deterministic default the
-# tests and a fresh install use; refresh(source=...) replaces it with the full
-# bulk dump once the K-D2 URL is confirmed.
-_SEED_RECORDS: List[Dict[str, str]] = [
-    {"organisatiecode": "mnre1010", "afkorting": "AZ", "naam_excl_soort": "Algemene Zaken", "naam_incl_soort": "ministerie van Algemene Zaken", "soort": "ministerie"},
-    {"organisatiecode": "mnre1034", "afkorting": "BZK", "naam_excl_soort": "Binnenlandse Zaken en Koninkrijksrelaties", "naam_incl_soort": "ministerie van Binnenlandse Zaken en Koninkrijksrelaties", "soort": "ministerie"},
-    {"organisatiecode": "mnre1013", "afkorting": "BZ", "naam_excl_soort": "Buitenlandse Zaken", "naam_incl_soort": "ministerie van Buitenlandse Zaken", "soort": "ministerie"},
-    {"organisatiecode": "mnre1018", "afkorting": "Def", "naam_excl_soort": "Defensie", "naam_incl_soort": "ministerie van Defensie", "soort": "ministerie"},
-    {"organisatiecode": "mnre1045", "afkorting": "EZK", "naam_excl_soort": "Economische Zaken en Klimaat", "naam_incl_soort": "ministerie van Economische Zaken en Klimaat", "soort": "ministerie"},
-    {"organisatiecode": "mnre1130", "afkorting": "IenW", "naam_excl_soort": "Infrastructuur en Waterstaat", "naam_incl_soort": "ministerie van Infrastructuur en Waterstaat", "soort": "ministerie"},
-    {"organisatiecode": "mnre1150", "afkorting": "LNV", "naam_excl_soort": "Landbouw, Natuur en Voedselkwaliteit", "naam_incl_soort": "ministerie van Landbouw, Natuur en Voedselkwaliteit", "soort": "ministerie"},
-    {"organisatiecode": "mnre1153", "afkorting": "LVVN", "naam_excl_soort": "Landbouw, Visserij, Voedselzekerheid en Natuur", "naam_incl_soort": "ministerie van Landbouw, Visserij, Voedselzekerheid en Natuur", "soort": "ministerie"},
-    {"organisatiecode": "mnre1109", "afkorting": "OCW", "naam_excl_soort": "Onderwijs, Cultuur en Wetenschap", "naam_incl_soort": "ministerie van Onderwijs, Cultuur en Wetenschap", "soort": "ministerie"},
-    {"organisatiecode": "mnre1025", "afkorting": "VWS", "naam_excl_soort": "Volksgezondheid, Welzijn en Sport", "naam_incl_soort": "ministerie van Volksgezondheid, Welzijn en Sport", "soort": "ministerie"},
-]
+
+class TOOIBronOntbreekt(RuntimeError):
+    """No usable TOOI source: nothing to load, and nothing is written."""
 
 
 def _record_uri(record: Dict[str, str]) -> str:
@@ -137,7 +113,7 @@ class TOOIProvider:
         repository: Any,
         *,
         source: Optional[str] = None,
-        bulk_fetcher: Optional[TOOIBulkFetcher] = None,
+        bulk_fetcher: Optional[Any] = None,
     ) -> None:
         """Args:
 
@@ -146,11 +122,9 @@ class TOOIProvider:
             (D2, migration 81).
         source: Optional path to a bulk ``tooi_organisations.json`` file. Takes
             priority over the remote fetch when set (operator-pinned dump).
-        bulk_fetcher: Optional :class:`TOOIBulkFetcher` that pulls the full
-            vocabulary from the live TOOI registers. When attached (and no
-            ``source`` file is given) ``refresh`` uses it, falling back to the
-            bundled seed if nothing is reachable. ``None`` ⇒ no network; the seed
-            (or the file) is the source — this keeps the unit tests offline.
+        bulk_fetcher: Optional object with ``async fetch_records()`` (e.g. the
+            inventory registers, ``shared.vocabulary.referentiegegevens``). Used
+            when no ``source`` file is given.
         """
         self._repo = repository
         self._source = source
@@ -163,8 +137,9 @@ class TOOIProvider:
     async def refresh(self, source: Optional[str] = None) -> int:
         """Ingest TOOI organisations into ``reference_entity``. Returns rows upserted.
 
-        Source priority (each fails soft into the next): an explicit/operator
-        ``source`` file > the attached remote bulk fetcher > the bundled seed.
+        Source: an explicit/operator ``source`` file, else the attached fetcher.
+        Raises :class:`TOOIBronOntbreekt` (before writing anything) when neither
+        yields records.
 
         Idempotent: each record upserts on the ``(external_id,
         source_vocabulary)`` key (migration 57's UNIQUE index — the org's stable
@@ -191,19 +166,15 @@ class TOOIProvider:
         return loaded
 
     async def _resolve_records(self, source: Optional[str]) -> List[Dict[str, str]]:
-        """Pick the highest-priority reachable source. Never raises."""
+        """The records to load; raises :class:`TOOIBronOntbreekt` when there are none."""
         if source is not None:
             return self._read_file_source(source)
-        if self._bulk_fetcher is not None:
-            try:
-                fetched = await self._bulk_fetcher.fetch_records()
-            except Exception as exc:  # defensive — the fetcher is fail-soft already
-                logger.error("TOOI remote bulk fetch raised ({e}) — using seed", e=exc)
-                fetched = []
-            if fetched:
-                return fetched
-            logger.warning("TOOI remote bulk fetch empty — falling back to seed")
-        return list(_SEED_RECORDS)
+        if self._bulk_fetcher is None:
+            raise TOOIBronOntbreekt("no TOOI source (no file and no fetcher)")
+        fetched = await self._bulk_fetcher.fetch_records()
+        if not fetched:
+            raise TOOIBronOntbreekt("TOOI fetch returned no records")
+        return fetched
 
     @staticmethod
     def _dedupe_rows(rows: Any) -> List[Dict[str, Any]]:
@@ -231,20 +202,12 @@ class TOOIProvider:
     @staticmethod
     def _read_file_source(source: str) -> List[Dict[str, str]]:
         path = Path(source)
-        if not path.exists():
-            logger.warning(
-                "TOOI bulk source not found ({p}) — falling back to bundled seed",
-                p=source,
-            )
-            return list(_SEED_RECORDS)
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc:
-            logger.error("TOOI bulk source unreadable ({p}): {e}", p=source, e=exc)
-            return list(_SEED_RECORDS)
-        if not isinstance(data, list):
-            logger.error("TOOI bulk source is not a JSON list ({p})", p=source)
-            return list(_SEED_RECORDS)
+            raise TOOIBronOntbreekt(f"TOOI bulk source unreadable ({source}): {exc}") from exc
+        if not isinstance(data, list) or not data:
+            raise TOOIBronOntbreekt(f"TOOI bulk source is not a non-empty JSON list ({source})")
         return data
 
     def _to_reference_row(self, record: Dict[str, Any]) -> Dict[str, Any]:

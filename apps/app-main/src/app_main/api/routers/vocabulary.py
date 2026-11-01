@@ -1,8 +1,11 @@
 """Vocabulary router — external-vocabulary refresh + status (K.4).
 
-* ``POST /api/vocabulary/refresh`` (re-)syncs the bulk vocabularies (TOOI) into
-  ``reference_entity`` and stamps ``last_validated``. Idempotent — a second
-  refresh creates no duplicate rows.
+* ``POST /api/vocabulary/refresh`` (re-)loads TOOI into ``reference_entity`` from
+  the registers in ``config/referentiegegevens.yaml`` and their cache (F2-28,
+  filled by ``scripts/signaalsysteem/laad_referentiegegevens.sh``; the container
+  has no internet). 503 when the cache is missing or a SHA-256 differs, 409 when
+  the load would drop an organisation already loaded; nothing is written then.
+  Idempotent — a second refresh creates no duplicate rows.
 * ``GET /api/vocabulary/status`` reports, per provider, the loaded-row count and
   the most-recent ``last_validated`` timestamp.
 
@@ -13,12 +16,19 @@ with ``loaded=0``; it is exercised at reconcile time, not here.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from shared.vocabulary.crossref_provider import CrossrefProvider
-from shared.vocabulary.tooi_bulk import TOOIBulkFetcher
+from shared.vocabulary.referentiegegevens import (
+    BronOntbreekt,
+    MinderGegevens,
+    laad_tooi,
+    lees_inventaris,
+    tooi_set,
+)
 from shared.vocabulary.tooi_provider import TOOIProvider
 from surrealdb_service.repositories.reference_entity import (
     ReferenceEntityRepository,
@@ -45,23 +55,16 @@ def _crossref_contact() -> str:
     return os.environ.get("CROSSREF_CONTACT_EMAIL", "noreply@open-notebook.local")
 
 
-def _tooi_source() -> Optional[str]:
-    """Operator bulk-file path for TOOI (K-D2). Set → overrides the remote fetch."""
-    return os.environ.get("TOOI_BULK_SOURCE") or None
+def _inventaris() -> Path:
+    """``config/referentiegegevens.yaml`` (F2-28), the one source of the registers."""
+    return Path(os.environ.get("SIGNAAL_REFERENTIEGEGEVENS",
+                               "/app/config/referentiegegevens.yaml"))
 
 
-def _tooi_bulk_fetcher() -> Optional[TOOIBulkFetcher]:
-    """The live TOOI registers fetcher — the resolved K-D2 full-vocabulary source.
-
-    Attached by default so ``refresh`` pulls the full government-organisation set
-    from ``repository.officiele-overheidspublicaties.nl`` (fail-soft → seed if the
-    registers are unreachable). An operator file (``TOOI_BULK_SOURCE``) takes
-    priority over it; ``TOOI_DISABLE_REMOTE=1`` opts out of any network entirely
-    (seed/file only — e.g. an air-gapped deploy).
-    """
-    if os.environ.get("TOOI_DISABLE_REMOTE", "").strip() in {"1", "true", "yes"}:
-        return None
-    return TOOIBulkFetcher(contact_email=_crossref_contact())
+def _cachemap() -> Path:
+    """Where the admin step puts the downloaded registers (volume ``fork_data``)."""
+    standaard = Path(os.environ.get("DATA_FOLDER", "/app/data")) / "referentiegegevens"
+    return Path(os.environ.get("SIGNAAL_REFERENTIE_CACHE", str(standaard)))
 
 
 # --- Schemas -----------------------------------------------------------------
@@ -147,13 +150,16 @@ async def refresh_vocabulary(
     results: List[ProviderRefreshOut] = []
 
     if wanted is None or "tooi" in wanted:
-        tooi = TOOIProvider(
-            repo,
-            source=_tooi_source(),
-            bulk_fetcher=_tooi_bulk_fetcher(),
-        )
-        loaded = await tooi.refresh()
-        results.append(ProviderRefreshOut(name="tooi", loaded=loaded))
+        try:
+            verslag = await laad_tooi(repo, tooi_set(lees_inventaris(_inventaris())),
+                                      _cachemap())
+        except BronOntbreekt as exc:
+            raise HTTPException(status_code=503, detail=(
+                f"TOOI registers not available: {exc}. Run "
+                "scripts/signaalsysteem/laad_referentiegegevens.sh")) from exc
+        except MinderGegevens as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        results.append(ProviderRefreshOut(name="tooi", loaded=verslag["geladen"]))
 
     if wanted is None or "crossref" in wanted:
         # Crossref is on-demand — refresh is a no-op, reported for completeness.
@@ -189,9 +195,9 @@ async def vocabulary_status(
 
 
 
-#: A register this small is the bundled seed (the ten core ministries), which
-#: `refresh()` falls back to when the live registers are unreachable. Reconciling
-#: against it would report every municipality as "no match" — silently.
+#: A register this small is not the full set (the size of the ten-ministry seed
+#: `refresh()` fell back to before F2-28). Reconciling against it would report
+#: every municipality as "no match" — silently.
 _SEED_SIZE = 10
 
 

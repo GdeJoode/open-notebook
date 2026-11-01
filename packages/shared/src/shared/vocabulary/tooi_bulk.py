@@ -43,8 +43,8 @@ Network discipline
 -------------------
 All fetches go through the shared :class:`VocabularyHTTPClient` (timeout +
 rate-limit + cache + fail-soft). An unreachable register yields no records
-(logged, never raised), so the caller can fall back to the bundled seed and never
-crash.
+(logged, never raised); the caller decides what to do with fewer records.
+``TOOIProvider.refresh`` refuses an empty result (no seed fallback since F2-28).
 """
 
 from __future__ import annotations
@@ -62,13 +62,13 @@ _PROV_SPECIALIZATION = "http://www.w3.org/ns/prov#specializationOf"
 _REPOSITORY_BASE = "https://repository.officiele-overheidspublicaties.nl/waardelijsten"
 
 # The eight "compleet" registers whose union is the full government-organisation
-# vocabulary, with the latest version live-verified on 2026-06-22. The version is
-# part of the canonical, immutable repository path; bumping it here (or overriding
-# via ``TOOIBulkFetcher(registers=...)``) picks up a newer publication.
+# vocabulary. The version is part of the canonical, immutable repository path.
+# Must equal the TOOI set in config/referentiegegevens.yaml, the source of truth
+# for what is loaded (F2-28; tests/signaalsysteem/test_referentiegegevens_schema.py).
 DEFAULT_REGISTERS: List[Dict[str, Any]] = [
     {"set": "rwc_ministeries_compleet", "version": 6, "default_soort": "ministerie"},
     {"set": "rwc_provincies_compleet", "version": 1, "default_soort": "provincie"},
-    {"set": "rwc_gemeenten_compleet", "version": 5, "default_soort": "gemeente"},
+    {"set": "rwc_gemeenten_compleet", "version": 6, "default_soort": "gemeente"},
     {"set": "rwc_waterschappen_compleet", "version": 2, "default_soort": "waterschap"},
     {"set": "rwc_zbo_compleet", "version": 6, "default_soort": "zbo"},
     {
@@ -255,7 +255,7 @@ class TOOIBulkFetcher:
     Fetches each register's JSON-LD dump through the shared fail-soft HTTP client
     and unions the parsed organisation records. A register that is unreachable (or
     malformed) contributes zero records and is logged — never raised — so the
-    caller degrades to whatever did load (or the bundled seed).
+    caller sees whatever did load.
     """
 
     def __init__(

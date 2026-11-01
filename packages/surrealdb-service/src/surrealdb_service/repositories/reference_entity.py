@@ -212,6 +212,18 @@ class ReferenceEntityRepository:
             logger.warning("reference_entity count failed: {e}", e=exc)
             return 0
 
+    async def external_ids(self, source: str) -> List[str]:
+        """Every ``external_id`` of one vocabulary (F2-28: a load may not drop one).
+
+        Raises on a DB error: the caller decides whether to write, so an unknown
+        answer must not read as "nothing loaded".
+        """
+        rows = await execute_query(
+            "SELECT external_id FROM reference_entity WHERE source_vocabulary = $src",
+            {"src": source}, self.config,
+        )
+        return [str(r["external_id"]) for r in rows or [] if r.get("external_id")]
+
     async def last_validated(self, source: str) -> Optional[str]:
         """Most recent ``last_validated`` for a vocabulary, or None if unloaded."""
         try:
