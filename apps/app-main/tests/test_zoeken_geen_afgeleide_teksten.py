@@ -78,7 +78,7 @@ async def test_notitie_en_inzicht_komen_niet_terug(app, env) -> None:
     await _q("CREATE source_embedding CONTENT $d", {"d": {
         "source": conn.ensure_record_id(bron), "chunk": conn.ensure_record_id(str(chunk["id"])),
         "run": conn.ensure_record_id(str(run.id)), "content": woord, "order": 0,
-        "embedding": vector, "embedding_model": "test"}})
+        "embedding": vector, "embedding_model": "test", "afgekapt": False}})
 
     # Een notitie en een inzicht met dezelfde tekst en vector.
     [notitie] = await _q("CREATE note CONTENT {title: $w, content: $w, embedding: $v,"

@@ -96,8 +96,9 @@ async def _kinderen(bron: str) -> dict[str, str]:
     [emb] = await _q(
         "CREATE source_embedding CONTENT $c RETURN id",
         {"c": {"source": b, "chunk": conn.ensure_record_id(str(chunk["id"])),
-               "content": "t", "order": 0,
-               "embedding": []}},
+               "content": "t", "order": 0, "embedding": [],
+               # Sinds migratie 104/105 (F2-15): de run van het fragment.
+               "run": h["run"], "embedding_model": "test", "afgekapt": False}},
     )
     [node] = await _q(
         "CREATE doc_node CONTENT $c RETURN id",

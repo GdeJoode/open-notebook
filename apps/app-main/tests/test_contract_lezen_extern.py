@@ -132,7 +132,7 @@ async def _bron_met_alles(g: Gegevens, classification: str) -> dict[str, str]:
         [emb] = await _q("CREATE source_embedding CONTENT $d RETURN id", {"d": {
             "source": herkomst["source"], "chunk": _rid(str(chunk["id"])), "run": herkomst["run"],
             "content": f"{tekst} {naam}", "order": 0, "embedding": g.vector,
-            "embedding_model": "test"}})
+            "embedding_model": "test", "afgekapt": False}})
         [node] = await _q("CREATE doc_node CONTENT $d RETURN id", {"d": {
             **herkomst, "element_type": "paragraph", "self_ref": f"#/texts/{_letters(6)}",
             "sequence": 0, "text": tekst}})

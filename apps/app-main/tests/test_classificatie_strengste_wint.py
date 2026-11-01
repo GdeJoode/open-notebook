@@ -76,7 +76,7 @@ async def _versie_met_kinderen(bron: str) -> list[str]:
         **herkomst, "element_type": "paragraph", "self_ref": "#/texts/0", "sequence": 0}})
     [emb] = await _q("CREATE source_embedding CONTENT $d RETURN id", {"d": {
         "source": _rid(bron), "chunk": _rid(str(chunk["id"])), "run": _rid(run), "content": "x",
-        "order": 0, "embedding": [], "embedding_model": "test"}})
+        "order": 0, "embedding": [], "embedding_model": "test", "afgekapt": False}})
     return [str(versie.id), str(chunk["id"]), str(node["id"]), str(emb["id"])]
 
 
