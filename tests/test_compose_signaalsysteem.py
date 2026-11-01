@@ -607,3 +607,15 @@ def test_llama_swap_image_met_docker_client_en_configuratie() -> None:
     assert "COPY --from=cli /usr/local/bin/docker /usr/local/bin/docker" in tekst
     assert re.search(r"^COPY config\.yaml /app/config\.yaml$", tekst, re.M)
     assert "docker.sock" not in tekst
+
+
+def test_startcontrole_toetst_ook_diensten_van_llama_swap(config_gpu, hostpaden) -> None:
+    """Review F2-11, punt 1: start.sh geeft het profiel mee aan de startcontrole,
+    en een bind naar de vault op docling-serve wordt geweigerd."""
+    tekst = (ROOT / "scripts" / "signaalsysteem" / "start.sh").read_text(encoding="utf-8")
+    assert re.search(r'^config="\$\("\$\{COMPOSE\[@\]\}" --profile door-llama-swap config '
+                     r'--format json\)"$', tekst, re.M)
+    vault = {"type": "bind", "source": hostpaden["SIGNAAL_VAULT"], "target": "/data",
+             "read_only": True}
+    fouten = _padlijsten().controleer(_met(config_gpu, "docling-serve", [vault]), hostpaden)
+    assert any(f.startswith("docling-serve:") for f in fouten), fouten

@@ -75,7 +75,9 @@ if [[ " $* " != *" --build "* ]]; then
 fi
 
 # 4. Startcontrole.
-config="$("${COMPOSE[@]}" config --format json)"
+# Met het profiel door-llama-swap: ook de binds van de diensten die llama-swap
+# start (docling-serve; later kev en whisperx) gaan door de controle.
+config="$("${COMPOSE[@]}" --profile door-llama-swap config --format json)"
 bronnen="$(printf '%s' "$config" | docker run --rm -i --network none "$PY_IMG" \
   python -c "$(cat "$CONTROLE/padlijsten.py")" --bronnen)"
 paden="$(printf '%s\n' "$bronnen"; for naam in SIGNAAL_INNAMEMAP SIGNAAL_WATCHFOLDER SIGNAAL_VAULT SIGNAAL_EXPORTMAP; do
