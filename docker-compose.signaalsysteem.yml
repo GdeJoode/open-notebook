@@ -1,7 +1,9 @@
 # Signaalsysteem: Compose-basis (F2-10; plan van aanpak §4; ADR 0002 F, 0016, 0021, 0022 A).
 #
-# Starten:  bash scripts/signaalsysteem/start.sh   (startcontrole padlijsten, daarna up)
-# Stoppen:  docker compose -p signaal -f docker-compose.signaalsysteem.yml down
+# Starten ALLEEN via:  bash scripts/signaalsysteem/start.sh [--build]
+#   Geen kale `docker compose up`: start.sh maakt de kloon van de flowmap,
+#   geeft de commit van de fork mee en draait de startcontrole van de padlijsten.
+# Stoppen:  bash scripts/signaalsysteem/stop.sh   (zonder volumes te verwijderen)
 #
 # Naast docker-compose.yml (de oude stack, archief tot F2-23); deze opzet koppelt
 # ./surreal_data niet en heeft een eigen, nieuw volume signaal_surreal_data (B3).
@@ -24,7 +26,11 @@ networks:
   # Gewoon: alleen de proxy's. Een proxy op toegang heeft uitgaand internet; ook
   # enable_ip_masquerade=false verandert dat onder Docker Desktop niet (proef
   # masquerade, F2-10). Daarom is elke proxy gehard (services/proxy/Dockerfile).
-  toegang: {}
+  # Zonder ICC bereiken de proxy's elkaar niet over toegang; hun gepubliceerde
+  # poort blijft bereikbaar (F2-10, review B1).
+  toegang:
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"
   uitgaand: {}                         # alleen ophalen (F4-13) en cloud-gateway (F5-07)
 
 secrets:
@@ -47,6 +53,8 @@ services:
     secrets: [surreal_gebruiker, surreal_wachtwoord]
     volumes:
       - signaal_surreal_data:/data
+    # Het image declareert VOLUME /logs; tmpfs voorkomt een anoniem volume.
+    tmpfs: [/logs]
     environment:
       SURREAL_ROCKSDB_BLOCK_CACHE_SIZE: "536870912"
     healthcheck:
@@ -61,6 +69,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        SIGNAAL_FORK_COMMIT: ${SIGNAAL_FORK_COMMIT:-onbekend}   # start.sh: HEAD (K2)
     image: signaal/open-notebook:lokaal
     networks: [opslag, verwerking, werkbak-intern]
     entrypoint: ["/app/.venv/bin/python", "/app/services/open-notebook/start.py"]
@@ -81,7 +91,7 @@ services:
       API_URL: http://127.0.0.1:${SIGNAAL_WERKBAK_POORT:-8520}
       SIGNAAL_MODELREGISTER: /app/config/modelregister.yaml
       SIGNAAL_RUN_MAX_MINUTEN: ${SIGNAAL_RUN_MAX_MINUTEN:-360}
-      SIGNAAL_FLOWS_DIR: /app/services/langflow/flows
+      SIGNAAL_FLOWS_DIR: /app/flows-git/services/langflow/flows
       SIGNAAL_FLOWS_COMMIT: ${SIGNAAL_FLOWS_COMMIT:-}
       # Padlijsten (ADR 0020): precies de koppelpunten hieronder.
       SIGNAAL_INNAME_PADEN: /inname;/watchfolder
@@ -90,16 +100,14 @@ services:
       SIGNAAL_EXPORTMAP_PADEN: /export
       SIGNAAL_BRONARCHIEF: /bronarchief
       SIGNAAL_FORK_ARCHIEF: /fork_archief
-      # Git van de host is alleen-lezen gekoppeld voor het flowregister (F2-04).
+      # Minimale kloon van de flowmap (start.sh), alleen-lezen, voor het
+      # flowregister (F2-04); niet de .git van de host.
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: safe.directory
-      GIT_CONFIG_VALUE_0: /app
-      # De flowmap is een eigen koppeling; Git zoekt /app/.git daarbuiten.
-      GIT_DISCOVERY_ACROSS_FILESYSTEM: "1"
+      GIT_CONFIG_VALUE_0: /app/flows-git
     volumes:
       - ./config:/app/config:ro
-      - ./.git:/app/.git:ro
-      - ./services/langflow/flows:/app/services/langflow/flows:ro
+      - ${SIGNAAL_FLOWS_KLOON:?start via scripts/signaalsysteem/start.sh}:/app/flows-git:ro
       - fork_data:/app/data
       - bronarchief:/bronarchief:ro
       - fork_archief:/fork_archief

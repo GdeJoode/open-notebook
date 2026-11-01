@@ -8,7 +8,8 @@
      koppeling (de fork hasht daar batchbestanden en watchfolder-items, B29);
    * ``SIGNAAL_BRONARCHIEF`` is alleen-lezen gekoppeld, ``SIGNAAL_FORK_ARCHIEF``
      schrijfbaar;
-   * geen koppeling ligt in of onder een pad uit ``SIGNAAL_VAULT_PADEN``.
+   * geen koppeling ligt in of onder een pad uit ``SIGNAAL_VAULT_PADEN``;
+   * geen koppeling bevat een map ``.obsidian`` (een vault, hoe ook gekoppeld).
    Faalt de controle, dan start de API niet (exitcode 1).
 3. Start supervisord (API en interface).
 
@@ -22,8 +23,11 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path, PurePosixPath
+from typing import Iterable
 
 GEHEIMEN = Path("/run/secrets")
+#: Koppelpunten van het systeem; daar zoekt de controle niet naar ``.obsidian``.
+_SYSTEEM = ("/proc", "/sys", "/dev", "/etc", "/run", "/usr", "/lib")
 SUPERVISORD = ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
 
 
@@ -81,13 +85,27 @@ def controleer_koppelingen(kop: dict[str, set[str]], env: dict[str, str]) -> lis
     return fouten
 
 
+def obsidian_mappen(punten: Iterable[str]) -> list[str]:
+    """Mappen ``.obsidian`` in of onder de gegeven koppelpunten."""
+    gevonden: list[str] = []
+    for punt in punten:
+        if punt == "/" or any(punt == s or punt.startswith(s + "/") for s in _SYSTEEM):
+            continue
+        for map_, submappen, _ in os.walk(punt, followlinks=False):
+            if ".obsidian" in submappen:
+                gevonden.append(os.path.join(map_, ".obsidian"))
+                break
+    return gevonden
+
+
 def main(argv: list[str]) -> int:
     env = dict(os.environ)
     env.update(lees_geheimen())
     if argv:
         os.execvpe(argv[0], argv, env)
-    fouten = controleer_koppelingen(
-        koppelingen(Path("/proc/self/mountinfo").read_text(encoding="utf-8")), env)
+    kop = koppelingen(Path("/proc/self/mountinfo").read_text(encoding="utf-8"))
+    fouten = controleer_koppelingen(kop, env)
+    fouten += [f"koppeling bevat een vault ({p})" for p in obsidian_mappen(kop)]
     if fouten:
         for fout in fouten:
             print(f"startcontrole: {fout}", file=sys.stderr)

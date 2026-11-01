@@ -1,32 +1,68 @@
 #!/usr/bin/env bash
-# Start de Compose-omgeving van het signaalsysteem (F2-10).
+# Start de Compose-omgeving van het signaalsysteem (F2-10). `up` gaat alleen via
+# dit script; stoppen met scripts/signaalsysteem/stop.sh.
 #
-# Eerst de startcontrole van de padlijsten (controle/padlijsten.py) op de
-# opgeloste configuratie; faalt die, dan start er niets (exitcode 1). Daarna
-# `docker compose up -d`. Extra argumenten gaan naar `up`, bijvoorbeeld
-# `--build` of een dienstnaam.
-#
-# Hostpaden (SIGNAAL_INNAMEMAP, SIGNAAL_WATCHFOLDER, SIGNAAL_VAULT,
-# SIGNAAL_EXPORTMAP) komen uit de omgeving of uit .env (voorbeeld in .env.example).
+# 1. Hostpaden (SIGNAAL_INNAMEMAP, SIGNAAL_WATCHFOLDER, SIGNAAL_VAULT,
+#    SIGNAAL_EXPORTMAP) uit de omgeving of uit .env (voorbeeld in .env.example).
+# 2. Een minimale kloon van de flowmap (HEAD, alleen services/langflow/flows)
+#    voor het flowregister, alleen-lezen gekoppeld; niet de hele .git (K1).
+# 3. SIGNAAL_FORK_COMMIT = HEAD, als build-argument van het image (K2).
+# 4. Startcontrole: elk bind-pad op de host canoniek (controle/canoniek.ps1),
+#    daarna controle/padlijsten.py. Faalt die, dan start er niets (exitcode 1).
+# 5. `docker compose up -d`; extra argumenten gaan naar `up` (bijv. --build).
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 
 ROOT="$(cd "$(dirname "$0")/../.." && { pwd -W 2>/dev/null || pwd; })"
 COMPOSE=(docker compose -p signaal -f "$ROOT/docker-compose.signaalsysteem.yml")
+CONTROLE="$ROOT/scripts/signaalsysteem/controle"
 # Zelfde basisimage als de fork; de controle draait zonder netwerk.
 PY_IMG="python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337"
+STAAT="${SIGNAAL_STAAT:-$HOME/.cache/signaal}"
+FLOWS=services/langflow/flows
 
-# Alleen de hostpaden uit .env overnemen, geen andere waarden.
+# 1. Alleen de hostpaden uit .env overnemen, geen andere waarden.
 for naam in SIGNAAL_INNAMEMAP SIGNAAL_WATCHFOLDER SIGNAAL_VAULT SIGNAAL_EXPORTMAP; do
   if [[ -z "${!naam:-}" && -f "$ROOT/.env" ]]; then
     waarde="$(grep -E "^${naam}=" "$ROOT/.env" | tail -n1 | cut -d= -f2- | tr -d '\r' || true)"
-    [[ -n "$waarde" ]] && export "$naam=$waarde"
+    if [[ -n "$waarde" ]]; then export "$naam=$waarde"; fi
   fi
 done
 
-config="$("${COMPOSE[@]}" config --format json)"
-printf '%s' "$config" | docker run --rm -i --network none \
-  -e SIGNAAL_INNAMEMAP -e SIGNAAL_WATCHFOLDER -e SIGNAAL_VAULT -e SIGNAAL_EXPORTMAP \
-  "$PY_IMG" python -c "$(cat "$ROOT/scripts/signaalsysteem/controle/padlijsten.py")"
+# 2. Minimale kloon van de flowmap: één commit (HEAD), de bomen, en alleen de
+#    bestanden onder de flowmap (partial clone, sparse checkout). Andere
+#    bestandsinhoud zit er niet in. Een gewijzigde flowmap op de host telt niet
+#    mee; een flow met een andere hash is dan niet vastgelegd (FlowRegister).
+if [[ -n "$(git -C "$ROOT" status --porcelain -- "$FLOWS")" ]]; then
+  echo "let op: $FLOWS heeft niet-vastgelegde wijzigingen; de kloon bevat HEAD" >&2
+fi
+mkdir -p "$STAAT"
+kloon="$(cd "$STAAT" && { pwd -W 2>/dev/null || pwd; })/flows-git"
+rm -rf "$kloon"
+UPLOAD="git -c uploadpack.allowFilter=true upload-pack"
+git -c protocol.file.allow=always clone -q --no-local --depth 1 --filter=tree:0 --sparse \
+  --no-checkout -u "$UPLOAD" "$ROOT" "$kloon"
+git -C "$kloon" config remote.origin.uploadpack "$UPLOAD"
+git -C "$kloon" sparse-checkout set --no-cone "/$FLOWS/"
+git -C "$kloon" -c protocol.file.allow=always -c advice.detachedHead=false checkout -q
+git -C "$kloon" remote remove origin
+export SIGNAAL_FLOWS_KLOON="$kloon"
 
+# 3. De commit van de fork voor het image.
+export SIGNAAL_FORK_COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
+
+# 4. Startcontrole.
+config="$("${COMPOSE[@]}" config --format json)"
+bronnen="$(printf '%s' "$config" | docker run --rm -i --network none "$PY_IMG" \
+  python -c "$(cat "$CONTROLE/padlijsten.py")" --bronnen)"
+paden="$(printf '%s\n' "$bronnen"; for naam in SIGNAAL_INNAMEMAP SIGNAAL_WATCHFOLDER SIGNAAL_VAULT SIGNAAL_EXPORTMAP; do
+  if [[ -n "${!naam:-}" ]]; then printf '%s\n' "${!naam}"; fi; done)"
+SIGNAAL_CANONIEK="$(printf '%s' "$paden" | tr -d '\r' | powershell.exe -NoProfile -ExecutionPolicy Bypass \
+  -File "$CONTROLE/canoniek.ps1" | tr -d '\r')"
+export SIGNAAL_CANONIEK
+printf '%s' "$config" | docker run --rm -i --network none \
+  -e SIGNAAL_INNAMEMAP -e SIGNAAL_WATCHFOLDER -e SIGNAAL_VAULT -e SIGNAAL_EXPORTMAP -e SIGNAAL_CANONIEK \
+  "$PY_IMG" python -c "$(cat "$CONTROLE/padlijsten.py")"
+
+# 5. Starten.
 exec "${COMPOSE[@]}" up -d "$@"

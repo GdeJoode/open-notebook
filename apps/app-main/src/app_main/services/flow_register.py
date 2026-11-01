@@ -1,7 +1,8 @@
 """Register van de flows in Git (F2-04, ADR 0022 E, ADR 0017 B).
 
 De flows uit ``services/langflow/flows/`` zijn alleen-lezen gekoppeld in de
-container ``open-notebook``, met de Git-gegevens van de repository. Een run legt
+container ``open-notebook``, als minimale Git-kloon van HEAD die
+``scripts/signaalsysteem/start.sh`` maakt (F2-10). Een run legt
 de Git-commit en de SHA-256 van de flow-JSON vast (``pipeline_version``). De
 flow is *vastgelegd* als:
 

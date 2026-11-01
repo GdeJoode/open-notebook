@@ -16,7 +16,7 @@ import os
 import re
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 import yaml
@@ -47,7 +47,8 @@ def _padlijsten():
 def hostpaden(tmp_path_factory) -> dict[str, str]:
     basis = tmp_path_factory.mktemp("signaal")
     paden = {}
-    for naam in ("SIGNAAL_INNAMEMAP", "SIGNAAL_WATCHFOLDER", "SIGNAAL_VAULT", "SIGNAAL_EXPORTMAP"):
+    for naam in ("SIGNAAL_INNAMEMAP", "SIGNAAL_WATCHFOLDER", "SIGNAAL_VAULT", "SIGNAAL_EXPORTMAP",
+                 "SIGNAAL_FLOWS_KLOON"):
         map_ = basis / naam.lower()
         map_.mkdir()
         paden[naam] = str(map_)
@@ -297,14 +298,55 @@ def test_innamemappen_en_watchfolder_alleen_lezen(config, hostpaden) -> None:
         assert Path(binds[doel]["source"]) == Path(hostpaden[hostnaam])
 
 
-def test_flows_en_git_alleen_lezen(config) -> None:
+def test_flows_uit_een_kloon_en_geen_git_van_de_host(config, hostpaden) -> None:
+    """K1: alleen een minimale kloon van de flowmap, alleen-lezen; nooit .git."""
     fork = config["services"]["open-notebook"]
     binds = {k["target"]: k for k in fork["volumes"] if k["type"] == "bind"}
-    flows = fork["environment"]["SIGNAAL_FLOWS_DIR"]
-    assert binds[flows].get("read_only") is True
-    assert Path(binds[flows]["source"]).resolve() == (ROOT / "services/langflow/flows").resolve()
-    assert binds["/app/.git"].get("read_only") is True
+    assert fork["environment"]["SIGNAAL_FLOWS_DIR"].startswith("/app/flows-git/")
+    assert binds["/app/flows-git"].get("read_only") is True
+    assert Path(binds["/app/flows-git"]["source"]) == Path(hostpaden["SIGNAAL_FLOWS_KLOON"])
     assert binds["/app/config"].get("read_only") is True
+    for naam, dienst in config["services"].items():
+        for kop in dienst.get("volumes") or []:
+            assert not str(kop.get("source", "")).rstrip("/\\").endswith(".git"), naam
+            assert ".git" not in PurePosixPath(kop.get("target", "")).parts, naam
+
+
+def test_commit_van_de_fork_als_build_argument(config) -> None:
+    """K2: de build krijgt de commit mee; het image legt hem vast."""
+    build = config["services"]["open-notebook"]["build"]
+    assert "SIGNAAL_FORK_COMMIT" in (build.get("args") or {})
+    tekst = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert re.search(r"^ARG SIGNAAL_FORK_COMMIT", tekst, re.M)
+    assert re.search(r"^LABEL org.opencontainers.image.revision=\$SIGNAAL_FORK_COMMIT", tekst, re.M)
+    assert re.search(r"^ENV SIGNAAL_FORK_COMMIT=\$SIGNAAL_FORK_COMMIT", tekst, re.M)
+
+
+def test_forkimage_zonder_upgrade_en_met_vaste_node() -> None:
+    """K4 en B4: geen apt-get upgrade, Node met versie en SHA-256, tiktoken in het image."""
+    tekst = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    code = "\n".join(r for r in tekst.splitlines() if not r.lstrip().startswith("#"))
+    assert "apt-get upgrade" not in code and "nodesource" not in code.lower()
+    assert re.search(r"^ARG NODE_SHA256=[0-9a-f]{64}$", tekst, re.M)
+    assert "sha256sum -c" in tekst
+    assert re.search(r"^ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken$", tekst, re.M)
+
+
+def test_surrealdb_logs_zonder_anoniem_volume(config) -> None:
+    surreal = config["services"]["surrealdb"]
+    doelen = {k["target"]: k["type"] for k in surreal.get("volumes") or []}
+    assert doelen.get("/logs") == "tmpfs" or "/logs" in (surreal.get("tmpfs") or [])
+
+
+def test_toegang_zonder_icc() -> None:
+    """B1: de proxy's op toegang bereiken elkaar niet."""
+    opties = _ruwe_netwerken()["toegang"].get("driver_opts") or {}
+    assert opties.get("com.docker.network.bridge.enable_icc") == "false"
+
+
+def test_up_alleen_via_start_sh() -> None:
+    kop = COMPOSE.read_text(encoding="utf-8").split("\nname:", 1)[0]
+    assert "ALLEEN via" in kop and "start.sh" in kop
 
 
 def test_padlijsten_kloppen_met_de_koppelingen(config, hostpaden) -> None:
@@ -355,3 +397,55 @@ def test_startcontrole_faalt_bij_fout_in_inname_of_export(config, hostpaden) -> 
     zonder["services"]["open-notebook"]["volumes"] = [
         k for k in zonder["services"]["open-notebook"]["volumes"] if k["target"] != "/watchfolder"]
     assert controleer(zonder, hostpaden)
+
+
+_VAULT = "D:/# Vault"
+
+
+def _cfg(bron: str, doel: str = "/inname") -> dict:
+    return {"services": {"open-notebook": {
+        "environment": {"SIGNAAL_INNAME_PADEN": "/inname;/watchfolder",
+                        "SIGNAAL_VAULT_PADEN": "/vault", "SIGNAAL_EXPORTMAP_PADEN": "/export"},
+        "volumes": [{"type": "bind", "source": bron, "target": doel, "read_only": True},
+                    {"type": "bind", "source": "C:/w", "target": "/watchfolder",
+                     "read_only": True}]}}}
+
+
+@pytest.mark.parametrize("bron,env", [
+    (r"D:\# Vault", {"SIGNAAL_VAULT": _VAULT}),
+    ("D:\\", {"SIGNAAL_VAULT": _VAULT}),
+    (r"D:\# Vault\20 Atlas", {"SIGNAAL_VAULT": _VAULT}),
+    (r"D:\# Vault", {}),
+    ("/run/desktop/mnt/host/d/# Vault", {"SIGNAAL_VAULT": _VAULT}),
+    ("/mnt/d/# Vault", {"SIGNAAL_VAULT": _VAULT}),
+    (r"\\?\D:\# Vault", {"SIGNAAL_VAULT": _VAULT}),
+    (r"D:\#VAULT~1", {"SIGNAAL_VAULT": _VAULT}),
+    (r"D:\tmp\..\# Vault", {"SIGNAAL_VAULT": _VAULT}),
+    (r"D:\# Vault ", {"SIGNAAL_VAULT": _VAULT}),
+    (r"D:\# Vault.", {"SIGNAAL_VAULT": _VAULT}),
+    (r"\\server\share", {"SIGNAAL_VAULT": _VAULT}),
+])
+def test_varianten_van_de_reviewer_worden_geweigerd(bron, env) -> None:
+    """B3: omwegen naar de vault en een ontbrekende SIGNAAL_VAULT (fail-closed)."""
+    assert _padlijsten().controleer(_cfg(bron), env)
+
+
+def test_canoniek_pad_uit_start_sh_telt() -> None:
+    """Een junction of subst lost start.sh op (canoniek.ps1); de controle gebruikt die vorm."""
+    p = _padlijsten()
+    env = {"SIGNAAL_VAULT": _VAULT}
+    assert p.controleer(_cfg("C:/inname"), env) == []
+    assert p.controleer(_cfg("C:/kop"), env, {"C:/kop": "D:/# Vault/20 Atlas"})
+    assert p.controleer(_cfg("C:/weg"), env, {"C:/weg": None})
+
+
+def test_andere_dienst_koppelt_de_vault() -> None:
+    cfg = _cfg("C:/inname")
+    cfg["services"]["x"] = {"volumes": [{"type": "bind", "source": r"D:\# Vault",
+                                         "target": "/data", "read_only": True}]}
+    assert _padlijsten().controleer(cfg, {"SIGNAAL_VAULT": _VAULT})
+
+
+def test_koppelpunt_met_puntpunt() -> None:
+    assert _padlijsten().controleer(_cfg("C:/inname", "/inname/../vault"),
+                                    {"SIGNAAL_VAULT": _VAULT})

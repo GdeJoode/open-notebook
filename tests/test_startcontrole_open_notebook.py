@@ -76,3 +76,15 @@ def test_geheimen_uit_bestanden(tmp_path) -> None:
     (tmp_path / "surreal_wachtwoord").write_text("proefwaarde\n", encoding="utf-8")
     assert _start().lees_geheimen(tmp_path) == {
         "SURREAL_USER": "gebruiker", "SURREAL_PASSWORD": "proefwaarde"}
+
+
+def test_koppeling_met_obsidian_wordt_geweigerd(tmp_path) -> None:
+    """B3: een vault onder een andere naam herkent de fork aan ``.obsidian``."""
+    s = _start()
+    schoon = tmp_path / "inname"
+    (schoon / "sub").mkdir(parents=True)
+    vault = tmp_path / "andere-naam"
+    (vault / "20 Atlas" / ".obsidian").mkdir(parents=True)
+    assert s.obsidian_mappen([str(schoon)]) == []
+    assert s.obsidian_mappen([str(schoon), str(vault)]) == [str(vault / "20 Atlas" / ".obsidian")]
+    assert s.obsidian_mappen(["/proc", "/"]) == []
