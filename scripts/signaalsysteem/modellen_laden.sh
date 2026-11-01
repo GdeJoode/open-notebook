@@ -63,6 +63,15 @@ if [[ $alleen_controle -eq 0 ]]; then
   fi
 fi
 
-# 3. Controle zonder netwerk.
+# 3. Controle zonder netwerk. Bij een afwijking wordt niets geleegd of
+#    overschreven; de melding zegt wat er moet gebeuren (review F2-11).
+rc=0
 docker run --rm --network none -v "$GGUF_VOL:/modellen:ro" -v "$DOCLING_VOL:/artifacts:ro" \
-  "$PY_IMG" python -c "$SCRIPT" controle /modellen /artifacts
+  "$PY_IMG" python -c "$SCRIPT" controle /modellen /artifacts || rc=$?
+case $rc in
+  0) ;;
+  1) echo "MODELLEN WIJKEN AF: een SHA-256 in $GGUF_VOL of $DOCLING_VOL klopt niet (zie \"geslaagd\": false hierboven)." >&2
+     echo "Verwijder het afwijkende bestand (of leeg $DOCLING_VOL) en draai daarna: bash scripts/signaalsysteem/modellen_laden.sh" >&2 ;;
+  2) echo "MODELLEN ONTBREKEN in $GGUF_VOL of $DOCLING_VOL; draai: bash scripts/signaalsysteem/modellen_laden.sh" >&2 ;;
+esac
+exit $rc

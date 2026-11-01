@@ -13,6 +13,7 @@
 #    label van het bestaande image afwijkt (controle/forkcommit.sh).
 # 4. Startcontrole: elk bind-pad op de host canoniek (controle/canoniek.ps1),
 #    daarna controle/padlijsten.py. Faalt die, dan start er niets (exitcode 1).
+#    Daarna modellen_laden.sh --controle: de hashes van de modellen (F2-11).
 # 5. `docker compose up -d`; extra argumenten gaan naar `up` (bijv. --build).
 # 6. De containers die llama-swap start (profiel door-llama-swap, F2-11) worden
 #    alleen aangemaakt, niet gestart. Het geheim van docling-serve wordt
@@ -88,6 +89,13 @@ export SIGNAAL_CANONIEK
 printf '%s' "$config" | docker run --rm -i --network none \
   -e SIGNAAL_INNAMEMAP -e SIGNAAL_WATCHFOLDER -e SIGNAAL_VAULT -e SIGNAAL_EXPORTMAP -e SIGNAAL_CANONIEK \
   "$PY_IMG" python -c "$(cat "$CONTROLE/padlijsten.py")"
+
+# 4b. De modellen: hashes zonder netwerk (F2-11). Wijkt er een af of ontbreekt
+#     er een, dan start er niets; de melding zegt wat te doen.
+if ! bash "$ROOT/scripts/signaalsysteem/modellen_laden.sh" --controle >/dev/null; then
+  echo "weigert: de modellen in de volumes kloppen niet (scripts/signaalsysteem/modellen_laden.sh)" >&2
+  exit 1
+fi
 
 # 5. Starten.
 if [[ ! -s "$ROOT/secrets/docling_api_key" ]]; then
