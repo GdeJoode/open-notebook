@@ -31,7 +31,15 @@ inventaris:
       Uitbreiding, Herschikking); aanname A10 klopt. De parser (tooi_bulk.py) neemt
       de gemeentecode en de opvolging nog niet over (F3-14).
     laadwijze: tooi_registers
-    code: packages/shared/src/shared/vocabulary/tooi_bulk.py, tooi_provider.py
+    # Openbare gegevens zonder classificatie (geen intern of extern label). Alleen
+    # leesbaar via /api/vocabulary met het recht beheerder. Niet via de MCP-server:
+    # blootstelling daar (F3-10) alleen na een eigen besluit.
+    classificatie: geen (openbaar)
+    toegang: alleen lezen met recht beheerder
+    mcp: niet blootgesteld; F3-10 alleen na een eigen besluit
+    # Gevuld door scripts/signaalsysteem/laad_referentiegegevens.sh (cache in
+    # /app/data/referentiegegevens); POST /api/vocabulary/refresh leest dezelfde cache.
+    code: packages/shared/src/shared/vocabulary/referentiegegevens.py, tooi_bulk.py, tooi_provider.py
     bestanden:
       - bestand: rwc_ministeries_compleet_6.json
         url: https://repository.officiele-overheidspublicaties.nl/waardelijsten/rwc_ministeries_compleet/6/json/rwc_ministeries_compleet_6.json
@@ -41,8 +49,7 @@ inventaris:
         url: https://repository.officiele-overheidspublicaties.nl/waardelijsten/rwc_provincies_compleet/1/json/rwc_provincies_compleet_1.json
         sha256: 0818185156dc01cca6b0aac4318d3420be36a8f44a20681a50f19bb022accf11
         default_soort: provincie
-      # Versie 6 (publicatie 26-10-2026, herindeling per 1-1-2027); de code
-      # (DEFAULT_REGISTERS) noemt nog versie 5.
+      # Versie 6 (publicatie 26-10-2026, herindeling per 1-1-2027).
       - bestand: rwc_gemeenten_compleet_6.json
         url: https://repository.officiele-overheidspublicaties.nl/waardelijsten/rwc_gemeenten_compleet/6/json/rwc_gemeenten_compleet_6.json
         sha256: 00546ca61d14f98594a3c598fc04e06cd9dc00d1a4f90c7f7c0af7a697707af5
@@ -124,7 +131,7 @@ inventaris:
 
   - naam: transformaties_en_standaardprompt
     tabel: transformation, open_notebook:default_prompts
-    bron: migraties 5, 35 en 72
+    bron: migraties 5 en 35
     laadwijze: geen
     reden: komt uit een migratie
     sha256: null
@@ -171,6 +178,20 @@ inventaris:
     reden: geen lezer buiten de eigen test; de brede-welvaartthema's staan in de ontologieën
     sha256: null
 
+  - naam: aliasoverrides
+    tabel: geen (bestand alias_overrides.json, ONB_ALIAS_OVERRIDES_PATH)
+    bron: beheerder; standaard alias_overrides.json in de werkmap, alleen gelezen als het bestaat
+    laadwijze: geen
+    reden: optionele configuratie van de beheerder bovenop de ingebouwde lijst (shared/config/alias_overrides.py); niet in de repository en niet in de database
+    sha256: null
+
+  - naam: zotero
+    tabel: zotero_config
+    bron: beheerder, via de API (migratie 37 definieert alleen de tabel)
+    laadwijze: geen
+    reden: koppeling met een eigen Zotero-bibliotheek, met API-sleutel; geen referentiegegeven en geen geheim voor een laadscript
+    sha256: null
+
   - naam: crossref
     tabel: reference_entity (source_vocabulary crossref)
     bron: Crossref, op aanvraag
@@ -186,3 +207,4 @@ alleen_oude_database:
   - basisontologie per notitieboek (notebook_schema; scripts/l4_seed_notebook_schema.py)
   - podcastprofielen (episode_profile, speaker_profile) en Zotero-instellingen (zotero_config)
   - een TOOI-lading via POST /api/vocabulary/refresh (reference_entity), die hier opnieuw wordt geladen
+  - een bestand alias_overrides.json naast de oude stack (niet in de repository)

@@ -54,6 +54,12 @@ Zonder toevoeging voert Claude Code fase 1 uit: verschilanalyse, ontwerpbesluite
 
 De vraag "werk het signaalsysteem uit" werkt ook: de skill wordt dan op basis van zijn beschrijving ingezet.
 
+## Beheer
+
+- **Starten en stoppen:** alleen met `scripts/signaalsysteem/start.sh` en `scripts/signaalsysteem/stop.sh`, nooit tegelijk met de oude stack.
+- **Referentiegegevens laden:** `bash scripts/signaalsysteem/laad_referentiegegevens.sh`, met de omgeving gestart. De stap downloadt op de host de registers uit `config/referentiegegevens.yaml` en controleert hun SHA-256. Daarna zet hij ze in de container op `/app/data/referentiegegevens` en laadt hij ze in `reference_entity`. Herhalen kan: de aantallen blijven gelijk. Doe dit na een lege database en na een wijziging van de inventaris. Zonder deze stap geeft `POST /api/vocabulary/refresh` een 503, omdat de container geen internet heeft.
+- **Controle:** `bash scripts/signaalsysteem/controle/referentiegegevens.sh` draait de stap twee keer en toetst de aantallen. Gebruik daarvoor een toetsdatabase.
+
 ## Stand
 
 Alle twaalf ontwerpkeuzes in paragraaf 14 van het FO zijn besloten. Fase 1 loopt; zie `voortgang.md`.

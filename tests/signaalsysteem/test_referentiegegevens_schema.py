@@ -18,6 +18,8 @@ from typing import Any, Dict, List
 
 import pytest
 import yaml
+from shared.vocabulary import referentiegegevens as ref
+from shared.vocabulary.tooi_bulk import DEFAULT_REGISTERS, register_json_url
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "config" / "referentiegegevens.yaml"
@@ -80,6 +82,26 @@ def test_tooi_registers_zijn_openbare_vaste_versies(config):
         assert re.search(r"/([a-z_]+)/(\d+)/json/\1_\2\.json$", b["url"]), b["url"]
         assert b["default_soort"]
     assert any("gemeenten" in b["bestand"] for b in tooi["bestanden"])
+
+
+def test_reference_entity_openbaar_alleen_beheerder_niet_via_mcp(config):
+    (tooi,) = _sets(config, "tooi_registers")
+    assert tooi["classificatie"].startswith("geen")
+    assert "beheerder" in tooi["toegang"]
+    assert tooi["mcp"].startswith("niet") and "F3-10" in tooi["mcp"]
+
+
+def test_geen_heeft_de_gevraagde_items(config):
+    geen = {s["naam"]: s for s in _sets(config, "geen")}
+    assert "ONB_ALIAS_OVERRIDES_PATH" in geen["aliasoverrides"]["tabel"]
+    assert geen["zotero"]["tabel"] == "zotero_config"
+
+
+def test_default_registers_gelijk_aan_de_inventaris(config):
+    """Eén bron van waarheid: ``DEFAULT_REGISTERS`` (TOOIBulkFetcher) volgt de inventaris."""
+    (tooi,) = _sets(config, "tooi_registers")
+    assert [(b["url"], b["default_soort"]) for b in tooi["bestanden"]] == [
+        (register_json_url(r["set"], r["version"]), r["default_soort"]) for r in DEFAULT_REGISTERS]
 
 
 def test_ontologieen_compleet_en_sha256_klopt(config):
@@ -167,6 +189,9 @@ class _NepRepo:
             self.rijen[sleutel].update(r)
         return len(records)
 
+    async def external_ids(self, bron: str) -> List[str]:
+        return [eid for (eid, b) in self.rijen if b == bron]
+
     async def rijen_van(self, bron: str) -> List[Dict[str, Any]]:
         return [dict(r) for (_, b), r in self.rijen.items() if b == bron]
 
@@ -174,8 +199,8 @@ class _NepRepo:
 def test_laden_is_idempotent(tmp_path):
     set_ = _register(tmp_path)
     repo = _NepRepo()
-    eerste = asyncio.run(laad.laad_tooi(set_, tmp_path, repo, repo.rijen_van))
-    tweede = asyncio.run(laad.laad_tooi(set_, tmp_path, repo, repo.rijen_van))
+    eerste = asyncio.run(laad.laad_tooi_set(set_, tmp_path, repo, repo.rijen_van))
+    tweede = asyncio.run(laad.laad_tooi_set(set_, tmp_path, repo, repo.rijen_van))
     assert eerste["geslaagd"] and tweede["geslaagd"]
     assert eerste["bron"] == eerste["in_db"] == 2
     assert {k: v for k, v in eerste.items()} == {k: v for k, v in tweede.items()}
@@ -184,28 +209,31 @@ def test_laden_is_idempotent(tmp_path):
     assert "Veiligheid en Justitie" in jv["aliases"]
 
 
-def test_extra_rij_in_de_database_valt_op(tmp_path):
+def test_nooit_minder_gegevens_dan_er_staan(tmp_path):
+    """Een geladen organisatie die in de bron ontbreekt: weigeren, niets schrijven."""
     set_ = _register(tmp_path)
     repo = _NepRepo()
     asyncio.run(repo.bulk_load([{"external_id": "mnre9999", "source_vocabulary": "tooi"}]))
-    verslag = asyncio.run(laad.laad_tooi(set_, tmp_path, repo, repo.rijen_van))
-    assert verslag["in_db"] == 3 and not verslag["geslaagd"]
+    voor = {k: dict(v) for k, v in repo.rijen.items()}
+    with pytest.raises(ref.MinderGegevens, match="mnre9999"):
+        asyncio.run(laad.laad_tooi_set(set_, tmp_path, repo, repo.rijen_van))
+    assert repo.rijen == voor
 
 
 def test_afwijkende_sha256_laadt_niets(tmp_path):
     set_ = _register(tmp_path)
     set_["bestanden"][0]["sha256"] = "0" * 64
     repo = _NepRepo()
-    with pytest.raises(laad.BronFout, match="SHA-256"):
-        asyncio.run(laad.laad_tooi(set_, tmp_path, repo, repo.rijen_van))
+    with pytest.raises(ref.BronOntbreekt, match="SHA-256"):
+        asyncio.run(laad.laad_tooi_set(set_, tmp_path, repo, repo.rijen_van))
     assert repo.rijen == {}
 
 
 def test_ontbrekend_bronbestand(tmp_path):
     set_ = _register(tmp_path)
     (tmp_path / set_["bestanden"][0]["bestand"]).unlink()
-    with pytest.raises(laad.BronFout, match="ontbreekt"):
-        laad.tooi_records(set_, tmp_path)
+    with pytest.raises(ref.BronOntbreekt, match="ontbreekt"):
+        ref.tooi_records(set_, tmp_path)
 
 
 class _NepManager:
@@ -217,6 +245,12 @@ class _NepManager:
 
     async def get_ontology(self, naam: str):
         return object() if naam in self.namen else None
+
+
+def _actief(namen: List[str]):
+    async def actief() -> List[str]:
+        return list(namen)
+    return actief
 
 
 def _onto_set(tmp_path: Path) -> Dict[str, Any]:
@@ -234,15 +268,24 @@ def _onto_set(tmp_path: Path) -> Dict[str, Any]:
 
 def test_ontologieen_gevonden_zoals_de_extractie_ze_opzoekt(tmp_path):
     set_ = _onto_set(tmp_path)
-    goed = asyncio.run(laad.controleer_image(set_, tmp_path, _NepManager(["base", "general"])))
-    assert goed["geslaagd"] and goed["gevonden"] == 2
-    mist = asyncio.run(laad.controleer_image(set_, tmp_path, _NepManager(["base"])))
+    goed = asyncio.run(laad.controleer_image(set_, tmp_path, _NepManager(["base", "general"]),
+                                             _actief([])))
+    assert goed["geslaagd"] and goed["gevonden"] == 2 and goed["actief_in_db"] == []
+    mist = asyncio.run(laad.controleer_image(set_, tmp_path, _NepManager(["base"]), _actief([])))
     assert not mist["geslaagd"]
+
+
+def test_actieve_versie_in_de_database_wordt_gemeld(tmp_path):
+    """Met een actieve versie gebruikt de extractie die, niet de YAML-hash."""
+    set_ = _onto_set(tmp_path)
+    verslag = asyncio.run(laad.controleer_image(
+        set_, tmp_path, _NepManager(["base", "general"]), _actief(["general"])))
+    assert verslag["actief_in_db"] == ["general"]
 
 
 def test_ontologie_niet_in_de_inventaris_valt_op(tmp_path):
     set_ = _onto_set(tmp_path)
     (tmp_path / "ontologies" / "extra.yaml").write_text("x: 1\n", encoding="utf-8")
     verslag = asyncio.run(laad.controleer_image(
-        set_, tmp_path, _NepManager(["base", "general", "extra"])))
+        set_, tmp_path, _NepManager(["base", "general", "extra"]), _actief([])))
     assert not verslag["geslaagd"]
