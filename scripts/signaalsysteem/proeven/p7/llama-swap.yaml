@@ -1,0 +1,12 @@
+# llama-swap-configuratie voor P7, stap 7c (docs/signaalsysteem/proeven.md, P7).
+# Eén model "dummy": een gewone container die llama-swap via de socket-proxy start en stopt.
+healthCheckTimeout: 90
+logLevel: info
+
+models:
+  dummy:
+    cmd: /bin/sh /app/wacht_op_dienst.sh signaal-proef-dummy-1 http://dummy:8000/ - 60
+    cmdStop: docker stop signaal-proef-dummy-1
+    proxy: http://dummy:8000
+    checkEndpoint: /
+    ttl: 30
