@@ -678,7 +678,8 @@ def test_editor_alleen_via_proxy_op_localhost(config) -> None:
     doelen = re.findall(r"http://[^\s;]+", tekst)
     assert doelen == ["http://langflow:7860"], doelen
     # Geen MCP en geen andere agentinterface via de editor.
-    for pad in ("/api/v1/mcp", "/api/v2/mcp", "/api/v1/agentic", "/api/v1/a2a", "/api/v1/responses"):
+    for pad in ("/api/v1/mcp", "/api/v2/mcp", "/api/v1/agentic", "/api/v1/a2a", "/api/v1/responses",
+                "/api/v1/store"):
         assert re.search(rf"location \^~ {re.escape(pad)} \{{\s*return 404;", tekst), pad
 
 
@@ -759,9 +760,9 @@ def test_langflow_image_zonder_mcp_en_agentinterfaces() -> None:
     als er in langflow/api nog een include_router met mcp, a2a of openai_responses is."""
     tekst = (ROOT / "services" / "langflow" / "Dockerfile").read_text(encoding="utf-8")
     for router in ("mcp_router", "mcp_projects_router", "mcp_router_v2", "agentic_mcp_router",
-                   "a2a_router", "openai_responses_router"):
+                   "a2a_router", "openai_responses_router", "store_router"):
         assert rf"include_router\({router}\)" in tekst, router
-    assert r"include_router\(.*(mcp|a2a|openai_responses)" in tekst
+    assert r"include_router\(.*(mcp|a2a|openai_responses|store_router)" in tekst
 
 
 def test_start_sh_kloont_lijst_en_componenten() -> None:

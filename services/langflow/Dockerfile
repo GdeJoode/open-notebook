@@ -24,17 +24,20 @@ RUN rm -rf /app/signaal/lib/llm_manager/__pycache__ /app/signaal/lib/llm_manager
 # LANGFLOW_MCP_SERVER_ENABLED=false: aangemeld gaf /api/v1/mcp/sse HTTP 200, en
 # /api/v1/agentic/mcp is een tweede MCP-server (F2-12, review B1). Weg gaan: de
 # MCP-server (v1, per project, v2-configuratie), de MCP-server van de assistent,
-# A2A (/api/v1/a2a) en de OpenAI-Responses-API (/api/v1/responses). main.py
-# hangt de MCP-router alleen in als de instelling aan staat. Ontbreekt een regel
-# (andere versie), of blijft daarna in langflow/api een include_router met mcp,
-# a2a of openai_responses over, dan faalt de build.
+# A2A (/api/v1/a2a) en de OpenAI-Responses-API (/api/v1/responses). Ook de
+# Store (/api/v1/store): met LANGFLOW_STORE=false vroegen de eindpunten nog
+# api.langflow.store op (controle L7). main.py hangt de MCP-router alleen in als
+# de instelling aan staat. Ontbreekt een regel (andere versie), of blijft daarna
+# in langflow/api een include_router met mcp, a2a, openai_responses of
+# store_router over, dan faalt de build.
 RUN d=/app/.venv/lib/python3.14/site-packages/langflow/api \
  && for r in 'router_v1\.include_router\(mcp_router\)' 'router_v1\.include_router\(mcp_projects_router\)' \
              'router_v2\.include_router\(mcp_router_v2\)' 'router_v1\.include_router\(agentic_mcp_router\)' \
-             'router_v1\.include_router\(a2a_router\)' 'router_v1\.include_router\(openai_responses_router\)'; do \
+             'router_v1\.include_router\(a2a_router\)' 'router_v1\.include_router\(openai_responses_router\)' \
+             'router_v1\.include_router\(store_router\)'; do \
       grep -qE "^[[:space:]]*$r\$" "$d/router.py" || { echo "niet gevonden in router.py: $r" >&2; exit 1; }; \
       sed -i -E "/^[[:space:]]*$r\$/d" "$d/router.py"; done \
- && if grep -rnE 'include_router\(.*(mcp|a2a|openai_responses)' "$d" --include=*.py; then \
+ && if grep -rnE 'include_router\(.*(mcp|a2a|openai_responses|store_router)' "$d" --include=*.py; then \
       echo "nog een MCP- of agentrouter in langflow/api" >&2; exit 1; fi \
  && rm -f "$d"/__pycache__/router.*.pyc
 
