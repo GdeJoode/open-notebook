@@ -58,7 +58,7 @@ CACHE_W="$(cd "$CACHE" && { pwd -W 2>/dev/null || pwd; })"
 aantal=0
 while IFS=$'\t' read -r bestand url sha; do
   [[ -n "$bestand" ]] || continue
-  doel="$CACHE/$bestand"
+  doel="$CACHE_W/$bestand"   # Windows-vorm: curl van Git Bash is een mingw-programma
   if [[ ! -f "$doel" || "$(sha256sum "$doel" | cut -d' ' -f1)" != "$sha" ]]; then
     curl -fsS --max-time 300 -o "$doel.deel" "$url" || { rm -f "$doel.deel"; echo "download mislukt: $url"; exit 2; }
     mv -f "$doel.deel" "$doel"
