@@ -1,0 +1,188 @@
+# Referentiegegevens van het signaalsysteem (F2-28; ADR 0021, 0013; R10).
+#
+# Inventaris van wat de code leest en dat niet uit een migratie, een import of
+# een run komt, en dus op een lege database ontbreekt. Elk item heeft een tabel,
+# een bron, een SHA-256 (per bestand) en een laadwijze:
+#
+#   tooi_registers  JSON-LD-registers van TOOI, gedownload op de host met
+#                   SHA-256-controle (niet in Git), geladen in `reference_entity`
+#                   door scripts/signaalsysteem/laad_referentiegegevens.py.
+#   image           bestand in de repository en dus in het image; de code leest
+#                   het bestand zelf, er wordt niets in de database gezet. Het
+#                   laadscript controleert de SHA-256 en of de code het vindt.
+#   gepland         volgt in een latere taak (taak genoemd); nu niet geladen.
+#   geen            geen referentiegegeven: de code heeft standaardwaarden of de
+#                   gegevens komen van de beheerder; met reden.
+#
+# SHA-256 van een bestand in de repository: over de inhoud met LF-regeleinden
+# (core.autocrlf kan CRLF in de werkmap zetten). Van een download: over de bytes.
+# Het archief ./surreal_data is niet gelezen (B3); zie `alleen_oude_database`.
+versie: 1
+
+inventaris:
+  - naam: tooi_overheidsorganisaties
+    tabel: reference_entity
+    filter: {source_vocabulary: tooi}
+    bron: >-
+      TOOI-waardelijsten "compleet" (Thesauri en Ontologieën voor
+      Overheidsinformatie), openbaar via repository.officiele-overheidspublicaties.nl.
+      Bevat ook de gemeenten met CBS-gemeentecode (ont:gemeentecode; organisatiecode
+      = "gm" + gemeentecode) en de opvolging bij herindeling (Samenvoeging,
+      Uitbreiding, Herschikking); aanname A10 klopt. De parser (tooi_bulk.py) neemt
+      de gemeentecode en de opvolging nog niet over (F3-14).
+    laadwijze: tooi_registers
+    code: packages/shared/src/shared/vocabulary/tooi_bulk.py, tooi_provider.py
+    bestanden:
+      - bestand: rwc_ministeries_compleet_6.json
+        url: https://repository.officiele-overheidspublicaties.nl/waardelijsten/rwc_ministeries_compleet/6/json/rwc_ministeries_compleet_6.json
+        sha256: 0928b669aaf2d8b30c240419c9d44b90208d450e08078c6ccad2ae67fb3f2efd
+        default_soort: ministerie
+      - bestand: rwc_provincies_compleet_1.json
+        url: https://repository.officiele-overheidspublicaties.nl/waardelijsten/rwc_provincies_compleet/1/json/rwc_provincies_compleet_1.json
+        sha256: 0818185156dc01cca6b0aac4318d3420be36a8f44a20681a50f19bb022accf11
+        default_soort: provincie
+      # Versie 6 (publicatie 26-10-2026, herindeling per 1-1-2027); de code
+      # (DEFAULT_REGISTERS) noemt nog versie 5.
+      - bestand: rwc_gemeenten_compleet_6.json
+        url: https://repository.officiele-overheidspublicaties.nl/waardelijsten/rwc_gemeenten_compleet/6/json/rwc_gemeenten_compleet_6.json
+        sha256: 00546ca61d14f98594a3c598fc04e06cd9dc00d1a4f90c7f7c0af7a697707af5
+        default_soort: gemeente
+      - bestand: rwc_waterschappen_compleet_2.json
+        url: https://repository.officiele-overheidspublicaties.nl/waardelijsten/rwc_waterschappen_compleet/2/json/rwc_waterschappen_compleet_2.json
+        sha256: f1cd97289882ef77d6b27dd3524b4b01057d2da11ca9db711105f6ac08dc6741
+        default_soort: waterschap
+      - bestand: rwc_zbo_compleet_6.json
+        url: https://repository.officiele-overheidspublicaties.nl/waardelijsten/rwc_zbo_compleet/6/json/rwc_zbo_compleet_6.json
+        sha256: 098c6dd0b34b1eca3631eee81a7f889d7b7264a18012331b737b139247265c25
+        default_soort: zbo
+      - bestand: rwc_samenwerkingsorganisaties_compleet_3.json
+        url: https://repository.officiele-overheidspublicaties.nl/waardelijsten/rwc_samenwerkingsorganisaties_compleet/3/json/rwc_samenwerkingsorganisaties_compleet_3.json
+        sha256: ba8cf6dee619dbcf5aa90679a1c91031f01115b2be3d243ee114f8f7632251f3
+        default_soort: samenwerkingsorganisatie
+      - bestand: rwc_overige_overheidsorganisaties_compleet_13.json
+        url: https://repository.officiele-overheidspublicaties.nl/waardelijsten/rwc_overige_overheidsorganisaties_compleet/13/json/rwc_overige_overheidsorganisaties_compleet_13.json
+        sha256: 0cc1b90889f268ebfc56fd7c05159615d31e824adbe00f771b38bbe56190758f
+        default_soort: overige_overheidsorganisatie
+      - bestand: rwc_caribische_openbare_lichamen_compleet_1.json
+        url: https://repository.officiele-overheidspublicaties.nl/waardelijsten/rwc_caribische_openbare_lichamen_compleet/1/json/rwc_caribische_openbare_lichamen_compleet_1.json
+        sha256: 3e84113560157ae1e542bed369a43cb3d6275fecc05fc7de9cb3f7b2596eded0
+        default_soort: caribisch_openbaar_lichaam
+
+  - naam: ontologieen
+    # De OntologyRegistry zoekt eerst een actieve versie in `ontology_version` en
+    # valt anders terug op het YAML-bestand. Een versie komt pas in de database bij
+    # een publicatie via de ontologie-editor (die slaat dan ook het YAML-bestand op
+    # als "YAML seed"). Laden in `ontology_version` zou de database boven de
+    # repository zetten; daarom laadwijze image.
+    tabel: ontology_version (leeg tot een publicatie; terugval op het bestand)
+    bron: repository, packages/ontology-manager/ontologies/
+    laadwijze: image
+    code: packages/ontology-manager/src/ontology_manager/registry.py
+    bestanden:
+      - {pad: packages/ontology-manager/ontologies/base.yaml, sha256: ecf4282625ea57630f86398cd0b1995cdd357910f7e64bc2f92768a10fe453d2}
+      - {pad: packages/ontology-manager/ontologies/deals.yaml, sha256: dba5e924ae9b7bd515fef93dafec96c346685bd83af402cb2fe7c7b8e52fc36f}
+      - {pad: packages/ontology-manager/ontologies/general.yaml, sha256: 3a62a8a733e50bf9abef1cb3d7967fc907ddf87a93529de95b69bafad78e3023}
+      - {pad: packages/ontology-manager/ontologies/government.yaml, sha256: fd201d10cf94346a49b9fce04b36b1e1413cff5771651ae4ae93f6474e110b17}
+      - {pad: packages/ontology-manager/ontologies/instruments.yaml, sha256: 6ca3fed0b1ce92a0de361e082a104512eccd3a117a253ca6b4816e34cce21543}
+      - {pad: packages/ontology-manager/ontologies/policy.yaml, sha256: 5a157e46e6c64a1114c09e768c8309c5e05c59190895af96ffa03f537ea572be}
+      - {pad: packages/ontology-manager/ontologies/policy_themes.yaml, sha256: c8dd8265b2d7fa88c1ba332998b6eec82f9cafee68ee00a42db3d61d0d929de1}
+      - {pad: packages/ontology-manager/ontologies/regiodeal.yaml, sha256: e9634b8fcf3e432918f88a4c585762180a65b00b4722c704146b3ccab89ea0a9}
+      - {pad: packages/ontology-manager/ontologies/schema_core.yaml, sha256: 853598393d0a8cbc1053a90e5f5185b6c480e13cbdbf7ede492de19336829aa9}
+      - {pad: packages/ontology-manager/ontologies/scholarly.yaml, sha256: de271893e6251c257a08fcdecc5fa1de241a79c71931d383d21dc263caf42f64}
+      - {pad: packages/ontology-manager/ontologies/social_profiles.yaml, sha256: 824632112854ab7eb100a0e336ddabab8a9b61b4bb3fd19fac7bcd0ec0849a42}
+
+  - naam: iv3_taakvelden_2025
+    tabel: ontology_version
+    bron: openbare taakveldenlijst Iv3 2025; vindplaats zoekt F3-03 uit (ADR 0013)
+    laadwijze: gepland
+    taak: F3-03
+    sha256: null
+
+  - naam: bwb_identificaties
+    tabel: reference_entity
+    filter: {source_vocabulary: bwb}
+    bron: open data van het Basiswettenbestand; vindplaats zoekt F3-03 uit (ADR 0013)
+    laadwijze: gepland
+    taak: F3-03
+    sha256: null
+
+  - naam: npvr_regio_gemeenten
+    tabel: reference_entity
+    bron: openbare lijst van NPVR-regio's met hun gemeenten; vindplaats zoekt F3-14 uit
+    laadwijze: gepland
+    taak: F3-14
+    sha256: null
+
+  # Geen referentiegegevens: wel gelezen, maar met standaardwaarden in de code, uit
+  # een migratie, uit een bestand in het image, of vastgelegd door de beheerder.
+  - naam: instellingen
+    tabel: open_notebook:content_settings, open_notebook:default_models
+    bron: code (ContentSettings, standaardwaarden) en migratie 1
+    laadwijze: geen
+    reden: RecordRepository.get geeft de standaardwaarden als het record ontbreekt; default_models maakt migratie 1 aan
+    sha256: null
+
+  - naam: transformaties_en_standaardprompt
+    tabel: transformation, open_notebook:default_prompts
+    bron: migraties 5, 35 en 72
+    laadwijze: geen
+    reden: komt uit een migratie
+    sha256: null
+
+  - naam: promptsjablonen
+    tabel: geen (bestanden)
+    bron: repository, prompts/ en pipelines/ontology-extraction/src/ontology_extraction/prompts/
+    laadwijze: geen
+    reden: bestanden in het image, niet in de database
+    sha256: null
+
+  - naam: podcastprofielen
+    tabel: episode_profile, speaker_profile
+    bron: beheerder, via de API (geen migratie of standaardset in de fork)
+    laadwijze: geen
+    reden: gebruikersconfiguratie, geen referentiegegeven; de podcastfunctie valt buiten het signaalsysteem
+    sha256: null
+
+  - naam: bronkaart
+    tabel: source_map_rule
+    bron: beheerder, via de API (ADR 0020)
+    laadwijze: geen
+    reden: configuratie van de beheerder, geen openbare referentielijst
+    sha256: null
+
+  - naam: modelregister
+    tabel: geen (config/modelregister.yaml)
+    bron: repository (F2-07)
+    laadwijze: geen
+    reden: bestand, gekoppeld als /app/config; niet in de database
+    sha256: null
+
+  - naam: agentsleutels
+    tabel: agent_keys
+    bron: scripts/signaalsysteem/maak_sleutel.py
+    laadwijze: geen
+    reden: geheimen, per omgeving aangemaakt; nooit in een laadscript
+    sha256: null
+
+  - naam: woordenlijsten_als_yaml
+    tabel: geen (VOCAB_DIR, /app/vocabularies)
+    bron: packages/shared/src/shared/vocabulary/vocabulary_manager.py (TOOI, CBS brede welvaart, OpenAlex)
+    laadwijze: geen
+    reden: geen lezer buiten de eigen test; de brede-welvaartthema's staan in de ontologieën
+    sha256: null
+
+  - naam: crossref
+    tabel: reference_entity (source_vocabulary crossref)
+    bron: Crossref, op aanvraag
+    laadwijze: geen
+    reden: opzoeken bij gebruik, geen bulklading; zonder internet in de container niet bereikbaar
+    sha256: null
+
+# Gegevens die mogelijk alleen in de oude database (./surreal_data) staan. Niet
+# gelezen en niet gekopieerd (B3); terughalen vraagt een besluit van Geert (A11).
+alleen_oude_database:
+  - ontologieversies uit de editor (ontology_version, ontology_draft; A11)
+  - curatorbesluiten over aliassen (alias_overlay) en de triage (triage_queue)
+  - basisontologie per notitieboek (notebook_schema; scripts/l4_seed_notebook_schema.py)
+  - podcastprofielen (episode_profile, speaker_profile) en Zotero-instellingen (zotero_config)
+  - een TOOI-lading via POST /api/vocabulary/refresh (reference_entity), die hier opnieuw wordt geladen
