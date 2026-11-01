@@ -209,6 +209,26 @@ def test_geen_ollama_eindpunten():
     assert not gevonden, "Modelaanroep buiten llama-swap:\n" + "\n".join(gevonden)
 
 
+#: Review F2-08: de stoptest geldt ook voor de modelserver en de Compose-opzet (F2-11).
+CONFIGURATIE = ("services/llama-swap", "docker-compose.signaalsysteem.yml")
+
+
+def test_geen_ollama_in_llama_swap_en_compose():
+    gevonden = []
+    for naam in CONFIGURATIE:
+        pad = ROOT / naam
+        for bestand in sorted(pad.rglob("*")) if pad.is_dir() else [pad]:
+            if not bestand.is_file():
+                continue
+            tekst = bestand.read_text(encoding="utf-8", errors="ignore")
+            rel = bestand.relative_to(ROOT).as_posix()
+            for nr, regel in enumerate(tekst.splitlines(), 1):
+                for soort, patroon in {**VERBODEN, "ollama": re.compile(r"(?i)ollama")}.items():
+                    if patroon.search(regel):
+                        gevonden.append(f"{rel}:{nr}: {soort}")
+    assert not gevonden, "Ollama in de configuratie:\n" + "\n".join(gevonden)
+
+
 def test_geen_model_buiten_de_poort():
     gevonden = []
     for pad, rel in _bestanden():

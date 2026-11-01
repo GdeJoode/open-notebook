@@ -9,4 +9,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && { pwd -W 2>/dev/null || pwd; })"
 for naam in SIGNAAL_INNAMEMAP SIGNAAL_WATCHFOLDER SIGNAAL_FLOWS_KLOON; do
   export "$naam=${!naam:-$ROOT}"   # bij down wordt niets gekoppeld
 done
-exec docker compose -p signaal -f "$ROOT/docker-compose.signaalsysteem.yml" down "$@"
+# Met het profiel van de containers die llama-swap start (F2-11); de volumes
+# met modellen zijn extern en blijven ook bij -v staan.
+exec docker compose -p signaal -f "$ROOT/docker-compose.signaalsysteem.yml" \
+  --profile door-llama-swap down "$@"

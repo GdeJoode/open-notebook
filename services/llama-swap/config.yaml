@@ -1,0 +1,61 @@
+# llama-swap-configuratie van het signaalsysteem (F2-11; plan van aanpak §4.3;
+# ADR 0006, 0008, 0009, 0014).
+#
+# - Elk model hier staat in config/modelregister.yaml met aanroepwijze
+#   llama-swap, en omgekeerd (packages/llm-manager/tests/test_modelregister_consistent.py).
+# - Alleen lokale modellen: llama-server met een bestand uit /modellen (alleen-lezen
+#   volume, scripts/signaalsysteem/modellen_laden.sh), of een vooraf aangemaakte
+#   container op het netwerk verwerking. Geen peers, geen extern adres.
+# - timeouts.responseHeader blijft op de standaard 0 (geen limiet), dus boven
+#   DOCLING_SERVE_MAX_SYNC_WAIT (ADR 0009, 0014).
+healthCheckTimeout: 600
+logLevel: info
+
+# De helppagina van de interface en haar eindpunt /api/mcp zijn niet nodig.
+helpagent:
+  disable: true
+
+models:
+  # Werkmodel (B4): Qwen3.5-9B Q4_K_M, context 8 192. llama-server luistert
+  # alleen binnen de container (127.0.0.1); llama-swap is het enige adres.
+  werkmodel:
+    cmd: >
+      /app/llama-server --host 127.0.0.1 --port ${PORT}
+      -m /modellen/Qwen3.5-9B-Q4_K_M.gguf -ngl 99 -c 8192
+    ttl: 60
+
+  # Embeddingmodel (ADR 0008): mxbai-embed-large-v1 Q8_0, 1 024 dimensies,
+  # venster 512 tokens. Geen ttl: blijft geladen (groep licht).
+  embed:
+    cmd: >
+      /app/llama-server --host 127.0.0.1 --port ${PORT}
+      -m /modellen/mxbai-embed-large-v1.Q8_0.gguf --embeddings -ngl 99 -c 512 -b 512 -ub 512
+
+  # docling-serve (ADR 0014): vooraf aangemaakte container signaal-docling,
+  # gestart via de socket-proxy (wacht_op_dienst.sh) en gestopt met cmdStop; alleen
+  # stoppen geeft het videogeheugen vrij (P5). Synchroon eindpunt /v1/convert/file
+  # via /upstream/docling/... (ADR 0009).
+  docling:
+    cmd: /bin/sh /app/wacht_op_dienst.sh signaal-docling http://signaal-docling:5001/health - 600
+    cmdStop: docker stop signaal-docling
+    proxy: http://signaal-docling:5001
+    checkEndpoint: /health
+    ttl: 300
+    # docker stop wacht tot 10 s op de container.
+    unloadTimeout: 30
+
+  # kev-4b (F3-01) en whisperx (F4-03) komen in groep zwaar.
+
+groups:
+  # Eén zware dienst tegelijk; een lid van zwaar ontlaadt elke andere groep die
+  # niet persistent is (P1, K5).
+  zwaar:
+    swap: true
+    exclusive: true
+    members: [werkmodel, docling]
+  # swap en exclusive staan standaard op true; licht mag niets ontladen.
+  licht:
+    swap: false
+    exclusive: false
+    persistent: true
+    members: [embed]

@@ -19,7 +19,7 @@ versie: 1
 modellen:
   # Werkmodel (B4, besloten 30-10): Qwen3.5-9B Q4_K_M, context 8 192 (P1, P3).
   - naam: werkmodel
-    versie: unsloth/Qwen3.5-9B-GGUF:Qwen3.5-9B-Q4_K_M.gguf:ctx-8192
+    versie: unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5:Qwen3.5-9B-Q4_K_M.gguf:ctx-8192
     aanroepwijze: llama-swap
     locatie: lokaal
     toegestaan_intern: ja

@@ -17,7 +17,10 @@ F2-13"). Deze controle leest de opgeloste Compose-configuratie
   alleen-lezen is;
 * een koppeling voor export niet in ``SIGNAAL_EXPORTMAP_PADEN`` staat;
 * een container-map uit ``SIGNAAL_INNAME_PADEN`` niet alleen-lezen aan
-  ``open-notebook`` is gekoppeld.
+  ``open-notebook`` is gekoppeld;
+* een andere dienst dan ``socket-proxy`` de Docker-socket koppelt (F2-11, ADR
+  0009). De socket van ``socket-proxy`` is geen pad op de Windows-host en gaat
+  niet door de canonicalisatie.
 
 Een koppeling is van de vault, voor inname of voor export als de bron op de
 host in of op de map uit ``SIGNAAL_VAULT``, ``SIGNAAL_INNAMEMAP``,
@@ -44,6 +47,9 @@ from pathlib import PurePosixPath
 from typing import Iterable, Mapping, Optional
 
 DIENST_FORK = "open-notebook"
+#: De enige koppeling van de Docker-socket (F2-11, ADR 0009).
+DOCKER_SOCKET = "/var/run/docker.sock"
+DIENST_SOCKET = "socket-proxy"
 _DOEL = {
     "vault": ("/vault",),
     "inname": ("/inname", "/watchfolder", "/inbox"),
@@ -109,11 +115,15 @@ def _doel_onder(doel: str, wortels: Iterable[str]) -> bool:
     return any(p == PurePosixPath(w) or PurePosixPath(w) in p.parents for w in wortels)
 
 
+def _is_socket(naam: str, kop: Mapping) -> bool:
+    return naam == DIENST_SOCKET and str(kop.get("source", "")) == DOCKER_SOCKET
+
+
 def bind_bronnen(config: Mapping) -> list[str]:
     uit = []
-    for dienst in (config.get("services") or {}).values():
+    for naam, dienst in (config.get("services") or {}).items():
         for kop in dienst.get("volumes") or []:
-            if kop.get("type") == "bind" and kop.get("source"):
+            if kop.get("type") == "bind" and kop.get("source") and not _is_socket(naam, kop):
                 uit.append(str(kop["source"]))
     return uit
 
@@ -154,9 +164,12 @@ def controleer(config: Mapping, host: Mapping[str, str],
 
     for naam, dienst in diensten.items():
         for kop in dienst.get("volumes") or []:
-            if kop.get("type") != "bind":
+            if kop.get("type") != "bind" or _is_socket(naam, kop):
                 continue
             bron, doel = str(kop.get("source", "")), str(kop.get("target", ""))
+            if "docker.sock" in bron or "docker.sock" in doel:
+                fouten.append(f"{naam}: alleen {DIENST_SOCKET} koppelt de Docker-socket")
+                continue
             alleen_lezen = bool(kop.get("read_only"))
             if ".." in PurePosixPath(doel).parts:
                 fouten.append(f"{naam}: koppelpunt {doel} bevat '..'")

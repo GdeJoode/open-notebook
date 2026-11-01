@@ -1,0 +1,2 @@
+# Gaat het image in; met core.autocrlf=true zou een checkout CRLF geven (sh faalt dan).
+* text eol=lf

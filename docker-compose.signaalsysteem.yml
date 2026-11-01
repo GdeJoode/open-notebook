@@ -36,6 +36,11 @@ networks:
 secrets:
   surreal_gebruiker:  { file: ./secrets/surreal_gebruiker }
   surreal_wachtwoord: { file: ./secrets/surreal_wachtwoord }
+  # Bron is een bestand: de koppeling blijft ook bij `docker start` door
+  # llama-swap (bij bron environment niet; proeven.md §8 punt 24). start.sh
+  # maakt het bestand aan als het ontbreekt.
+  docling_api_key:
+    file: ./secrets/docling_api_key
 
 volumes:
   signaal_surreal_data:
@@ -43,6 +48,15 @@ volumes:
   bronarchief: {}                # originelen; langflow schrijft (F2-12), open-notebook leest
   fork_archief: {}               # kopie van elk origineel; alleen open-notebook (F2-14)
   fork_data: {}                  # DATA_FOLDER van de fork (checkpoints, uploads)
+  # Modellen: gevuld en gecontroleerd (SHA-256) met de beheerstap
+  # scripts/signaalsysteem/modellen_laden.sh; extern, zodat stop.sh en
+  # `down -v` ze laten staan. Alleen-lezen gekoppeld.
+  modellen:
+    name: signaal_modellen
+    external: true
+  docling_artifacts:
+    name: signaal_docling_artifacts
+    external: true
 
 services:
   surrealdb:
@@ -137,3 +151,84 @@ services:
     security_opt: ["no-new-privileges:true"]
     user: "101:101"
     restart: unless-stopped
+
+  # ---------------------------------------------------------------- GPU (F2-11)
+  # ADR 0009: llama-swap start en stopt docling-serve via deze proxy, met
+  # configuratie B (P7): alleen start en stop; create, exec, inspect en de
+  # containerlijst geven 403. De socket hangt alleen hier, op het netwerk beheer.
+  # `:ro` beperkt de API niet; de regels van de proxy doen dat.
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    networks: [beheer]
+    environment:
+      POST: "1"
+      ALLOW_START: "1"
+      ALLOW_STOP: "1"
+      CONTAINERS: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
+  # Werkmodel, embeddingmodel en docling-serve achter één adres:
+  # http://llama-swap:8080 (ADR 0006). Groepen zwaar en licht in
+  # services/llama-swap/config.yaml (in het image).
+  llama-swap:
+    build:
+      context: services/llama-swap
+    image: signaal/llama-swap:v268-cuda13-b11977-dockercli
+    networks: [verwerking, beheer]
+    depends_on:
+      socket-proxy: { condition: service_started }
+    environment:
+      DOCKER_HOST: tcp://socket-proxy:2375
+      # Omweg zolang de driver CUDA 13.3 levert (ADR 0006; vervalt in F2-25):
+      # de eis cuda>=13.4 uit, en de libcuda van de driver vóór de compat-libcuda.
+      NVIDIA_DISABLE_REQUIRE: "1"
+      LD_LIBRARY_PATH: /usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64
+    volumes:
+      - modellen:/modellen:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # Vooraf aangemaakt door start.sh (`--profile door-llama-swap create`), gestart
+  # en gestopt door llama-swap; daarom geen restart. Stoppen is de enige manier
+  # om het videogeheugen vrij te geven (P5, ADR 0014).
+  docling-serve:
+    image: quay.io/docling-project/docling-serve-cu128:v1.38.2@sha256:f26a8dea114dfcfdebcd1617a9eb0a66f48351ff8b5140510d3bfc989c74c38d
+    container_name: signaal-docling
+    profiles: [door-llama-swap]
+    networks: [verwerking]
+    secrets: [docling_api_key]
+    environment:
+      DOCLING_SERVE_ARTIFACTS_PATH: /artifacts
+      DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "false"
+      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: "1"
+      DOCLING_SERVE_LOAD_MODELS_AT_BOOT: "false"
+      DOCLING_SERVE_OPTIONS_CACHE_SIZE: "1"
+      # Synchroon eindpunt /v1/convert/file (ADR 0009, 0014); voorstel B21.
+      DOCLING_SERVE_MAX_SYNC_WAIT: "3600"
+      HF_HUB_OFFLINE: "1"
+    # De sleutel komt uit het geheim; zonder sleutel start de dienst niet.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        read -r DOCLING_SERVE_API_KEY < /run/secrets/docling_api_key || true;
+        [ -n "$$DOCLING_SERVE_API_KEY" ] || { echo 'geen sleutel in /run/secrets/docling_api_key' >&2; exit 1; };
+        export DOCLING_SERVE_API_KEY;
+        exec docling-serve run --host 0.0.0.0 --port 5001
+    volumes:
+      - docling_artifacts:/artifacts:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: "no"

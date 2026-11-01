@@ -14,6 +14,9 @@
 # 4. Startcontrole: elk bind-pad op de host canoniek (controle/canoniek.ps1),
 #    daarna controle/padlijsten.py. Faalt die, dan start er niets (exitcode 1).
 # 5. `docker compose up -d`; extra argumenten gaan naar `up` (bijv. --build).
+# 6. De containers die llama-swap start (profiel door-llama-swap, F2-11) worden
+#    alleen aangemaakt, niet gestart. Het geheim van docling-serve wordt
+#    aangemaakt als het ontbreekt (secrets/, buiten Git).
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 
@@ -85,4 +88,11 @@ printf '%s' "$config" | docker run --rm -i --network none \
   "$PY_IMG" python -c "$(cat "$CONTROLE/padlijsten.py")"
 
 # 5. Starten.
-exec "${COMPOSE[@]}" up -d "$@"
+if [[ ! -s "$ROOT/secrets/docling_api_key" ]]; then
+  mkdir -p "$ROOT/secrets"
+  (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$ROOT/secrets/docling_api_key")
+fi
+"${COMPOSE[@]}" up -d "$@"
+
+# 6. Aanmaken, niet starten (ADR 0009).
+"${COMPOSE[@]}" --profile door-llama-swap create docling-serve

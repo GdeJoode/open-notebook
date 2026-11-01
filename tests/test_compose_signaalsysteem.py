@@ -506,3 +506,104 @@ def test_canoniek_ps1_lost_paden_op_en_onderscheidt_hoofdletters() -> None:
     assert paden[r"C:\PROGRA~1"] == "C:/Program Files"
     assert paden[r"C:\bestaat-niet-f210"] is None
     assert paden[r"C:\Windows\..\Windows"] is None
+
+
+# --------------------------------------------------------------------------
+# GPU-diensten: llama-swap, socket-proxy en docling-serve (F2-11; ADR 0009, 0014)
+# --------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def config_gpu(hostpaden) -> dict:
+    """Met het profiel van de diensten die llama-swap start."""
+    uit = _compose(hostpaden, "--profile", "door-llama-swap", "config", "--format", "json")
+    assert uit.returncode == 0, uit.stderr
+    return json.loads(uit.stdout)
+
+
+def _gpu(dienst: dict) -> bool:
+    apparaten = (((dienst.get("deploy") or {}).get("resources") or {}).get("reservations")
+                 or {}).get("devices") or []
+    return any("gpu" in (a.get("capabilities") or []) for a in apparaten)
+
+
+def test_beheer_alleen_llama_swap_en_socket_proxy(config_gpu) -> None:
+    assert _leden(config_gpu, "beheer") == {"llama-swap", "socket-proxy"}
+    assert _netwerken(config_gpu["services"]["socket-proxy"]) == {"beheer"}
+    assert _netwerken(config_gpu["services"]["llama-swap"]) == {"verwerking", "beheer"}
+    assert _netwerken(config_gpu["services"]["docling-serve"]) == {"verwerking"}
+
+
+def test_socket_proxy_configuratie_b(config_gpu) -> None:
+    """P7, K2: alleen starten en stoppen; create, exec en inspect dicht."""
+    env = config_gpu["services"]["socket-proxy"]["environment"]
+    assert env == {"POST": "1", "ALLOW_START": "1", "ALLOW_STOP": "1", "CONTAINERS": "0"}
+
+
+def test_docker_socket_alleen_in_de_socket_proxy(config_gpu) -> None:
+    for naam, dienst in config_gpu["services"].items():
+        socket = [k for k in dienst.get("volumes") or []
+                  if "docker.sock" in str(k.get("source", "")) + str(k.get("target", ""))]
+        if naam == "socket-proxy":
+            assert [(k["source"], k["target"], k.get("read_only")) for k in socket] == [
+                ("/var/run/docker.sock", "/var/run/docker.sock", True)]
+        else:
+            assert not socket, naam
+    assert config_gpu["services"]["llama-swap"]["environment"]["DOCKER_HOST"] == \
+        "tcp://socket-proxy:2375"
+
+
+def test_startcontrole_weigert_socket_buiten_de_proxy(config_gpu, hostpaden) -> None:
+    p = _padlijsten()
+    # De socket is geen Windows-pad: hij gaat niet naar canoniek.ps1 en telt niet.
+    assert "/var/run/docker.sock" not in p.bind_bronnen(config_gpu)
+    socket = {"type": "bind", "source": "/var/run/docker.sock",
+              "target": "/var/run/docker.sock", "read_only": True}
+    assert p.controleer(_met(config_gpu, "llama-swap", [socket]), hostpaden)
+
+
+def test_gpu_alleen_voor_diensten_van_llama_swap(config_gpu) -> None:
+    assert {n for n, d in config_gpu["services"].items() if _gpu(d)} == {"llama-swap",
+                                                                         "docling-serve"}
+
+
+def test_cuda_omweg_zolang_de_driver_13_3_levert(config_gpu) -> None:
+    """ADR 0006; vervalt in F2-25."""
+    env = config_gpu["services"]["llama-swap"]["environment"]
+    assert env["NVIDIA_DISABLE_REQUIRE"] == "1"
+    assert env["LD_LIBRARY_PATH"].startswith("/usr/lib/x86_64-linux-gnu:")
+
+
+def test_modellen_alleen_lezen_en_extern(config_gpu) -> None:
+    for naam, volume, doel in (("llama-swap", "modellen", "/modellen"),
+                               ("docling-serve", "docling_artifacts", "/artifacts")):
+        [kop] = _koppeling(config_gpu["services"][naam], volume)
+        assert kop["type"] == "volume" and kop["read_only"] is True and kop["target"] == doel
+        assert config_gpu["volumes"][volume]["external"] is True
+    assert config_gpu["volumes"]["modellen"]["name"] == "signaal_modellen"
+
+
+def test_docling_serve_door_llama_swap(config_gpu, config) -> None:
+    """Vooraf aangemaakt, geen restart; sleutel als bestand; synchroon eindpunt."""
+    docling = config_gpu["services"]["docling-serve"]
+    assert "docling-serve" not in config["services"]       # niet bij een kale `up`
+    assert docling["container_name"] == "signaal-docling"
+    assert docling["profiles"] == ["door-llama-swap"]
+    assert docling.get("restart") in (None, "no")
+    assert [s["source"] for s in docling["secrets"]] == ["docling_api_key"]
+    assert Path(config_gpu["secrets"]["docling_api_key"]["file"]).parent.name == "secrets"
+    env = docling["environment"]
+    assert env["DOCLING_SERVE_MAX_SYNC_WAIT"] == "3600"
+    assert env["HF_HUB_OFFLINE"] == "1"
+    assert env["DOCLING_SERVE_ENABLE_REMOTE_SERVICES"] == "false"
+    assert env["DOCLING_SERVE_LOAD_MODELS_AT_BOOT"] == "false"
+    assert "/run/secrets/docling_api_key" in " ".join(docling["command"])
+    assert "DOCLING_SERVE_API_KEY" not in env
+
+
+def test_llama_swap_image_met_docker_client_en_configuratie() -> None:
+    tekst = (ROOT / "services" / "llama-swap" / "Dockerfile").read_text(encoding="utf-8")
+    assert re.search(r"^FROM docker:29\.9\.2-cli@sha256:\S+ AS cli$", tekst, re.M)
+    assert re.search(r"^FROM ghcr\.io/mostlygeek/llama-swap:v268-cuda13-b11977@sha256:", tekst, re.M)
+    assert "COPY --from=cli /usr/local/bin/docker /usr/local/bin/docker" in tekst
+    assert re.search(r"^COPY config\.yaml /app/config\.yaml$", tekst, re.M)
+    assert "docker.sock" not in tekst
