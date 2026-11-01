@@ -620,6 +620,26 @@ class RunCreateResponse(BaseModel):
     status: str
 
 
+class StepStartRequest(BaseModel):
+    """``POST /api/v1/runs/{run_id}/steps/{stap}`` (F2-15, plan §5.4)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_version_id: str = Field(..., min_length=1)
+
+
+class StepResponse(BaseModel):
+    """Een stap van een run (F2-15, plan §5.4); ``error`` is een vaste melding."""
+
+    step_id: str
+    job_id: Optional[str] = None
+    source_version_id: str
+    status: str
+    attempts: int = 0
+    error: Optional[str] = None
+    review_item: Optional[str] = None
+
+
 class RunResponse(BaseModel):
     """Een verwerkingsrun (F2-04, ADR 0003)."""
 

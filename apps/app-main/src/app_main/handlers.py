@@ -876,3 +876,30 @@ def _persist_okf_zip(vault_path_raw: str, notebook_id: str, zip_bytes: bytes) ->
         fh.write(zip_bytes)
     os.replace(tmp_path, final_path)
     return str(final_path)
+
+
+# ---------------------------------------------------------------------------
+# RUN_STEP — een stap van een run, gestart door Langflow (F2-15, ADR 0011)
+# ---------------------------------------------------------------------------
+
+
+@registry.register(JobType.RUN_STEP)
+async def handle_run_step(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Eén poging van een stap (embed, entity_extraction, entity_dedup, graph).
+
+    De worker doet de herhaalpogingen; :func:`handle_run_step_mislukt` zet na
+    het maximum stap en run op ``mislukt``. Anders dan de handlers hierboven
+    start deze handler geen volgende stap: die volgorde staat in de flow.
+    """
+    from app_main.dependencies import get_run_step_orchestrator
+
+    return await get_run_step_orchestrator().voer_uit(payload)
+
+
+async def handle_run_step_mislukt(job: Any, fout: BaseException) -> None:
+    from app_main.dependencies import get_run_step_orchestrator
+
+    await get_run_step_orchestrator().bij_definitief_mislukt(job, fout)
+
+
+registry.register_final_failure(JobType.RUN_STEP, handle_run_step_mislukt)

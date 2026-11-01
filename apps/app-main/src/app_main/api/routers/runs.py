@@ -5,14 +5,18 @@
 * ``PATCH /api/v1/runs/{run_id}``: werkt een lopende run bij of sluit hem af;
   409 op een afgesloten run; 403 voor een andere sleutel dan de aanmaker (F2-14).
 * ``GET /api/v1/runs/{run_id}``: de run.
+* ``POST`` en ``GET /api/v1/runs/{run_id}/steps/{stap}``: een stap na de import
+  starten en volgen (F2-15, ADR 0011); alleen de aanmaker van de run.
 
 Recht ``pijplijn`` (en ``beheerder``).
 """
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from shared.models.agents import Right
-from shared.models.processing_run import ProcessingRun
+from shared.models.processing_run import ProcessingRun, RunStep, StapNaam
 
 from app_main.api.agent_auth import AgentKeyContext, current_key, require_right
 from app_main.api.schemas import (
@@ -20,14 +24,20 @@ from app_main.api.schemas import (
     RunCreateResponse,
     RunPatchRequest,
     RunResponse,
+    StepResponse,
+    StepStartRequest,
 )
-from app_main.dependencies import get_processing_run_service
+from app_main.dependencies import get_processing_run_service, get_run_step_orchestrator
 from app_main.services.inname_binding import BindingError, ItemStatusError
 from app_main.services.processing_run_service import (
     FlowNotRegisteredError,
     NietDeAanmakerError,
     ProcessingRunService,
     RunClosedError,
+)
+from app_main.services.run_step_orchestrator import (
+    RunStepOrchestrator,
+    StapNietGebondenError,
 )
 
 router = APIRouter(
@@ -115,3 +125,58 @@ async def get_run(
     service: ProcessingRunService = Depends(get_processing_run_service),
 ) -> RunResponse:
     return _antwoord(await service.get(run_id))
+
+
+# --------------------------------------------------------------------------
+# Stappen (F2-15, ADR 0011, plan §5.4)
+# --------------------------------------------------------------------------
+
+
+def _stap_antwoord(stap: RunStep) -> StepResponse:
+    return StepResponse(
+        step_id=str(stap.id), job_id=stap.job, source_version_id=stap.source_version,
+        status=stap.status, attempts=stap.attempts, error=stap.error,
+        review_item=stap.review_item,
+    )
+
+
+@router.post("/{run_id}/steps/{stap}", status_code=202, response_model=StepResponse)
+async def start_step(
+    run_id: str,
+    stap: StapNaam,
+    body: StepStartRequest,
+    request: Request,
+    orchestrator: RunStepOrchestrator = Depends(get_run_step_orchestrator),
+) -> StepResponse:
+    """Start een stap op een bronversie van de run; dezelfde aanroep geeft dezelfde stap."""
+    key = await current_key(request)
+    try:
+        stap_rec = await orchestrator.start(run_id, stap, body.source_version_id,
+                                            key_id=key.key_id)
+    except NietDeAanmakerError:
+        raise HTTPException(status_code=403, detail="Alleen de aanmaker van de run") from None
+    except RunClosedError:
+        raise HTTPException(status_code=409, detail={
+            "code": "run_afgesloten", "melding": "Run is al afgesloten"}) from None
+    except StapNietGebondenError:
+        raise HTTPException(status_code=409, detail={
+            "code": "niet_gebonden", "melding": "Bronversie hoort niet bij deze run"}) from None
+    return _stap_antwoord(stap_rec)
+
+
+@router.get("/{run_id}/steps/{stap}", response_model=StepResponse)
+async def get_step(
+    run_id: str,
+    stap: StapNaam,
+    request: Request,
+    source_version_id: Optional[str] = None,
+    orchestrator: RunStepOrchestrator = Depends(get_run_step_orchestrator),
+) -> StepResponse:
+    """De status van een stap; zonder ``source_version_id`` de laatst gestarte."""
+    key = await current_key(request)
+    try:
+        stap_rec = await orchestrator.status(run_id, stap, key_id=key.key_id,
+                                             source_version_id=source_version_id)
+    except NietDeAanmakerError:
+        raise HTTPException(status_code=403, detail="Alleen de aanmaker van de run") from None
+    return _stap_antwoord(stap_rec)

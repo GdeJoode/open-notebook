@@ -768,6 +768,13 @@ def get_classification_service() -> ClassificationService:
     return ClassificationService(source_repo=get_source_repo())
 
 
+def get_run_step_orchestrator():
+    """Stappen van een run (F2-15, ADR 0011)."""
+    from app_main.services.run_step_orchestrator import RunStepOrchestrator
+
+    return RunStepOrchestrator()
+
+
 def get_processing_run_service() -> ProcessingRunService:
     return ProcessingRunService()
 

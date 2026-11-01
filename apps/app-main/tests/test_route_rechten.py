@@ -42,6 +42,9 @@ LAGER_DAN_BEHEERDER = {
     ("POST", "/api/v1/runs"): Right.PIJPLIJN,
     ("PATCH", "/api/v1/runs/{run_id}"): Right.PIJPLIJN,
     ("GET", "/api/v1/runs/{run_id}"): Right.PIJPLIJN,
+    # F2-15: stap-eindpunten (ADR 0011).
+    ("POST", "/api/v1/runs/{run_id}/steps/{stap}"): Right.PIJPLIJN,
+    ("GET", "/api/v1/runs/{run_id}/steps/{stap}"): Right.PIJPLIJN,
     ("POST", "/api/v1/import"): Right.PIJPLIJN,
     # F2-07: auditregels van modelaanroepen uit Langflow (ADR 0007).
     ("POST", "/api/v1/model-calls"): Right.PIJPLIJN,
