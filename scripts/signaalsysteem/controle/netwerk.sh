@@ -6,14 +6,18 @@
 #       wordt het vastgelegd (proef masquerade, ADR 0002 F: onder Docker Desktop
 #       heeft een proxy op `toegang` internet, daarom de geharde proxy, N7 en N8)
 #   N2  geen bereikbare poort van surrealdb of open-notebook op de host
-#   N3  surrealdb is alleen bereikbaar vanuit open-notebook
+#   N3  surrealdb is alleen bereikbaar vanuit open-notebook, ook niet via zijn IP-adres
 #   N4  de API geeft /health HTTP 200 via de werkbakproxy, met alle migraties gedraaid
 #   N5  de werkbakproxy op 127.0.0.1 geeft de interface
 #   N6  een API-aanroep zonder sleutel geeft 401
 #   N7  de proxy is gehard (read_only, cap_drop ALL, no-new-privileges, geen root)
 #   N8  de proxy heeft geen shell (exec van sh en busybox faalt)
 #   N9  alleen met --met-classificatie: 409 en 422 bij de import (classificatie_e2e.py);
-#       schrijft testgegevens, dus alleen tegen een toetsdatabase
+#       schrijft testgegevens, dus alleen tegen een toetsdatabase; het testbestand in
+#       het bronarchief wordt daarna verwijderd
+#   N10 containers op `toegang` bereiken elkaar niet (enable_icc=false)
+#   N11 wat de proxy op de host bereikt (host.docker.internal, 192.168.65.254):
+#       vergeleken met de bekende uitkomst; een verandering telt als mislukt
 #
 # Exitcodes: 0 alles geslaagd, 1 een criterium niet gehaald, 2 omgeving ongeschikt.
 set -uo pipefail
@@ -103,6 +107,22 @@ for net in verwerking werkbak-intern; do
   [[ "$uit" == fout:* ]] && criterium N3 geslaagd "container op $net bereikt surrealdb niet ($uit)" \
     || criterium N3 mislukt "container op $net bereikt surrealdb ($uit)"
 done
+# Ook niet via het IP-adres (geen DNS nodig).
+PY_TCP='
+import socket, sys
+try:
+    socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=5).close(); print("verbonden")
+except Exception as e:
+    print("fout:" + type(e).__name__); sys.exit(1)
+'
+tcp_van() { local c=$1; shift; docker run --rm --network "container:$c" "$PY_IMG" python -c "$PY_TCP" "$@" 2>&1 | tail -n1; }
+surreal_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${C[surrealdb]}")"
+uit="$(tcp_van "${C[werkbak-toegang]}" "$surreal_ip" 8000)"
+[[ "$uit" == fout:* ]] && criterium N3 geslaagd "werkbak-toegang bereikt surrealdb niet via $surreal_ip ($uit)" \
+  || criterium N3 mislukt "werkbak-toegang bereikt surrealdb via $surreal_ip ($uit)"
+uit="$(docker run --rm --network "${PROJECT}_verwerking" "$PY_IMG" python -c "$PY_TCP" "$surreal_ip" 8000 2>&1 | tail -n1)"
+[[ "$uit" == fout:* ]] && criterium N3 geslaagd "container op verwerking bereikt surrealdb niet via $surreal_ip ($uit)" \
+  || criterium N3 mislukt "container op verwerking bereikt surrealdb via $surreal_ip ($uit)"
 
 # N4: /health en migraties.
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$POORT/health")" || true
@@ -148,6 +168,39 @@ for sh in /bin/sh /bin/ash /bin/busybox /bin/bash; do
 done
 [[ -z "$shells" ]] && criterium N8 geslaagd "werkbak-toegang heeft geen shell"   || criterium N8 mislukt "werkbak-toegang heeft een shell:$shells"
 
+# N10: geen verkeer tussen containers op toegang.
+proxy_ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${PROJECT}_toegang\").IPAddress}}" "${C[werkbak-toegang]}")"
+uit="$(docker run --rm --network "${PROJECT}_toegang" "$PY_IMG" python -c "$PY_TCP" "$proxy_ip" 8080 2>&1 | tail -n1)"
+[[ "$uit" == fout:* ]] && criterium N10 geslaagd "andere container op toegang bereikt werkbak-toegang ($proxy_ip:8080) niet ($uit)" \
+  || criterium N10 mislukt "andere container op toegang bereikt werkbak-toegang ($proxy_ip:8080)"
+
+# N11: wat de proxy op de host bereikt; bekende uitkomst onder Docker Desktop
+# (F2-10, 1 november 2026, met Ollama actief op de host): host.docker.internal is
+# 192.168.65.254 en geeft de proxy toegang tot poorten op 127.0.0.1 van de host.
+BEKEND_HOST="${SIGNAAL_BEKEND_HOST:-hdi=192.168.65.254 host.docker.internal:${POORT}=open 192.168.65.254:${POORT}=open 192.168.65.254:11434=open 192.168.65.254:22=dicht}"
+PY_HOST='
+import socket, sys
+uit = []
+try:
+    uit.append("hdi=" + socket.gethostbyname("host.docker.internal"))
+except Exception as e:
+    uit.append("hdi=fout")
+for h, p in (("host.docker.internal", int(sys.argv[1])), ("192.168.65.254", int(sys.argv[1])),
+             ("192.168.65.254", 11434), ("192.168.65.254", 22)):
+    try:
+        socket.create_connection((h, p), timeout=3).close(); r = "open"
+    except Exception:
+        r = "dicht"
+    uit.append("%s:%d=%s" % (h, p, r))
+print(" ".join(uit))
+'
+host_uit="$(in_netwerk_van "${C[werkbak-toegang]}" "$PY_HOST" "$POORT" 2>&1 | tail -n1)"
+if [[ "$host_uit" == "$BEKEND_HOST" ]]; then
+  printf '%-4s %-8s %s\n' N11 vastgelegd "proxy naar de host, zoals bekend: $host_uit"
+else
+  criterium N11 mislukt "proxy naar de host wijkt af van de bekende uitkomst: $host_uit (bekend: $BEKEND_HOST)"
+fi
+
 # N9: classificatie end-to-end (schrijft testgegevens).
 if [[ $MET_CLASSIFICATIE == 1 ]]; then
   naam="f2-10-e2e-$(date +%s).bin"
@@ -156,6 +209,7 @@ if [[ $MET_CLASSIFICATIE == 1 ]]; then
   uit="$(docker exec -i "${C[open-notebook]}" /app/.venv/bin/python /app/services/open-notebook/start.py \
     /app/.venv/bin/python - "$naam" <"$ROOT/scripts/signaalsysteem/controle/classificatie_e2e.py" 2>&1)"; rc=$?
   printf '%s\n' "$uit" | grep '"criterium"' || printf '%s\n' "$uit" | tail -n5
+  docker run --rm --network none -v "${PROJECT}_bronarchief:/b" "$PY_IMG" rm -f "/b/$naam"
   [[ $rc == 0 ]] && criterium N9 geslaagd "import: 409 lagere_classificatie, 422 ongeldige waarde, geen 500" \
     || criterium N9 mislukt "classificatie_e2e.py exitcode $rc"
 fi
