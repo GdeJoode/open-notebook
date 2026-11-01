@@ -177,7 +177,9 @@ uit="$(docker run --rm --network "${PROJECT}_toegang" "$PY_IMG" python -c "$PY_T
 # N11: wat de proxy op de host bereikt; bekende uitkomst onder Docker Desktop
 # (F2-10, 1 november 2026, met Ollama actief op de host): host.docker.internal is
 # 192.168.65.254 en geeft de proxy toegang tot poorten op 127.0.0.1 van de host.
-BEKEND_HOST="${SIGNAAL_BEKEND_HOST:-hdi=192.168.65.254 host.docker.internal:${POORT}=open 192.168.65.254:${POORT}=open 192.168.65.254:11434=open 192.168.65.254:22=dicht}"
+# Poort 8000 (SurrealDB van de oude stack) hoort dicht te zijn: start.sh weigert
+# te starten als de oude stack draait.
+BEKEND_HOST="${SIGNAAL_BEKEND_HOST:-hdi=192.168.65.254 host.docker.internal:${POORT}=open 192.168.65.254:${POORT}=open 192.168.65.254:11434=open 192.168.65.254:22=dicht 192.168.65.254:8000=dicht}"
 PY_HOST='
 import socket, sys
 uit = []
@@ -186,7 +188,7 @@ try:
 except Exception as e:
     uit.append("hdi=fout")
 for h, p in (("host.docker.internal", int(sys.argv[1])), ("192.168.65.254", int(sys.argv[1])),
-             ("192.168.65.254", 11434), ("192.168.65.254", 22)):
+             ("192.168.65.254", 11434), ("192.168.65.254", 22), ("192.168.65.254", 8000)):
     try:
         socket.create_connection((h, p), timeout=3).close(); r = "open"
     except Exception:
