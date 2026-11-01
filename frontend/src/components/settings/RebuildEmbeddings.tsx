@@ -21,7 +21,6 @@ import type { RebuildEmbeddingsRequest, RebuildStatusResponse } from '@/lib/api/
 
 export function RebuildEmbeddings() {
   const [mode, setMode] = useState<'existing' | 'all'>('existing')
-  const [includeSources, setIncludeSources] = useState(true)
   const [includeNotes, setIncludeNotes] = useState(true)
   const [includeInsights, setIncludeInsights] = useState(true)
   const [commandId, setCommandId] = useState<string | null>(null)
@@ -81,7 +80,8 @@ export function RebuildEmbeddings() {
   const handleStartRebuild = () => {
     const request: RebuildEmbeddingsRequest = {
       mode,
-      include_sources: includeSources,
+      // F2-15: embeddings van bronnen alleen via de stap embed van een run.
+      include_sources: false,
       include_notes: includeNotes,
       include_insights: includeInsights
     }
@@ -96,7 +96,7 @@ export function RebuildEmbeddings() {
     rebuildMutation.reset()
   }
 
-  const isAnyTypeSelected = includeSources || includeNotes || includeInsights
+  const isAnyTypeSelected = includeNotes || includeInsights
   const isRebuildActive = commandId && status && (status.status === 'queued' || status.status === 'running')
 
   const progressData = status?.progress
@@ -152,16 +152,6 @@ export function RebuildEmbeddings() {
             <div className="space-y-3">
               <Label>Include in Rebuild</Label>
               <div className="space-y-3">
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="sources"
-                    checked={includeSources}
-                    onCheckedChange={(checked) => setIncludeSources(checked === true)}
-                  />
-                  <Label htmlFor="sources" className="font-normal cursor-pointer">
-                    Sources
-                  </Label>
-                </div>
                 <div className="flex items-center space-x-2">
                   <Checkbox
                     id="notes"

@@ -40,7 +40,7 @@ class FakeAggregateRepo:
         self._vectors = []
         return 0
 
-    async def get_chunks(self, source_id: str) -> List[Chunk]:
+    async def get_chunks(self, source_id: str, **_: Any) -> List[Chunk]:
         return list(self._chunks)
 
     async def get(self, source_id: str) -> Any:

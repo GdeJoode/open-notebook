@@ -83,6 +83,13 @@ class EmbeddingService:
         3. If chunks exist, batch-embed them
         4. If no chunks, nothing to embed (no full_text fallback, F2-05)
         5. Store SourceEmbedding records
+
+        F2-15 (review): alleen de fragmenten van de huidige versie en run; een
+        embedding krijgt de run van haar fragment (migratie 105), en een
+        fragment met al een embedding in die run wordt overgeslagen. Stap 1
+        wist alleen embeddings zonder run. Is de run van de fragmenten al
+        afgesloten, dan weigert de database het schrijven: embed dan via de
+        stap ``embed`` van een nieuwe run.
         """
         result = EmbeddingResult(
             id=source_id,
@@ -95,13 +102,18 @@ class EmbeddingService:
         await self.source_repo.delete_embeddings(source_id)
 
         # 2. Try structural chunks first
-        chunks = await self.source_repo.get_chunks(source_id)
+        chunks = await self.source_repo.get_chunks(source_id, huidig=True)
 
         if chunks:
             # 3a. Use structural chunks from ingestion pipeline
             result.used_structural_chunks = True
             result.chunks_used = len(chunks)
-            embeddings = await self._embed_chunks(source_id, chunks, run_id)
+            run_id = run_id or getattr(chunks[0], "run", None)
+            gedaan: set = set()
+            if run_id:
+                gedaan = {str(e.chunk) for e in await self.source_repo.get_embeddings(source_id)
+                          if e.chunk and str(e.run) == str(run_id)}
+            embeddings = await self._embed_chunks(source_id, chunks, run_id, gedaan)
             result.embeddings_created = len(embeddings)
         else:
             # 3b. Geen fragmenten, geen embeddings. De terugval op

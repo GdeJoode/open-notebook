@@ -20,6 +20,7 @@ from app_main.services.source_service import SourceService
 from surrealdb_service.repositories.base import _validate_record_id
 from app_main.api.agent_auth import RECHT_BEHEERDER
 from app_main.api.fouten import fout_zonder_inhoud
+from app_main.services.run_step_orchestrator import EMBED_VIA_STAP
 
 router = APIRouter(dependencies=[RECHT_BEHEERDER])
 
@@ -363,27 +364,14 @@ async def run_filtering(
 @router.post("/{source_id}/run-embed")
 async def run_embed(
     source_id: str,
-    source_svc: SourceService = Depends(get_source_service),
 ):
-    """Trigger embedding generation for a source."""
-    try:
-        source = await source_svc.get(source_id)
-        if not source:
-            raise HTTPException(status_code=404, detail="Source not found")
+    """Vervallen tot F2-22: embeddings van een bron alleen via de stap ``embed``.
 
-        from app_main.services.command_service import CommandService
-
-        command_id = await CommandService.submit_command_job(
-            "open_notebook",
-            "embed_source",
-            {"source_id": str(source.id)},
-        )
-        return {"command_id": command_id, "status": "queued"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error triggering embedding for source {source_id}: {e}")
-        raise fout_zonder_inhoud(e, "Error triggering embedding")
+    De oude route embedde alle fragmenten van een bron zonder run; sinds
+    migratie 105 heeft elke embedding van een fragment de run van dat fragment
+    (F2-15, ADR 0003, 0011). Geeft altijd 409.
+    """
+    raise HTTPException(status_code=409, detail=EMBED_VIA_STAP)
 
 
 @router.post("/{source_id}/reprocess")

@@ -393,7 +393,9 @@ class RebuildRequest(BaseModel):
         ...,
         description="Rebuild mode: 'existing' only re-embeds items with embeddings, 'all' embeds everything",
     )
-    include_sources: bool = Field(True, description="Include sources in rebuild")
+    include_sources: bool = Field(
+        False, description="Bronnen: 409 tot F2-22; embeddings van een bron via de stap embed (F2-15)"
+    )
     include_notes: bool = Field(True, description="Include notes in rebuild")
     include_insights: bool = Field(True, description="Include insights in rebuild")
 

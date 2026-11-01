@@ -227,11 +227,6 @@ export const sourcesApi = {
     return response.data
   },
 
-  runEmbed: async (id: string) => {
-    const response = await apiClient.post<{ command_id: string | null; status: string }>(`/sources/${id}/run-embed`)
-    return response.data
-  },
-
   reprocess: async (id: string, overrides?: DoclingPipelineConfig) => {
     const response = await apiClient.post<{
       command_id: string | null

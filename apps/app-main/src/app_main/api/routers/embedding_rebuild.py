@@ -13,6 +13,7 @@ from app_main.api.schemas import (
 from surrealdb_service.connection import execute_query
 from app_main.api.agent_auth import RECHT_BEHEERDER
 from app_main.api.fouten import fout_zonder_inhoud
+from app_main.services.run_step_orchestrator import EMBED_VIA_STAP
 
 router = APIRouter(tags=["embedding"], dependencies=[RECHT_BEHEERDER])
 
@@ -40,7 +41,12 @@ async def start_rebuild(request: RebuildRequest):
     Modes:
     - "existing": re-embed items that already have embeddings
     - "all": embed everything with content
+
+    Bronnen niet meer (F2-15): embeddings van een bron alleen via de stap
+    ``embed`` van een run; ``include_sources`` geeft 409 tot F2-22.
     """
+    if request.include_sources:
+        raise HTTPException(status_code=409, detail=EMBED_VIA_STAP)
     try:
         logger.info(f"Starting rebuild request: mode={request.mode}")
 

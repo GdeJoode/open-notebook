@@ -98,6 +98,9 @@ class _FakeModel:
     async def aembed(self, texts, **_):
         return [[float(len(t) % 7)] * 8 for t in texts]
 
+    def herkomst(self):
+        return "embed:test"
+
 
 @pytest.mark.requires_docker
 @pytest.mark.asyncio
@@ -320,6 +323,9 @@ async def test_embed_source_completes_partial_then_clean(
         async def aembed(self, texts, **_):
             return [[float(len(t) % 7)] * 8 for t in texts]
 
+        def herkomst(self):
+            return "embed:test"
+
     orig = conn._pool
     conn._pool = conn.ConnectionPool(config=live_surrealdb)
     try:
@@ -401,6 +407,9 @@ async def test_backfill_chunks_real_run_creates_embeddings_and_idempotent(
 
         async def aembed(self, texts, **_):
             return [[float(len(t) % 7)] * 8 for t in texts]
+
+        def herkomst(self):
+            return "embed:test"
 
     orig = conn._pool
     conn._pool = conn.ConnectionPool(config=live_surrealdb)
