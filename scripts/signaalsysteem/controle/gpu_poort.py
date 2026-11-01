@@ -9,6 +9,9 @@ in de database. Invoer is synthetisch.
     embed              één embedding; drukt de dimensie af
     chat               één korte chataanroep naar het werkmodel
     docling            GET /upstream/docling/health via de poort (start de dienst)
+    docling-na-signaal als docling, maar pas na een regel op stdin; drukt eerst
+                       "klaar" af. Zo staat de aanvraag klaar (imports gedaan)
+                       en volgt hij direct op een externe stop (G8)
     docling-conversie  synchrone conversie van een synthetische PDF via
                        /upstream/docling/v1/convert/file, zonder en met de
                        sleutel (de sleutel komt op stdin, niet als argument)
@@ -86,11 +89,15 @@ async def main(opdracht: str) -> dict:
         antwoord = await poort.chat(taak="chat", classificatie="intern", max_tokens=8,
                                     messages=[{"role": "user", "content": "Zeg alleen: ja"}])
         uit["model"] = antwoord.model
-    elif opdracht in ("docling", "docling-conversie"):
+    elif opdracht in ("docling", "docling-na-signaal", "docling-conversie"):
         sleutel = sys.stdin.readline().strip() if opdracht == "docling-conversie" else ""
+        if opdracht == "docling-na-signaal":
+            print("klaar", flush=True)
+            sys.stdin.readline()
+            begin = time.monotonic()
 
         async def uitvoer(_model) -> httpx.Response:
-            if opdracht == "docling":
+            if opdracht != "docling-conversie":
                 antwoord = await _get("/health")
             else:
                 antwoord = await _get(

@@ -4,14 +4,14 @@
 #
 # Toetst de draaiende Compose-omgeving (project signaal, gestart met start.sh);
 # start of stopt zelf geen dienst, behalve via llama-swap en één externe
-# `docker stop` van signaal-docling (G8). Aanroepen gaan door de echte modelpoort
+# `docker kill` van signaal-docling (G8). Aanroepen gaan door de echte modelpoort
 # in de container open-notebook (gpu_poort.py), met een auditschrijver in het
 # geheugen: er komt niets in de database. Invoer is synthetisch.
 #
 #   G0  omgeving: diensten draaien, signaal-docling is aangemaakt en gestopt;
 #       nulmeting videogeheugen; andere GPU-gebruikers op de host (ter informatie)
 #   G1  CUDA-omweg: driver, NVIDIA_DISABLE_REQUIRE en LD_LIBRARY_PATH in llama-swap
-#   G2  de configuratie in het image is gelijk aan services/llama-swap/config.yaml
+#   G2  de configuratie in het image is gelijk aan services/llama-swap/config.yaml in HEAD
 #   G3  embedding via de poort: HTTP 200, 1 024 dimensies
 #   G4  werkmodel via de poort: HTTP 200, geladen op de GPU (videogeheugen stijgt)
 #   G5  docling-serve start via llama-swap (/upstream, zonder model-veld): de
@@ -21,9 +21,13 @@
 #       staat in de omgeving van de gestarte container, de sleutel niet in de
 #       configuratie (`docker inspect`)
 #   G7  socket-proxy (K2 van P7): _ping 200; containerlijst, inspect, create, exec,
-#       images en volumes 403
-#   G8  externe `docker stop` van signaal-docling, daarna een aanvraag via de poort:
-#       eindigt in HTTP 200 (met herhaalpoging bij 502)
+#       images, volumes, events en version 403
+#   G8  herhaalpoging na een externe stop: de aanvraag via de poort staat klaar
+#       (imports gedaan), `docker kill` van signaal-docling, en direct daarna de
+#       aanvraag. Zolang llama-swap de stop nog niet heeft gezien (gezondheidslus
+#       elke 5 s), geeft die 502; de poort probeert opnieuw. Criterium: in een
+#       ronde ten minste 2 pogingen en daarna HTTP 200; hooguit 3 rondes, want
+#       valt de gezondheidslus net tussen stop en aanvraag, dan komt direct 200.
 #   G9  llama-swap en docling-serve bereiken geen internet
 #   G10 docling-serve staat binnen ttl + 15 s na de laatste aanvraag op exited
 #   G11 videogeheugen: piek en per fase vastgelegd; na de stop van docling-serve
@@ -114,8 +118,8 @@ fi
 
 # ------------------------------------------------------------------ G2
 in_image="$(docker exec "$LS" sha256sum /app/config.yaml | cut -d' ' -f1 | tr -d '\r')"
-in_repo="$(sha256sum "$ROOT/services/llama-swap/config.yaml" | cut -d' ' -f1)"
-[[ "$in_image" == "$in_repo" ]] && criterium G2 geslaagd "config.yaml in het image = repository (${in_repo:0:12})" \
+in_repo="$(git -C "$ROOT" show HEAD:services/llama-swap/config.yaml | sha256sum | cut -d' ' -f1)"
+[[ "$in_image" == "$in_repo" ]] && criterium G2 geslaagd "config.yaml in het image = HEAD (${in_repo:0:12})" \
   || criterium G2 mislukt "config.yaml in het image wijkt af; start.sh --build"
 
 # ------------------------------------------------------------------ G3
@@ -173,7 +177,8 @@ p_ping="$(docker exec "$LS" curl -s -o /dev/null -w '%{http_code}' -m 10 http://
 uitslag="ping=$p_ping"
 weigert=1
 for regel in "GET /containers/json" "GET /containers/$DOCLING/json" "POST /containers/create" \
-             "POST /containers/$DOCLING/exec" "GET /images/json" "GET /volumes"; do
+             "POST /containers/$DOCLING/exec" "GET /images/json" "GET /volumes" \
+             "GET /events?until=0" "GET /version"; do
   s="$(proxy $regel)"; uitslag="$uitslag; $regel=$s"
   [[ "$s" == 403 ]] || weigert=0
 done
@@ -196,13 +201,26 @@ except Exception:
   || criterium G9 mislukt "internet: llama-swap $n_ls, docling-serve $n_dl"
 
 # ------------------------------------------------------------------ G8
-docker stop "$DOCLING" >/dev/null
-r="$(poort docling)"; echo "$r" >>"$RUN/poort.jsonl"
+g8=mislukt; rondes=""
+for ronde in 1 2 3; do
+  [[ "$(toestand)" == running ]] || poort docling >>"$RUN/poort.jsonl"
+  coproc AANVRAAG { docker exec -i "$FORK" /app/.venv/bin/python -c "$HULP" docling-na-signaal; }
+  read -r klaar <&"${AANVRAAG[0]}"
+  docker kill "$DOCLING" >/dev/null
+  echo nu >&"${AANVRAAG[1]}"
+  read -r r <&"${AANVRAAG[0]}"; r="$(printf '%s' "$r" | tr -d '\r')"
+  wait "$AANVRAAG_PID" 2>/dev/null
+  echo "$r" >>"$RUN/poort.jsonl"
+  status="$(json "$r" "d.get('status')")"; pogingen="$(json "$r" "max(d.get('pogingen') or [0])")"
+  rondes="$rondes ronde $ronde: status $status, pogingen $pogingen;"
+  if [[ "$status" != 200 ]]; then break; fi
+  if [[ "$pogingen" -ge 2 ]]; then g8=geslaagd; break; fi
+done
 laatste=$(date +%s)
-if [[ "$(json "$r" "d.get('status')")" == 200 && "$(toestand)" == running ]]; then
-  criterium G8 geslaagd "na externe stop: HTTP 200 via de poort, pogingen $(json "$r" "d['pogingen']") ($(json "$r" "d['seconden']") s)"
+if [[ "$g8" == geslaagd && "$(toestand)" == running ]]; then
+  criterium G8 geslaagd "na docker kill: 502, herhaalpoging, daarna HTTP 200 via de poort;$rondes"
 else
-  criterium G8 mislukt "na externe stop: $r; $DOCLING '$(toestand)'"
+  criterium G8 mislukt "na docker kill:$rondes $DOCLING '$(toestand)' (klaar='$klaar')"
 fi
 
 # ------------------------------------------------------------------ G10
