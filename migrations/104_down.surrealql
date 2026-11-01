@@ -1,0 +1,17 @@
+-- ============================================================================
+-- Migratie 104 terug (F2-15): `source_embedding.run` en `embedding_model` weer
+-- zoals in migratie 90, zonder de index op `run`.
+--
+-- `run_step` blijft staan met zijn records, en `afgekapt` op `source_embedding`
+-- blijft (optioneel): een terugdraaiing wist geen herkomst (harde eis 2), net
+-- als `90_down` en `101_down`. De soort `stap_mislukt` en het veld `run_step`
+-- op `beheer_melding` blijven, zodat bestaande meldingen geldig blijven (zoals
+-- `102_down`). Idempotent.
+-- ============================================================================
+
+DEFINE FIELD OVERWRITE run ON source_embedding TYPE option<record<processing_run>> READONLY;
+DEFINE FIELD OVERWRITE embedding_model ON source_embedding TYPE option<string> READONLY;
+DEFINE FIELD OVERWRITE afgekapt ON source_embedding TYPE option<bool> READONLY;
+REMOVE INDEX IF EXISTS idx_source_embedding_run ON source_embedding;
+
+RETURN NONE;

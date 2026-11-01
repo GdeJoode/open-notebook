@@ -675,6 +675,10 @@ class SourceRepository(BaseRepository[Source]):
         order: int,
         embedding: List[float],
         chunk_id: Optional[str] = None,
+        *,
+        run_id: Optional[str] = None,
+        embedding_model: Optional[str] = None,
+        afgekapt: Optional[bool] = None,
     ) -> SourceEmbedding:
         """
         Add an embedding to a source.
@@ -685,10 +689,17 @@ class SourceRepository(BaseRepository[Source]):
             order: Order in document.
             embedding: Embedding vector.
             chunk_id: Optional reference to the chunk record.
+            run_id: De run van de stap ``embed`` (F2-15); met een run zijn
+                ``chunk_id``, ``embedding_model`` en ``afgekapt`` verplicht
+                (migratie 104), en hoort het fragment bij die run.
+            embedding_model: Naam en versie uit het modelregister.
+            afgekapt: Of de tekst vóór de embedding is afgekapt (ADR 0008).
 
         Returns:
             Created embedding.
         """
+        if run_id and not chunk_id:
+            raise ValueError("Een embedding met een run hoort bij een fragment")
         try:
             params: Dict[str, Any] = {
                 "source_id": ensure_record_id(source_id),
@@ -696,7 +707,22 @@ class SourceRepository(BaseRepository[Source]):
                 "content": content,
                 "embedding": embedding,
             }
-            if chunk_id:
+            if chunk_id and run_id:
+                params.update(chunk_id=ensure_record_id(chunk_id), run=ensure_record_id(run_id),
+                              model=embedding_model, afgekapt=afgekapt)
+                query = """
+                CREATE source_embedding CONTENT {
+                    "source": $source_id,
+                    "order": $order,
+                    "content": $content,
+                    "embedding": $embedding,
+                    "chunk": $chunk_id,
+                    "run": $run,
+                    "embedding_model": $model,
+                    "afgekapt": $afgekapt
+                }
+                """
+            elif chunk_id:
                 params["chunk_id"] = ensure_record_id(chunk_id)
                 query = """
                 CREATE source_embedding CONTENT {

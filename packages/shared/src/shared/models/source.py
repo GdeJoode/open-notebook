@@ -122,6 +122,9 @@ class SourceEmbedding(ObjectModel):
     )
     run: Optional[str] = Field(None, description="De verwerkingsrun (F2-04)")
     embedding_model: Optional[str] = Field(None, description="Embeddingmodel met versie (F2-04)")
+    afgekapt: Optional[bool] = Field(
+        None, description="Tekst vóór de embedding afgekapt (ADR 0008, F2-15)"
+    )
 
 
 class Source(ObjectModel):

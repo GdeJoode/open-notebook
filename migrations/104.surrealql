@@ -1,0 +1,61 @@
+-- ============================================================================
+-- Migratie 104: stappen van een run (F2-15, ADR 0011, 0003, 0008).
+--
+-- 1. `run_step`: een stap (`embed`, `entity_extraction`, `entity_dedup`,
+--    `graph`) van een run op een bronversie. Uniek op run, stap en versie,
+--    zodat dezelfde aanroep dezelfde stap geeft. Alleen aan te maken in een
+--    lopende run. Status `wachtrij`, `bezig`, `geslaagd`, `mislukt` of
+--    `wacht_op_review`; `geslaagd` en `mislukt` zijn eindtoestanden. `error`
+--    is een vaste melding met alleen het soort fout (vast patroon, geen
+--    vrije tekst).
+-- 2. `source_embedding`: een embedding met een run hoort bij een fragment van
+--    die run, wordt alleen in een lopende run gemaakt (net als een fragment),
+--    en legt het model en `afgekapt` vast (ADR 0008, uitwerking in F2-08).
+-- 3. `beheer_melding`: soort `stap_mislukt` en veld `run_step`.
+--
+-- Lege database (B3): geen omzetting van bestaande records. Idempotent via
+-- OVERWRITE. Alleen hele regels commentaar: de migratieloader plakt de regels
+-- aan elkaar.
+-- ============================================================================
+
+-- 1. Stappen van een run.
+DEFINE TABLE OVERWRITE run_step SCHEMAFULL;
+DEFINE FIELD OVERWRITE run ON run_step TYPE record<processing_run> READONLY
+    ASSERT $before != NONE OR (record::exists($value) AND $value.status = 'bezig');
+DEFINE FIELD OVERWRITE stap ON run_step TYPE string READONLY
+    ASSERT $value IN ['embed', 'entity_extraction', 'entity_dedup', 'graph'];
+DEFINE FIELD OVERWRITE source_version ON run_step TYPE record<source_version> READONLY;
+DEFINE FIELD OVERWRITE source ON run_step TYPE record<source> READONLY
+    ASSERT $value = $this.source_version.source;
+DEFINE FIELD OVERWRITE job ON run_step TYPE option<record<job>>;
+DEFINE FIELD OVERWRITE status ON run_step TYPE string DEFAULT 'wachtrij'
+    ASSERT $value IN ['wachtrij', 'bezig', 'geslaagd', 'mislukt', 'wacht_op_review']
+        AND ($before = NONE OR $before NOT IN ['geslaagd', 'mislukt'] OR $value = $before);
+DEFINE FIELD OVERWRITE attempts ON run_step TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE error ON run_step TYPE option<string>
+    ASSERT $value = NONE
+        OR $value = /^(Poging [0-9]{1,4} mislukt|Stap [a-z_]{1,40} mislukt na [0-9]{1,4} pogingen) \([A-Za-z0-9_]{1,80}\)$/;
+DEFINE FIELD OVERWRITE review_item ON run_step TYPE option<record<triage_queue>>;
+DEFINE FIELD OVERWRITE created_at ON run_step TYPE datetime DEFAULT time::now() READONLY;
+DEFINE FIELD OVERWRITE updated_at ON run_step TYPE datetime VALUE time::now();
+DEFINE INDEX OVERWRITE uniek_run_step ON run_step FIELDS run, stap, source_version UNIQUE;
+DEFINE INDEX OVERWRITE idx_run_step_status ON run_step FIELDS status;
+
+-- 2. Embeddings met een run. Onder v2.7.0 draait een ASSERT niet op een
+-- ontbrekend veld; daarom staan alle eisen bij `run`.
+DEFINE FIELD OVERWRITE run ON source_embedding TYPE option<record<processing_run>> READONLY
+    ASSERT $value = NONE OR $before != NONE
+        OR (fn::run_mag_schrijven($value, $this.source)
+            AND $this.chunk != NONE AND $this.chunk.run = $value
+            AND $this.embedding_model != NONE AND $this.afgekapt != NONE);
+DEFINE FIELD OVERWRITE embedding_model ON source_embedding TYPE option<string> READONLY;
+DEFINE FIELD OVERWRITE afgekapt ON source_embedding TYPE option<bool> READONLY;
+DEFINE INDEX OVERWRITE idx_source_embedding_run ON source_embedding FIELDS run;
+
+-- 3. Melding bij een mislukte stap.
+DEFINE FIELD OVERWRITE soort ON beheer_melding TYPE string READONLY
+    ASSERT $value IN ['handmatige_run_beschermd', 'vastgezet_overgeslagen', 'inhoud_intern',
+        'batchhash_ontbreekt', 'batch_inhoud_extern', 'cloudaanroep_intern', 'stap_mislukt'];
+DEFINE FIELD OVERWRITE run_step ON beheer_melding TYPE option<record<run_step>> READONLY;
+
+RETURN NONE;

@@ -44,7 +44,7 @@ from shared.models.notebook_schema import (
     Pass1Result,
 )
 from shared.models.podcast import EpisodeProfile, PodcastEpisode, SpeakerProfile
-from shared.models.processing_run import PipelineVersion, ProcessingRun, RunLogEntry
+from shared.models.processing_run import PipelineVersion, ProcessingRun, RunLogEntry, RunStep
 from shared.models.settings import ContentSettings
 from shared.models.source import Asset, Chunk, Source, SourceEmbedding, SourceInsight
 from shared.models.source_version import SourceVersion
@@ -76,6 +76,7 @@ __all__ = [
     "ProcessingRun",
     "PipelineVersion",
     "RunLogEntry",
+    "RunStep",
     # Transformation models
     "Transformation",
     "DefaultPrompts",

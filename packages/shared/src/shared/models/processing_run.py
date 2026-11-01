@@ -74,3 +74,30 @@ class ProcessingRun(ObjectModel):
     @property
     def afgesloten(self) -> bool:
         return self.status in AFGESLOTEN
+
+
+#: De stappen na de import die Langflow start (plan §5.4, ADR 0011).
+StapNaam = Literal["embed", "entity_extraction", "entity_dedup", "graph"]
+StapStatus = Literal["wachtrij", "bezig", "geslaagd", "mislukt", "wacht_op_review"]
+#: Een stap met een van deze statussen is klaar; hij verandert niet meer.
+STAP_KLAAR: frozenset[str] = frozenset({"geslaagd", "mislukt"})
+
+
+class RunStep(ObjectModel):
+    """Een record van ``run_step`` (migratie 104, F2-15): één stap van een run
+    op één bronversie, uitgevoerd door een job in de wachtrij van de fork."""
+
+    table_name: ClassVar[str] = "run_step"
+
+    run: str
+    stap: StapNaam
+    source_version: str
+    source: str
+    job: Optional[str] = None
+    status: StapStatus = "wachtrij"
+    attempts: int = 0
+    #: Vaste melding zonder inhoud (patroon in migratie 104).
+    error: Optional[str] = None
+    review_item: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None

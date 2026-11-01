@@ -137,11 +137,16 @@ class ProcessingRunRepository:
 
         Een run die door een afgebroken proces blijft lopen, kan anders blijven
         schrijven (ADR 0003, restrisico F2-04). Geeft het aantal gesloten runs.
+
+        Een run met een stap in ``wacht_op_review`` valt erbuiten: die wacht op
+        de beheerder en blijft ``bezig`` (plan §5.4, B5; F2-15).
         """
         rows = await execute_query(
             "UPDATE processing_run SET status = 'mislukt', ended_at = time::now(),"
             " error = $melding, log = array::concat(log, [$regel])"
-            " WHERE status = 'bezig' AND started_at < $grens RETURN id",
+            " WHERE status = 'bezig' AND started_at < $grens"
+            " AND (SELECT VALUE run FROM run_step WHERE status = 'wacht_op_review')"
+            " CONTAINSNOT id RETURN id",
             {"grens": grens, "melding": melding,
              "regel": {"at": _nu(), "step": "bewaking", "status": "mislukt",
                        "message": melding}},

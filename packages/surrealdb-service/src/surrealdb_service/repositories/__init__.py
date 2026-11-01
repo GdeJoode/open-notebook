@@ -31,6 +31,7 @@ from surrealdb_service.repositories.podcast import (
 )
 from surrealdb_service.repositories.model_call import ModelCallRepository
 from surrealdb_service.repositories.processing_run import ProcessingRunRepository
+from surrealdb_service.repositories.run_step import RunStepRepository
 from surrealdb_service.repositories.reference_entity import (
     ReferenceEntityRepository,
 )
@@ -86,6 +87,7 @@ __all__ = [
     # Bronversie en verwerkingsrun (F2-04)
     "SourceVersionRepository",
     "ProcessingRunRepository",
+    "RunStepRepository",
     # Auditlog van modelaanroepen (F2-07)
     "ModelCallRepository",
     # Settings
