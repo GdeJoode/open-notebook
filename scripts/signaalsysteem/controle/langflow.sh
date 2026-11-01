@@ -12,12 +12,14 @@
 #       route die niet bestaat (GET 404; POST 405, want de interface bedient elk
 #       ander pad met GET) (review F2-12, B1 en punt 10)
 #   L3  langflow bereikt geen internet (opzet van P8)
-#   L4  docker inspect: geen verboden variabele (tracers, ANTHROPIC_, CLAUDE_),
+#   L4  docker inspect: geen verboden variabele (tracers, ANTHROPIC_, CLAUDE_,
+#       LANGFLOW_FEATURE_), entrypoint /app/signaal/start.sh,
 #       geen geheim in de omgeving, alleen de secrets sleutel_pijplijn,
 #       langflow_superuser en langflow_secret_key
 #   L5  de editor alleen via editor-toegang op 127.0.0.1: langflow publiceert geen
 #       poort, hangt alleen aan verwerking en editor-intern; de proxy alleen op
-#       127.0.0.1 en alleen aan editor-intern en toegang, en geeft de editor
+#       127.0.0.1 en alleen aan editor-intern en toegang, en geeft de editor;
+#       een andere Host-header dan 127.0.0.1:<poort> of localhost:<poort> geeft 421
 #   L6  editor-toegang is gehard (read_only, cap_drop ALL, no-new-privileges,
 #       geen root, geen koppelingen) en heeft geen shell
 #   L7  uitgaande verbindingspogingen bij het opstarten en daarna: langflow
@@ -37,7 +39,7 @@ PROJECT=signaal
 PY_IMG="python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337"
 POORT="${SIGNAAL_EDITOR_POORT:-8530}"
 TELLEN_S="${SIGNAAL_TELLEN_S:-180}"
-VERBODEN='^(LANGCHAIN_|LANGSMITH_|LANGFUSE_|LANGWATCH_|ARIZE_|OPIK_|PHOENIX_|TRACELOOP_|OPENLAYER_|OTEL_EXPORTER_OTLP_|ANTHROPIC_|CLAUDE_)'
+VERBODEN='^(LANGCHAIN_|LANGSMITH_|LANGFUSE_|LANGWATCH_|ARIZE_|OPIK_|PHOENIX_|TRACELOOP_|OPENLAYER_|OTEL_EXPORTER_OTLP_|ANTHROPIC_|CLAUDE_|LANGFLOW_FEATURE_)'
 
 MISLUKT=0
 criterium() { # <naam> <geslaagd|mislukt|vastgelegd> <toelichting>
@@ -74,10 +76,11 @@ def vraag(methode, pad, data=None, kop=None, timeout=5, lees=False):
         return e.code, b""
     except Exception as e:
         return "fout:" + type(e).__name__, b""
-w = open("/run/secrets/langflow_superuser").read().strip()
-s, body = vraag("POST", "/api/v1/login", urllib.parse.urlencode({"username": "signaalbeheer", "password": w}).encode(),
-                {"Content-Type": "application/x-www-form-urlencoded"}, lees=True)
-token = json.loads(body)["access_token"]
+# Aanmelden met de client uit het image: die probeert opnieuw bij 429 (Langflow
+# staat 5 aanmeldingen per minuut toe).
+sys.path.insert(0, "/app/signaal")
+from langflow_api import LangflowApi
+token = LangflowApi().token()
 s, body = vraag("GET", "/api/v1/projects/", kop={"Authorization": "Bearer " + token}, lees=True)
 project = json.loads(body)[0]["id"]
 INIT = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
@@ -101,7 +104,8 @@ for methode, pad, data in (
         ("GET", "/api/v1/agentic/mcp", None),
         ("GET", "/api/v1/a2a/agents", None),
         ("POST", "/api/v1/responses", json.dumps({"model": project, "input": "x"}).encode()),
-        ("GET", "/api/v1/store/check/", None), ("GET", "/api/v1/store/tags", None)):
+        ("GET", "/api/v1/store/check/", None), ("GET", "/api/v1/store/tags", None),
+        ("GET", "/api/v1/voice/elevenlabs/voice_ids", None), ("POST", "/api/v1/agentic/assist/run", INIT)):
     for metaan in (False, True):
         s = status(methode, pad, data, metaan)
         if str(s).startswith("2") or (metaan and s != referentie[methode]):
@@ -123,20 +127,31 @@ else
 fi
 
 # ---------------------------------------------------------------- L2
-token_via_proxy() {
-  curl -s --max-time 30 -X POST --data-urlencode username=signaalbeheer \
-    --data-urlencode "password=$(tr -d '\r\n' < "$WACHTWOORD_BESTAND")" "http://127.0.0.1:$POORT/api/v1/login" \
-    | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
+token_via_proxy() { # bij 429 (5 aanmeldingen per minuut) opnieuw, hooguit 6 keer
+  local t="" i
+  for i in 1 2 3 4 5 6; do
+    t="$(curl -s --max-time 30 -X POST --data-urlencode username=signaalbeheer \
+      --data-urlencode "password=$(tr -d '\r\n' < "$WACHTWOORD_BESTAND")" "http://127.0.0.1:$POORT/api/v1/login" \
+      | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')"
+    [[ -n "$t" ]] && break
+    sleep 15
+  done
+  printf '%s' "$t"
 }
 TOKEN="$(token_via_proxy)"
 INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"toets","version":"0"}}}'
 via_proxy=""
 for pad in /api/v1/mcp/sse /api/v1/mcp/streamable /api/v1/mcp/project/x/sse /api/v2/mcp/servers /api/v1/a2a/agents \
-           /api/v1/agentic/mcp /api/v1/store/check/ /api/v1/store/tags; do
+           /api/v1/agentic/mcp /api/v1/store/check/ /api/v1/store/tags \
+           /api/v1/flows/public_flow/x /api/v1/webhook-events/x /api/v2/workflows /api/v2/workflows/pending \
+           /api/v1/voice/elevenlabs/voice_ids /api/v1/voice/ws/flow_tts/x /api/v1/build_public_tmp/x/events; do
   via_proxy+=" $pad=$(status "$pad" 3)"
   via_proxy+=" $pad(aangemeld)=$(status "$pad" 3 -H "Authorization: Bearer $TOKEN")"
 done
-for pad in /api/v1/agentic/mcp /api/v1/agentic/mcp/ /api/v1/responses; do
+# Flows draaien buiten de editor om (herreview F2-12, punt 1): alleen /api/v1/build mag.
+for pad in /api/v1/agentic/mcp /api/v1/agentic/mcp/ /api/v1/responses /api/v1/agentic/assist/run \
+           /api/v1/run/x /api/v1/run/advanced/x /api/v1/run/session/x /api/v1/webhook/x /api/v1/process/x \
+           /api/v1/predict/x /api/v1/build_public_tmp/x/flow /api/v2/workflows; do
   for kop in "X-Geen: 1" "Authorization: Bearer $TOKEN"; do
     via_proxy+=" POST $pad$([[ "$kop" == Auth* ]] && echo '(aangemeld)')=$(status "$pad" 3 -X POST \
       -H "$kop" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$INIT")"
@@ -191,10 +206,13 @@ for g in langflow_superuser langflow_secret_key sleutel_pijplijn; do
   if [[ -n "$waarde" && "$inspect" == *"$waarde"* ]]; then gelekt+=" $g"; fi
 done
 geheimen="$(docker inspect -f '{{range .Mounts}}{{println .Destination}}{{end}}' "$LF" | sed -n 's#^/run/secrets/##p' | sort | tr '\n' ' ')"
-if [[ -z "$verboden" && -z "$gelekt" && "$geheimen" == "langflow_secret_key langflow_superuser sleutel_pijplijn " ]]; then
-  criterium L4 geslaagd "geen verboden variabele, geen geheim in de omgeving; secrets: $geheimen"
+# Het startscript met de controles is het entrypoint (herreview F2-12, punt 6).
+start="$(docker inspect -f '{{.Path}} {{json .Args}} {{json .Config.Entrypoint}}' "$LF")"
+if [[ -z "$verboden" && -z "$gelekt" && "$geheimen" == "langflow_secret_key langflow_superuser sleutel_pijplijn " \
+      && "$start" == '/app/signaal/start.sh [] ["/app/signaal/start.sh"]' ]]; then
+  criterium L4 geslaagd "geen verboden variabele, geen geheim in de omgeving; secrets: $geheimen; entrypoint: $start"
 else
-  criterium L4 mislukt "verboden: [$verboden] geheim in inspect: [$gelekt] secrets: [$geheimen]"
+  criterium L4 mislukt "verboden: [$verboden] geheim in inspect: [$gelekt] secrets: [$geheimen] entrypoint: [$start]"
 fi
 
 # ---------------------------------------------------------------- L5
@@ -205,12 +223,17 @@ ed_poorten="$(docker inspect -f '{{range $p, $b := .HostConfig.PortBindings}}{{r
 rc=0; curl -s -o /dev/null --max-time 5 "http://127.0.0.1:7860/" || rc=$?
 html="$(curl -s --max-time 20 "http://127.0.0.1:$POORT/")"
 c_ui="$(status / 20)"
+# Host-header (DNS-rebinding, herreview F2-12, punt 1): alleen 127.0.0.1 en localhost.
+c_lh="$(status / 10 -H "Host: localhost:$POORT")"
+c_vreemd="$(status / 10 -H "Host: aanvaller.example:$POORT")"
+c_zonder_poort="$(status / 10 -H 'Host: 127.0.0.1')"
 if [[ ( "$lf_poorten" == "{}" || "$lf_poorten" == "null" ) && "$lf_netten" == "${PROJECT}_editor-intern ${PROJECT}_verwerking " \
       && "$ed_netten" == "${PROJECT}_editor-intern ${PROJECT}_toegang " && "$ed_poorten" == "127.0.0.1:$POORT " \
-      && $rc -ne 0 && "$c_ui" == 200 && "$html" == *"<html"* ]]; then
-  criterium L5 geslaagd "langflow zonder poort op [$lf_netten]; editor-toegang $ed_poorten op [$ed_netten] geeft de editor (HTTP $c_ui); 127.0.0.1:7860 dicht (curl $rc)"
+      && $rc -ne 0 && "$c_ui" == 200 && "$html" == *"<html"* && "$c_lh" == 200 && "$c_vreemd" == 421 \
+      && "$c_zonder_poort" == 421 ]]; then
+  criterium L5 geslaagd "langflow zonder poort op [$lf_netten]; editor-toegang $ed_poorten op [$ed_netten] geeft de editor (HTTP $c_ui, Host localhost $c_lh, vreemde Host $c_vreemd, zonder poort $c_zonder_poort); 127.0.0.1:7860 dicht (curl $rc)"
 else
-  criterium L5 mislukt "langflow poorten $lf_poorten netten [$lf_netten]; editor-toegang [$ed_poorten] [$ed_netten] HTTP $c_ui; 7860 curl $rc"
+  criterium L5 mislukt "langflow poorten $lf_poorten netten [$lf_netten]; editor-toegang [$ed_poorten] [$ed_netten] HTTP $c_ui; Host localhost $c_lh, vreemd $c_vreemd, zonder poort $c_zonder_poort; 7860 curl $rc"
 fi
 
 # ---------------------------------------------------------------- L6
@@ -230,7 +253,7 @@ fi
 # ---------------------------------------------------------------- L8
 reg="$(docker exec "$LF" python -c 'import os; from llm_manager.register import lees_register; import llm_manager.gate, llm_manager.aanroep
 print(os.environ["SIGNAAL_MODELREGISTER"], len(lees_register().modellen))' 2>&1 | tail -n1)"
-if [[ "$reg" =~ ^/config/modelregister\.yaml\ [1-9] ]]; then
+if [[ "$reg" =~ ^/app/flows-git/config/modelregister\.yaml\ [1-9] ]]; then
   criterium L8 geslaagd "SIGNAAL_MODELREGISTER en register geldig ($reg modellen); llm_manager.gate laadbaar"
 else
   criterium L8 mislukt "modelregister: $reg"
