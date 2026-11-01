@@ -176,6 +176,9 @@ class JobType(str, Enum):
     # librarian scheduler entry point; the consumer re-runs the F.1 quality
     # audit and writes a fresh audit_findings snapshot. Default-off per notebook.
     LIBRARIAN_AUDIT = "librarian_audit"
+    # F2-15 (ADR 0011): een stap van een run (embed, entity_extraction,
+    # entity_dedup, graph), gestart door Langflow via de stap-eindpunten.
+    RUN_STEP = "run_step"
 
 
 class JobStatus(str, Enum):

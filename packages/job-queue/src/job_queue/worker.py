@@ -40,7 +40,7 @@ from loguru import logger
 
 from shared.types.enums import JobStatus
 
-from job_queue.exceptions import JobPausedForReviewError
+from job_queue.exceptions import JobNotRetryableError, JobPausedForReviewError
 from job_queue.queue import JobQueue
 from job_queue.registry import HandlerRegistry
 from job_queue.repository import JobRepository
@@ -293,7 +293,7 @@ class JobWorker:
 
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}")
-            if job.retry_count < job.max_retries:
+            if job.retry_count < job.max_retries and not isinstance(e, JobNotRetryableError):
                 new_count = job.retry_count + 1
                 logger.info(
                     f"Retrying job {job_id} (attempt {new_count}/{job.max_retries})"
@@ -319,3 +319,9 @@ class JobWorker:
                     error_message=str(e),
                     retry_count=job.retry_count,
                 )
+                # F2-15: e.g. a run step marks its step and run as failed.
+                # Never let the hook mask the job failure itself.
+                try:
+                    await self._registry.final_failure(job, e)
+                except Exception as hook_err:  # noqa: BLE001
+                    logger.error(f"Final-failure handler for job {job_id} failed: {hook_err}")

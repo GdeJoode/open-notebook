@@ -24,3 +24,11 @@ class JobPausedForReviewError(Exception):
 
     def __init__(self, message: str = "Job paused pending user review"):
         super().__init__(message)
+
+
+class JobNotRetryableError(Exception):
+    """Raised by a job handler when a new attempt cannot succeed.
+
+    The worker fails the job at once, without retries (F2-15: a step whose run
+    is already closed). The final-failure handler of the job type still runs.
+    """

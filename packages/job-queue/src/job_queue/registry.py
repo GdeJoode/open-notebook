@@ -20,6 +20,8 @@ from shared.types.enums import JobType
 
 # Type alias for handler functions: async (payload) -> result dict
 HandlerFn = Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]
+# Final-failure handlers: async (job, error) -> None
+FailureFn = Callable[[Any, BaseException], Coroutine[Any, Any, None]]
 
 
 class HandlerRegistry:
@@ -27,6 +29,7 @@ class HandlerRegistry:
 
     def __init__(self) -> None:
         self._handlers: Dict[JobType, HandlerFn] = {}
+        self._failure_handlers: Dict[JobType, FailureFn] = {}
 
     def register(self, job_type: JobType) -> Callable[[HandlerFn], HandlerFn]:
         """
@@ -79,3 +82,21 @@ class HandlerRegistry:
     def registered_types(self) -> list[JobType]:
         """List of job types that have registered handlers."""
         return list(self._handlers.keys())
+
+    # ------------------------------------------------------------------
+    # Final failure (F2-15)
+    # ------------------------------------------------------------------
+
+    def register_final_failure(self, job_type: JobType, fn: FailureFn) -> None:
+        """Call ``fn(job, error)`` once a job of this type fails for good.
+
+        That is after the last retry, or at once on a
+        :class:`~job_queue.exceptions.JobNotRetryableError`.
+        """
+        self._failure_handlers[job_type] = fn
+
+    async def final_failure(self, job: Any, error: BaseException) -> None:
+        """Run the final-failure handler for the job's type, if any."""
+        handler = self._failure_handlers.get(job.job_type)
+        if handler is not None:
+            await handler(job, error)
