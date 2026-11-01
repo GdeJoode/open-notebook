@@ -649,6 +649,8 @@ Beslisregel voor ADR 0009: K2 en K4 geslaagd betekent dat optie 2 uitvoerbaar is
 | --- | --- | --- | --- | --- |
 | 29-10-2026 | b31c4857 | 0 | K1: host (Git Bash) naar `alleen_intern` curl-exitcode 7, ook vanuit WSL2 (exitcode 7). K2: `alleen_intern` naar internet: geen DNS (`gaierror`) en geen verbinding. K3: host naar `dubbel` en `controle` HTTP 200 (ook vanuit WSL2). K4: `alleen_intern` naar `dubbel` HTTP 200. K5: `dubbel` en `controle` hebben internet (DNS ok, example.org antwoordt met HTTP 403 op de Python-client, dus wel verbinding). `docker compose up` gaf geen waarschuwing | Geslaagd. Onder Docker Desktop publiceert een container met alleen een `internal: true`-netwerk geen bereikbare poort. Een container die ook aan een gewoon netwerk hangt (`dubbel`) heeft uitgaand internet: voor ADR 0002 F betekent dit dat open-notebook-mcp niet tegelijk aan `verwerking` en `toegang` mag hangen zonder extra maatregel (zie de verwachte uitkomst). Eerste run telde een HTTP-foutstatus als "geen verbinding"; script hersteld. |
 
+
+**Vervolg (F2-10, 01-11).** De proef masquerade is in F2-10 herhaald op de echte opzet en niet geslaagd; zie ADR 0002, "Uitwerking in F2-10".
 ### P9. Opruimen
 
 `scripts/signaalsysteem/proeven/p9_opruimen.sh` stopt en verwijdert de containers en netwerken van het project `signaal-proef`. Met `--volumes` verwijdert het ook de volumes met het label `com.docker.compose.project=signaal-proef`, en met `--images` de lokaal gebouwde images met het voorvoegsel `signaal-proef/`. Het script controleert achteraf met de momentopname (1.2) dat niets buiten het project is veranderd. Plek: hier.
